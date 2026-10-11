@@ -1,0 +1,473 @@
+// LeadWorks - Lead Sourcing & Enrichment
+// SQLite by default so the product runs with zero infrastructure.
+// For Postgres: change `provider` to "postgresql" and point DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Workspace {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sources          Source[]
+  jobs             Job[]
+  leads            Lead[]
+  enrichmentRules  EnrichmentRule[]
+  exportProfiles   ExportProfile[]
+  exportRecords    Export[]
+  analyticsDaily   AnalyticsDaily[]
+  leadLists        LeadList[]
+  enrichmentLogs   EnrichmentLog[]
+  webhooks         Webhook[]
+  subscription     Subscription?
+  memberships Membership[]
+  sessions   Session[]
+  invites     Invite[]
+  apiKeys     ApiKey[]
+}
+
+/// Billing: one active subscription per workspace, managed by Stripe.
+model Subscription {
+  id                 String   @id @default(cuid())
+  workspaceId        String   @unique
+  stripeCustomerId   String   @unique
+  stripeSubscriptionId String? @unique
+  stripePriceId      String?
+  stripeCurrentPeriodEnd DateTime?
+  status             String   @default("incomplete") // incomplete | trialing | active | past_due | canceled | unpaid
+  cancelAtPeriodEnd  Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+}
+
+model Source {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  name            String
+  type            String   // WEB_SCRAPER | API | DATABASE | CSV_UPLOAD | MANUAL
+  config          Json     // Source-specific configuration
+  schedule        String?  // Cron expression
+  isActive        Boolean  @default(true)
+  lastRunAt       DateTime?
+  lastRunStatus   String?  // SUCCESS | FAILED | PARTIAL
+  lastRunError    String?
+  totalLeadsFound Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  jobs            Job[]
+  leads           Lead[]
+
+  @@index([workspaceId, isActive])
+}
+
+model Job {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  sourceId      String?
+  type          String   // SCRAPE | ENRICH | EXPORT | DEDUPE | VALIDATE
+  status        String   @default("PENDING") // PENDING | RUNNING | COMPLETED | FAILED | CANCELLED
+  config        Json     // Job-specific configuration
+  progress      Int      @default(0)
+  totalItems    Int      @default(0)
+  processedItems Int     @default(0)
+  failedItems   Int      @default(0)
+  error         String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  source        Source?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  results       JobResult[]
+
+  @@index([workspaceId, status])
+  @@index([sourceId])
+}
+
+model JobResult {
+  id        String   @id @default(cuid())
+  jobId     String
+  leadId    String?
+  status    String   // SUCCESS | FAILED | SKIPPED
+  data      Json?    // Result data
+  error     String?
+  createdAt DateTime @default(now())
+
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([leadId])
+}
+
+model Lead {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  sourceId        String?
+  // Scoped to the workspace, not global: two customers exporting the same
+  // company's contact list must be able to hold the same address. A global
+  // unique here makes the second customer's insert fail.
+  email           String?
+  phone           String?  // E.164 format
+  linkedinUrl     String?
+  firstName       String?
+  lastName        String?
+  company         String?
+  title           String?
+  department      String?
+  seniority       String?  // IC | MANAGER | DIRECTOR | VP | C_LEVEL | UNKNOWN
+  location        String?
+  country         String?
+  industry        String?
+  companySize     String?
+  revenue         String?
+  technologies    Json     // Detected tech stack
+  intentSignals   Json     // Buying intent indicators
+  socialProfiles  Json?    // Twitter, GitHub, etc.
+  customFields    Json?    // Flexible attributes
+  score           Int      @default(0) // Lead quality score 0-100
+  status          String   @default("NEW") // NEW | ENRICHED | QUALIFIED | CONTACTED | CONVERTED | REJECTED
+  tags            Json     // Array of tags as JSON
+  sourceRef       String?  // Original source reference
+  validationResults Json?  // Last validation check results
+  lastEnrichedAt  DateTime?
+  lastContactedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  source          Source?         @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  jobResults      JobResult[]
+  enrichmentLogs  EnrichmentLog[]
+  activities      LeadActivity[]
+  listMemberships LeadListMember[]
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId, status])
+  @@index([workspaceId, score])
+  @@index([workspaceId, company])
+}
+
+model LeadList {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  name         String
+  description  String?
+  isDynamic    Boolean  @default(false)
+  filterJson   Json?    // Filter criteria for dynamic lists
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members      LeadListMember[]
+
+  @@index([workspaceId])
+}
+
+model LeadListMember {
+  id        String   @id @default(cuid())
+  listId    String
+  leadId    String
+  addedAt   DateTime @default(now())
+
+  list      LeadList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, leadId])
+  @@index([leadId])
+}
+
+model EnrichmentRule {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  name          String
+  description   String?
+  trigger       String   // ON_CREATE | ON_UPDATE | SCHEDULED | MANUAL
+  conditions    Json     // When to apply this rule
+  actions       Json     // What enrichment to perform
+  providers     Json     // Which enrichment providers to use
+  priority      Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  logs          EnrichmentLog[]
+
+  @@index([workspaceId, isActive])
+}
+
+model EnrichmentLog {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  ruleId          String?
+  leadId          String
+  provider        String
+  fieldsEnriched  Json
+  beforeData      Json?
+  afterData       Json?
+  status          String   // SUCCESS | PARTIAL | FAILED
+  error           String?
+  creditsUsed     Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rule            EnrichmentRule?  @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  lead            Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([leadId])
+  @@index([ruleId])
+}
+
+model LeadActivity {
+  id          String   @id @default(cuid())
+  leadId      String
+  type        String   // VIEW | CALL | EMAIL | MEETING | NOTE | TASK | STATUS_CHANGE | SCORE_CHANGE
+  description String
+  metadata    Json?
+  userId      String?
+  createdAt   DateTime @default(now())
+
+  lead        Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+}
+
+model ExportProfile {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  format      String   // CSV | JSON | XLSX | PDF
+  fields      Json     // Selected fields
+  filterJson  Json?    // Filter criteria
+  schedule    String?  // Cron expression
+  isActive    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  exports     Export[]
+
+  @@index([workspaceId])
+}
+
+model Export {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  profileId       String?
+  jobId           String?
+  status          String   @default("PENDING") // PENDING | PROCESSING | COMPLETED | FAILED
+  format          String
+  fields          Json     // Selected fields
+  filterJson      Json?
+  filePath        String?
+  fileSize        Int?
+  recordCount     Int      @default(0)
+  error           String?
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  profile         ExportProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+}
+
+model Webhook {
+  id          String   @id @default(cuid())
+  workspaceId String
+  url         String
+  events      String
+  secret      String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, isActive])
+}
+
+model AnalyticsDaily {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  date         DateTime
+  sent         Int      @default(0)
+  delivered    Int      @default(0)
+  opened       Int      @default(0)
+  clicked      Int      @default(0)
+  replied      Int      @default(0)
+  bounced      Int      @default(0)
+  unsubscribed Int      @default(0)
+  byChannel    Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, date])
+  @@index([workspaceId, date])
+}
+/// Workspace-scoped API keys. Plaintext is shown once at mint and never stored.
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  /// sha256 of the full key. Lookup is by hash, never by plaintext.
+  hashedKey   String    @unique
+  /// First characters, safe to display: "lg_live_a1B2…".
+  prefix      String
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+/// A person who can sign in to the browser UI. Machine access stays with
+/// `ApiKey`; this row is only for the human holding a cookie.
+model User {
+  id           String   @id @default(cuid())
+  /// Stored lowercased. The unique index is what makes signup idempotent at the
+  /// database level rather than only in application code.
+  email        String   @unique
+  name         String?
+  /// scrypt digest, never a plaintext password. See `src/lib/password.ts` for
+  /// why scrypt and not bcrypt or argon2.
+  passwordHash String
+  /// Set true by the verification link. Enforced at sign-in only when a mail
+  /// provider is configured — see `verificationEnforced()` in `lib/email.ts`.
+  emailVerified Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions               Session[]
+  emailVerificationToken EmailVerificationToken?
+  passwordResetTokens    PasswordResetToken[]
+  /// Every workspace this person can open, with the role each seat carries.
+  memberships    Membership[]
+  invitesCreated Invite[]      @relation("InviteCreatedBy")
+}
+
+/// A browser session. The cookie carries a random token and only its sha256 is
+/// stored, so a database dump yields hashes rather than working logins.
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  workspaceId String
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Per-address attempt counter behind the login and signup forms, so one client
+/// cannot grind through a list of addresses.
+model AuthThrottle {
+  /// "<purpose>:<client address>", e.g. "signin:203.0.113.7".
+  key         String    @id
+  /// Events counted inside the current window: failed guesses, or accounts
+  /// created, depending on which form took the tally.
+  count       Int       @default(0)
+  windowStart DateTime  @default(now())
+  lockedUntil DateTime?
+
+  @@index([windowStart])
+}
+
+/// Single-use email-verification link. Stored hashed, like every other secret
+/// here, so a database dump yields no redeemable links.
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+/// Single-use password-reset link. Redeeming it also destroys every session the
+/// user holds, because a reset exists to evict whoever prompted it.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+/// One seat in a workspace. The only membership source of truth — see the
+/// migration note in TEST-REPORT: rows were copied from the old implicit join
+/// table, crediting OWNER to whoever was already there.
+model Membership {
+  id          String   @id @default(cuid())
+  userId      String
+  workspaceId String
+  /// OWNER | ADMIN | MEMBER. Signup creates OWNER; invites can only grant ADMIN
+  /// or MEMBER, so accepting a link can never seize a workspace.
+  role        String   @default("OWNER")
+  createdAt   DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+/// A single-use link addressed to one email. Stored hashed, like every other
+/// secret here, so a dump yields no redeemable invitations.
+model Invite {
+  id          String    @id @default(cuid())
+  workspaceId String
+  /// Lowercased. An account that is not this address cannot redeem it.
+  email       String
+  /// ADMIN | MEMBER. OWNER is never issuable.
+  role        String
+  tokenHash   String    @unique
+  createdById String
+  /// Links age out. An invitation left in a chat window or a deleted browser is
+  /// a standing door, and nothing withdraws it when the sender changes their mind.
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([email])
+}
