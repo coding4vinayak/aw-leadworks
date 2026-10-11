@@ -1,0 +1,16 @@
+# Line endings: normalise on commit, let the OS decide on checkout.
+# Windows operators on these repos otherwise get CRLF back into files
+# whose tests assert byte-identical strings.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

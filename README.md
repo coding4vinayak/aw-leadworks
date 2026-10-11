@@ -1,5 +1,8 @@
 # LeadWorks
 
+![CI](https://github.com/coding4vinayak/aw-leadworks/actions/workflows/ci.yml/badge.svg)
+
+
 Lead sourcing and enrichment. Find the buyers who are already looking —
 $49/month.
 
