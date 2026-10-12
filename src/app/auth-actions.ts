@@ -18,11 +18,13 @@ import {
   verificationUrl,
   VERIFICATION_TOKEN_EXPIRY_HOURS,
   PASSWORD_RESET_TOKEN_EXPIRY_HOURS,
+  appBaseUrl,
 } from "@/lib/tokens";
 import {
   getEmailSender,
   renderPasswordResetEmail,
   renderVerificationEmail,
+  renderWelcomeEmail,
   verificationEnforced,
   type DeliveryChannel,
 } from "@/lib/email";
@@ -193,6 +195,17 @@ export async function signUp(_previous: AuthState, formData: FormData): Promise<
     await getEmailSender()
       .send(email, `Verify your ${productName()} email`, html, plain)
       .catch(() => undefined);
+  }
+
+  {
+    // Best-effort welcome — the account exists whether or not this arrives.
+    const { subject, html, text: plain } = renderWelcomeEmail({
+      product: productName(),
+      name,
+      workspaceName,
+      dashboardUrl: `${appBaseUrl()}/dashboard`,
+    });
+    await getEmailSender().send(email, subject, html, plain).catch(() => undefined);
   }
 
   await createSession(created.userId, created.workspaceId);

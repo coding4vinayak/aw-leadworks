@@ -7,6 +7,7 @@ import { switchWorkspaceAction } from "@/app/member-actions";
 import { createFirstKey } from "@/app/key-actions";
 import { ApiKeyOnboarding } from "@/components/api-key-onboarding";
 import { AiPanel, type AiField } from "@/components/ai-panel";
+import { ManageBillingButton } from "@/components/manage-billing";
 
 export const dynamic = "force-dynamic";
 
@@ -41,8 +42,63 @@ function statusTone(status: string): "green" | "blue" | "red" | "gray" {
   return "gray";
 }
 
-export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ workspace?: string }> }) {
-  const { workspace: requestedSlug } = await searchParams;
+type SubscriptionState = {
+  status: string;
+  stripeCustomerId: string;
+  stripeCurrentPeriodEnd: Date | null;
+} | null;
+
+/**
+ * The plan the workspace is on, in one honest line. Free workspaces get an
+ * upgrade path; paid ones get their renewal date and a way into the portal. The
+ * "Payment received" note is a transient flag off the checkout redirect, so it
+ * only shows on the first load after a purchase — the persisted status is what
+ * stays up after a refresh.
+ */
+function PlanBanner({ billing, subscription }: { billing?: string; subscription: SubscriptionState }) {
+  const paid = subscription ? ["trialing", "active", "past_due"].includes(subscription.status) : false;
+  const justBack = billing === "success" || billing === "portal";
+  const renews = subscription?.stripeCurrentPeriodEnd
+    ? new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(subscription.stripeCurrentPeriodEnd)
+    : null;
+
+  if (justBack && paid) {
+    return (
+      <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+        Payment received — welcome aboard. Your plan is <strong>{subscription!.status}</strong>.
+      </div>
+    );
+  }
+
+  if (paid) {
+    return (
+      <div className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
+        <span className="flex items-center gap-2">
+          <Badge tone="green">{subscription!.status}</Badge>
+          <span className="text-gray-700">
+            Pro plan active{renews ? <>, renews {renews}</> : null}.
+          </span>
+        </span>
+        <ManageBillingButton />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
+      <span className="flex items-center gap-2">
+        <Badge tone="gray">free</Badge>
+        <span className="text-gray-700">You are on the free demo. Unlimited sources, leads and exports from $49/mo.</span>
+      </span>
+      <Link href="/pricing" className="shrink-0 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition">
+        Upgrade
+      </Link>
+    </div>
+  );
+}
+
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ workspace?: string; billing?: string }> }) {
+  const { workspace: requestedSlug, billing } = await searchParams;
   // One policy, shared: the demo stays public, a customer's own workspace needs
   // their session, and naming anyone else's slug is refused rather than served.
   const resolved = await resolveWorkspace(requestedSlug);
@@ -86,6 +142,14 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const liveKeyCount = session
     ? await prisma.apiKey.count({ where: { workspaceId: workspace.id, revokedAt: null } })
     : null;
+  // Read the plan straight from the local row, never through getStripe() — a
+  // deployment without STRIPE_SECRET_KEY must still render the dashboard.
+  const subscription = session
+    ? await prisma.subscription.findUnique({
+        where: { workspaceId: workspace.id },
+        select: { status: true, stripeCustomerId: true, stripeCurrentPeriodEnd: true },
+      })
+    : null;
 
   const [leadCount, qualifiedCount, sources, jobs, topLeads] = await Promise.all([
     prisma.lead.count({ where: { workspaceId: workspace.id } }),
@@ -125,6 +189,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       workspace={workspace.name}
       title="Sourcing dashboard"
     >
+        {session && (
+          <div className="mb-6">
+            <PlanBanner billing={billing} subscription={subscription} />
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <Card label="Leads" value={leadCount} />
           <Card label="Qualified" value={qualifiedCount} />

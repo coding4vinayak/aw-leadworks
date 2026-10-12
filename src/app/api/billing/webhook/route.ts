@@ -1,8 +1,45 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
+import { appBaseUrl } from "@/lib/tokens";
+import { getEmailSender, renderReceiptEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
+
+const productName = () => process.env.PRODUCT_NAME ?? "Abetworks";
+
+/**
+ * Confirms the payment to the buyer. Driven off the checkout session (which
+ * carries the customer email and the period end) rather than a later
+ * subscription event, so the receipt fires exactly once per purchase. Best-
+ * effort: a mail outage must not turn a paid, already-synced checkout into a
+ * failed webhook — Stripe would retry and re-run the sync.
+ */
+async function sendReceipt(session: Stripe.Checkout.Session) {
+  const email = session.customer_details?.email ?? session.customer_email;
+  if (!email) return;
+  const subId = typeof session.subscription === "string" ? session.subscription : undefined;
+  let periodEnd: Date | null = null;
+  if (subId) {
+    try {
+      const sub = await getStripe().subscriptions.retrieve(subId);
+      const raw = sub.items.data[0]?.current_period_end;
+      if (typeof raw === "number") periodEnd = new Date(raw * 1000);
+    } catch {
+      // period end is a nicety; a receipt without a date still confirms payment.
+    }
+  }
+  const { subject, html, text: plain } = renderReceiptEmail({
+    product: productName(),
+    name: session.customer_details?.name ?? null,
+    planLabel: `${productName()} subscription`,
+    periodEnd,
+    portalUrl: `${appBaseUrl()}/dashboard`,
+  });
+  await getEmailSender()
+    .send(email, subject, html, plain)
+    .catch(() => undefined);
+}
 
 export async function POST(request: Request) {
   const signature = request.headers.get("stripe-signature");
@@ -22,6 +59,7 @@ export async function POST(request: Request) {
       if (session.mode === "subscription" && typeof session.subscription === "string") {
         const sub = await getStripe().subscriptions.retrieve(session.subscription);
         await syncSubscriptionFromStripe(sub);
+        await sendReceipt(session);
       }
       break;
     }

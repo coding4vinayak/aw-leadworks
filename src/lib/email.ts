@@ -220,3 +220,45 @@ export function renderPasswordResetEmail(data: {
     data.resetUrl,
   );
 }
+
+export function renderWelcomeEmail(data: {
+  product: string;
+  name: string | null;
+  workspaceName: string;
+  dashboardUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  return {
+    subject: `Welcome to ${data.product}`,
+    ...layout(
+      data.product,
+      `Your ${data.workspaceName} workspace is ready`,
+      `${greeting} your ${data.product} workspace is set up. Add a source, set the qualification rules, and the pipeline starts filling. Your CRM bill is complicated enough — ours is one flat price.`,
+      "Open your dashboard",
+      data.dashboardUrl,
+    ),
+  };
+}
+
+export function renderReceiptEmail(data: {
+  product: string;
+  name: string | null;
+  planLabel: string;
+  periodEnd: Date | null;
+  portalUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  const renews = data.periodEnd
+    ? new Intl.DateTimeFormat("en", { dateStyle: "long" }).format(data.periodEnd)
+    : "your next billing date";
+  return {
+    subject: `${data.product} — payment received`,
+    ...layout(
+      data.product,
+      "Payment received",
+      `${greeting} your ${data.planLabel} subscription is active. Your next invoice is dated ${renews}. Manage your card, invoices or cancellation any time from the billing portal.`,
+      "Billing portal",
+      data.portalUrl,
+    ),
+  };
+}
