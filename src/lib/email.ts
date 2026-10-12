@@ -329,6 +329,37 @@ export function renderTrialEndedEmail(data: {
 }
 
 /**
+ * The pre-expiry nudge — the one email a trial cannot do without. A buyer who
+ * forgets the trial is running has no reason to log in before day 14, and the
+ * conversion decision is made in the days *before* the charge, not after it. So
+ * this arrives while there is still time to act, says the date plainly, and
+ * repeats the cancel-anytime promise that made the card-up trial acceptable in
+ * the first place.
+ */
+export function renderTrialNudgeEmail(data: {
+  product: string;
+  name: string | null;
+  daysLeft: number;
+  /** The caller only reaches this once the row carries a date; a countdown with nothing to count down to is not a warning. */
+  periodEnd: Date;
+  dashboardUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  const dayWord = data.daysLeft === 1 ? "day" : "days";
+  const ends = new Intl.DateTimeFormat("en", { dateStyle: "long" }).format(data.periodEnd);
+  return {
+    subject: `${data.daysLeft} ${dayWord} left in your ${data.product} trial`,
+    ...layout(
+      data.product,
+      `Your trial runs until ${ends}`,
+      `${greeting} you have ${data.daysLeft} ${dayWord} of full access left, and the first invoice is dated ${ends}. Nothing is charged before then — keep the plan if it earned its place, or cancel from the billing portal any time up to that date and you are never billed.`,
+      "Open your dashboard",
+      data.dashboardUrl,
+    ),
+  };
+}
+
+/**
  * The card worked again. Short, and says thank you — a customer who fixed a
  * failed payment is one support ticket away from churning, and this email is
  * the cheapest way to make sure they do not open it.

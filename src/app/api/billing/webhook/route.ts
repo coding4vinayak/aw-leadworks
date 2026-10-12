@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
 import { prisma } from "@/lib/db";
 import { appBaseUrl } from "@/lib/tokens";
+import { scheduleTrialNudges } from "@/lib/billing-jobs";
 import {
   getEmailSender,
   renderPaymentFailedEmail,
@@ -74,6 +75,31 @@ async function sendDunning(stripeSub: Stripe.Subscription) {
 }
 
 /**
+ * Arm the "your trial ends soon" warnings for a subscription that is on trial.
+ *
+ * Best-effort in the same shape as every other mail here: the sync has already
+ * committed, and a Redis that is down must not answer non-200 and make Stripe
+ * retry a webhook that has nothing left to do. Missing a nudge costs a worse
+ * conversion rate; failing a confirmed payment event costs the buyer's record.
+ *
+ * Safe to hit repeatedly — the job id names the trial end, so the retry of a
+ * `checkout.session.completed` and the `customer.subscription.created` that
+ * follows it arm the same two warnings once each, and a genuinely new trial
+ * period arms new ones.
+ */
+async function armTrialNudges(stripeSub: Stripe.Subscription) {
+  if (stripeSub.status !== "trialing") return;
+  const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
+  const raw = stripeSub.items.data[0]?.current_period_end;
+  if (!workspaceId || typeof raw !== "number") return;
+  try {
+    await scheduleTrialNudges(workspaceId, new Date(raw * 1000));
+  } catch (error) {
+    console.error("[billing] trial nudges not armed:", error);
+  }
+}
+
+/**
  * The two transitions that deserve an email of their own: a trial that
  * converted to a paid plan (the money moment, and the one buyers most often
  * forget they authorised) and a past-due subscription that recovered (silence
@@ -90,6 +116,7 @@ async function syncAndAnnounce(stripeSub: Stripe.Subscription) {
     : null;
 
   await syncSubscriptionFromStripe(stripeSub);
+  await armTrialNudges(stripeSub);
   if (!previous || previous.status === stripeSub.status) return;
 
   const converted =
@@ -143,6 +170,7 @@ export async function POST(request: Request) {
       if (session.mode === "subscription" && typeof session.subscription === "string") {
         const sub = await getStripe().subscriptions.retrieve(session.subscription);
         await syncSubscriptionFromStripe(sub);
+        await armTrialNudges(sub);
         await sendReceipt(session);
       }
       break;

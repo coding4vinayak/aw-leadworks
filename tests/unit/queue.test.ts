@@ -40,7 +40,19 @@ const retentionModule = source("../../src/lib/queue-retention.ts");
 const sweepModule = source("../../src/lib/queue-sweep.ts");
 const instrumentation = source("../../instrumentation.ts");
 
-const KEYS = ["scrape", "enrich", "export", "dedupe", "validate", "scheduled"] as const;
+/**
+ * Read as key/name pairs rather than one list, because the two are not the same
+ * string any more: `billing` is the object key and `leadworks-billing` is the
+ * Redis keyspace. A queue name is the only boundary between the products sharing
+ * this Redis, so the newest queue is prefixed; the bare names stay bare because
+ * renaming them would orphan keyspaces that already hold jobs — a #51 decision,
+ * not an oversight. A queue built without the retention default drops out of this
+ * parse, and the union comparison below is what catches that.
+ */
+const declared = [...queueModule.matchAll(/built\.(\w+) \?\?= new Queue\("([^"]+)", \{ connection, defaultJobOptions: JOB_RETENTION \}\)/g)]
+  .map((m) => ({ key: m[1], name: m[2] }));
+const KEYS = declared.map((entry) => entry.key);
+const NAMES = declared.map((entry) => entry.name);
 
 const probeUrl = process.env.QUEUE_PROBE_URL;
 const probeNamesLiveDb = /\/0$/.test(probeUrl ?? "");
@@ -58,8 +70,15 @@ describe("every queue name is constructible and has exactly one worker", () => {
   const queueNames = [...queueModule.matchAll(/new Queue\("([^"]+)"/g)].map((m) => m[1]);
   const workerNames = [...queueModule.matchAll(/new Worker\("([^"]+)"/g)].map((m) => m[1]);
 
-  it("declares all six queues to the scanner", () => {
-    assert.deepEqual([...queueNames].sort(), [...KEYS].sort());
+  it("declares every queue its own QueueKey type names", () => {
+    // The construction list and the type have to agree. A key in the union with no
+    // `built.<key>` behind it is a queue nothing can touch; one built outside the
+    // union is a keyspace no type check reaches.
+    const raw = /type QueueKey = ([^;]+);/.exec(queueModule);
+    assert.ok(raw, "the module declares a QueueKey union this test can read");
+    const union = raw[1].split("|").map((part) => part.trim().replace(/^"|"$/g, "")).sort();
+    assert.deepEqual(KEYS.slice().sort(), union);
+    assert.deepEqual(queueNames.slice().sort(), [...NAMES].sort());
   });
 
   it("contains no colon, because bullmq throws on one at construction", () => {
@@ -86,8 +105,14 @@ describe("importing the queue module does not connect to Redis", () => {
   });
 
   it("memoises each one, so /api/health polling does not leak a Queue per request", () => {
-    for (const key of KEYS) {
-      assert.match(queueModule, new RegExp(`built\\.${key} \\?\\?= new Queue\\("${key}", \\{ connection, defaultJobOptions: JOB_RETENTION \\}\\)`));
+    // The accessor list is parsed on its own, so this is a bijection rather than a
+    // restatement of the parse above: a getter that builds nothing, and a built
+    // queue nobody can reach, both fail here.
+    const getters = [...queueModule.matchAll(/get (\w+)\(\): Queue \{/g)].map((m) => m[1]);
+    assert.deepEqual(getters.slice().sort(), KEYS.slice().sort());
+    for (const { key, name } of declared) {
+      assert.match(queueModule, new RegExp(`built\\.${key} \\?\\?= new Queue\\("${name}"`),
+        `${key} must be built once and cached, not on every touch`);
     }
   });
 
@@ -127,9 +152,9 @@ describe("every queue declares retention at construction", () => {
     assert.match(retentionModule, /export const JOB_RETENTION[^=]*= \{ removeOnComplete: true, removeOnFail: \d+ \};/);
   });
 
-  it("hands that default to each of the six Queues", () => {
+  it("hands that default to every Queue", () => {
     const bounded = [...queueModule.matchAll(/new Queue\("([^"]+)", \{ connection, defaultJobOptions: JOB_RETENTION \}\)/g)].map((m) => m[1]);
-    assert.deepEqual([...bounded].sort(), [...KEYS].sort(), "a queue built without the default leaks its completed jobs");
+    assert.deepEqual([...bounded].sort(), [...NAMES].sort(), "a queue built without the default leaks its completed jobs");
   });
 
   it("constructs no queue with the bare `{ connection }` that this convention removes", () => {
@@ -147,7 +172,7 @@ describe("shutdownWorkers closes what startWorkers started", () => {
   it("keeps every Worker, so the drain has a reference to close", () => {
     assert.match(queueModule, /const workers: Worker\[\] = \[\];/);
     const pushed = [...queueModule.matchAll(/workers\.push\(new Worker\("([^"]+)"/g)].map((m) => m[1]);
-    assert.deepEqual([...pushed].sort(), [...KEYS].sort(),
+    assert.deepEqual([...pushed].sort(), [...NAMES].sort(),
       "startWorkers() kept none of them before this, so there was nothing to close");
   });
 
@@ -353,7 +378,7 @@ if (probeUrl) {
       assert.equal(mod.queues.scrape, first, "the getter memoises");
 
       // Touch all six the way /api/health does, then ask the connection where it is.
-      for (const key of KEYS) void mod.queues[key];
+      for (const key of Object.keys(mod.queues)) void mod.queues[key as keyof typeof mod.queues];
       const client = await first.waitUntilReady();
       assert.equal((client as unknown as { options?: { db?: number } }).options?.db, expectedDb,
         "the probe must land on the db it was given, not on the import-time default");

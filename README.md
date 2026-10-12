@@ -204,6 +204,8 @@ POST /api/billing/webhook
 
 `checkout` takes `{ priceId: "FLAT_MONTHLY" | "FLAT_ANNUAL", returnUrl }` and returns `{ url }` for the Stripe-hosted page. The webhook verifies the Stripe signature and syncs `checkout.session.completed`, `customer.subscription.*`, and `invoice.payment_failed` into the `Subscription` row. Setup: create the two prices in Stripe, set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_FLAT_MONTHLY`, `STRIPE_PRICE_FLAT_ANNUAL`, forward webhooks with `stripe listen --forward-to localhost:3300/api/billing/webhook`. Signature checks are unit-tested offline in `tests/unit/billing.test.ts`.
 
+Every paid plan opens with a 14-day card-up trial (`trial_period_days` on the subscription), so the first invoice is dated two weeks out and the dashboard banner counts the days down to it. Two warnings are armed off the webhook that confirms the trial — delayed BullMQ jobs on `leadworks-billing`, at three days left and one day left — and each one re-reads the `Subscription` row before it mails: a workspace that already converted, cancelled, or had its trial moved gets silence rather than a wrong date. Arming is best-effort in the same shape as every other mail here, so with Redis down the webhook still answers 200 and no nudge is sent; `REDIS_URL` has to point somewhere real for these to arrive. The job id names the trial period, so a Stripe webhook retry cannot double-send.
+
 ## Putting it somewhere
 
 ```bash
@@ -215,7 +217,7 @@ npm start
 
 Point the load balancer at `GET /api/health` (200 = serving, 503 = DB down).
 Queue workers (`src/lib/queue.ts`, BullMQ + Redis) drain scrape, enrich,
-export, dedupe, validate and scheduled queues. Every job bounds its retention at
+export, dedupe, validate, scheduled and leadworks-billing queues. Every job bounds its retention at
 construction (`defaultJobOptions: { removeOnComplete: true, removeOnFail: 100 }`) — a
 completed job has no reader (`GET /api/health` counts only `waiting`/`active`/`failed`, read
 from `src/app/api/health/route.ts`) and the `Job` table is the durable record; failures are
@@ -224,7 +226,7 @@ kept, capped, as the only surviving record of their payload. Sitting at construc
 own here — the leadgenius convention (#61), ported family-wide (#64). For Postgres, follow the same three
 steps as abetConnect: provider switch, fresh migration history, regenerate.
 
-Each of the six Queues is built on first touch rather than at import: constructing one
+Each of the seven Queues is built on first touch rather than at import: constructing one
 connects to Redis even on a `lazyConnect` client, so importing the module wrote six
 `bull:<name>:meta` keys — measured on the pre-fix module against a scratch db, rc=124
 (never exited) with all six left behind, and dev `REDIS_URL` defaults to db 0. A getter
@@ -232,7 +234,7 @@ alone would not have been enough here: `jobRunners` used to hold `Queue` objects
 values, and that table is evaluated at import, so it read `queues.scrape` and built the
 Queue no matter where the construction lived. It holds queue *keys* now and resolves
 them inside `enqueueJob`, keeping its compile-time property (a `Job.type` with no runner
-is a type error). `src/lib/shutdown.ts` drains the six workers on SIGTERM/SIGINT,
+is a type error). `src/lib/shutdown.ts` drains the seven workers on SIGTERM/SIGINT,
 installed from `instrumentation.ts` in production only, because Next 16.2.12 exposes no
 shutdown hook (`InstrumentationModule` is `register` and `onRequestError`, read from its
 own `.d.ts`); the drain waits for in-flight Redis setup before closing, and disconnects

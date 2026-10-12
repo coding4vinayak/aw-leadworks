@@ -1,5 +1,8 @@
 import { Queue, Worker, Job } from "bullmq";
 import IORedis from "ioredis";
+// Type-only, so it does not close a cycle at runtime: `billing-jobs` imports this
+// module's queue, and the worker below needs the job shape it carries.
+import type { TrialNudgeData } from "./billing-jobs";
 import { JOB_TYPES } from "./enums";
 
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -61,7 +64,7 @@ export async function enqueue<T extends object>(
  * hold jobs — stored state, and a #51 decision rather than a side effect of a shutdown
  * fix. Rules 4 and 5 assert the queue↔worker pairing per app where the literals appear.
  */
-type QueueKey = "scrape" | "enrich" | "export" | "dedupe" | "validate" | "scheduled";
+type QueueKey = "scrape" | "enrich" | "export" | "dedupe" | "validate" | "scheduled" | "billing";
 
 const built: Partial<Record<QueueKey, Queue>> = {};
 
@@ -107,6 +110,16 @@ export const queues = {
   },
   get scheduled(): Queue {
     return (built.scheduled ??= new Queue("scheduled", { connection, defaultJobOptions: JOB_RETENTION }));
+  },
+  /**
+   * Trial-expiry warnings. Prefixed with the product where the six names above are
+   * bare, and deliberately so: those are bare because renaming them would orphan
+   * keyspaces that already hold jobs, which is a #51 decision. A queue created
+   * today has no such history, so it starts on the safe side of rule 6 — one
+   * Redis serves this whole portfolio, and a queue name is its only boundary.
+   */
+  get billing(): Queue {
+    return (built.billing ??= new Queue("leadworks-billing", { connection, defaultJobOptions: JOB_RETENTION }));
   },
 };
 
@@ -250,6 +263,7 @@ export async function startWorkers() {
   const { runDedupeJob } = await import("./dedupe");
   const { runValidateJob } = await import("./validator");
   const { runScheduledJobs } = await import("./scheduler");
+  const { runTrialNudge } = await import("./billing-jobs");
 
   workers.push(new Worker("scrape", async (job: Job) => {
     const { jobId } = job.data;
@@ -278,6 +292,12 @@ export async function startWorkers() {
 
   workers.push(new Worker("scheduled", async () => {
     await runScheduledJobs();
+  }, { connection, concurrency: 1 }));
+
+  // One email to one owner per job, so the transport is the slow part and there
+  // is nothing to gain from running two at once.
+  workers.push(new Worker("leadworks-billing", async (job: Job) => {
+    await runTrialNudge(job as Job<TrialNudgeData>);
   }, { connection, concurrency: 1 }));
 
   // Last, because a schedule this process could not add is not six Workers that failed to
