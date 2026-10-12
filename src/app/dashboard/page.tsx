@@ -55,6 +55,17 @@ type SubscriptionState = {
  * only shows on the first load after a purchase — the persisted status is what
  * stays up after a refresh.
  */
+/**
+ * Whole days left before the first charge. During a trial the stored period end
+ * is the trial end. A helper rather than an inline `Date.now()`: the page is
+ * rendered on the server, so the countdown is fixed at render time and the text
+ * must come from one place that React's purity rule accepts.
+ */
+function daysUntil(periodEnd: Date | null): number | null {
+  if (!periodEnd) return null;
+  return Math.max(0, Math.ceil((periodEnd.getTime() - Date.now()) / 86_400_000));
+}
+
 function PlanBanner({ billing, subscription }: { billing?: string; subscription: SubscriptionState }) {
   const paid = subscription ? ["trialing", "active", "past_due"].includes(subscription.status) : false;
   const trialing = subscription?.status === "trialing";
@@ -62,12 +73,17 @@ function PlanBanner({ billing, subscription }: { billing?: string; subscription:
   const renews = subscription?.stripeCurrentPeriodEnd
     ? new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(subscription.stripeCurrentPeriodEnd)
     : null;
+  const daysLeft = daysUntil(trialing ? subscription?.stripeCurrentPeriodEnd ?? null : null);
+  const daysLeftText = daysLeft === null ? null : `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left`;
 
   if (justBack && paid) {
     return (
       <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
         {trialing ? (
-          <>Trial started — welcome aboard. Your first invoice is {renews ?? "in 14 days"}. Cancel any time before then and you are not charged.</>
+          <>
+            Trial started — welcome aboard. Your trial runs until {renews ?? "day 14"}
+            {daysLeftText ? <> ({daysLeftText})</> : null}, then the first invoice lands. Cancel any time before then and you are not charged.
+          </>
         ) : (
           <>Payment received — welcome aboard. Your plan is <strong>{subscription!.status}</strong>.</>
         )}
@@ -82,7 +98,7 @@ function PlanBanner({ billing, subscription }: { billing?: string; subscription:
           <Badge tone={trialing ? "blue" : "green"}>{subscription!.status}</Badge>
           <span className="text-gray-700">
             {trialing
-              ? <>Trial active{renews ? <>, first charge {renews}</> : null}.</>
+              ? <>Trial active{daysLeftText ? <> — {daysLeftText}</> : null}{renews ? <>, first charge {renews}</> : null}.</>
               : <>Pro plan active{renews ? <>, renews {renews}</> : null}.</>}
           </span>
         </span>
