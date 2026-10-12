@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
 import { prisma } from "@/lib/db";
 import { appBaseUrl } from "@/lib/tokens";
-import { scheduleTrialNudges } from "@/lib/billing-jobs";
+import { armCancellationJobs, scheduleTrialNudges } from "@/lib/billing-jobs";
 import {
   getEmailSender,
   renderPaymentFailedEmail,
@@ -109,6 +109,37 @@ async function armTrialNudges(stripeSub: Stripe.Subscription) {
  * it — Stripe events do not carry the old state, and a transition you cannot
  * see is a transition you cannot announce.
  */
+/**
+ * The two mails an ended subscription gets: the confirmation now, and the
+ * come-back offer a week later. Both are armed rather than sent inline for the
+ * reason every mail here has the same shape — the sync has already committed,
+ * so nothing in this branch may answer non-200 and make Stripe re-run an event
+ * that is finished. A down Redis costs the win-back and nothing else.
+ *
+ * Fires for a trial that lapsed without converting too, which is the right
+ * behaviour: the copy says nothing was charged and nothing was deleted, and both
+ * are true either way.
+ */
+async function armCancellation(stripeSub: Stripe.Subscription) {
+  const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
+  if (!workspaceId) return;
+  try {
+    await armCancellationJobs(workspaceId, stripeSub.id);
+  } catch (error) {
+    console.error("[billing] cancellation mails not armed:", error);
+  }
+}
+
+/**
+ * The two transitions that deserve an email of their own: a trial that
+ * converted to a paid plan (the money moment, and the one buyers most often
+ * forget they authorised) and a past-due subscription that recovered (silence
+ * here reads as "still broken" and prompts a cancellation).
+ *
+ * Reads the previous status from the local row *before* the sync overwrites
+ * it — Stripe events do not carry the old state, and a transition you cannot
+ * see is a transition you cannot announce.
+ */
 async function syncAndAnnounce(stripeSub: Stripe.Subscription) {
   const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
   const previous = workspaceId
@@ -176,10 +207,14 @@ export async function POST(request: Request) {
       break;
     }
     case "customer.subscription.created":
-    case "customer.subscription.updated":
+    case "customer.subscription.updated": {
+      await syncAndAnnounce(event.data.object as Stripe.Subscription);
+      break;
+    }
     case "customer.subscription.deleted": {
       const stripeSub = event.data.object as Stripe.Subscription;
       await syncAndAnnounce(stripeSub);
+      await armCancellation(stripeSub);
       break;
     }
     case "invoice.payment_failed": {

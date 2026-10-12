@@ -2,7 +2,7 @@ import { Queue, Worker, Job } from "bullmq";
 import IORedis from "ioredis";
 // Type-only, so it does not close a cycle at runtime: `billing-jobs` imports this
 // module's queue, and the worker below needs the job shape it carries.
-import type { TrialNudgeData } from "./billing-jobs";
+import type { CancellationData, TrialNudgeData } from "./billing-jobs";
 import { JOB_TYPES } from "./enums";
 
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
@@ -263,7 +263,7 @@ export async function startWorkers() {
   const { runDedupeJob } = await import("./dedupe");
   const { runValidateJob } = await import("./validator");
   const { runScheduledJobs } = await import("./scheduler");
-  const { runTrialNudge } = await import("./billing-jobs");
+  const { runBillingJob } = await import("./billing-jobs");
 
   workers.push(new Worker("scrape", async (job: Job) => {
     const { jobId } = job.data;
@@ -297,7 +297,7 @@ export async function startWorkers() {
   // One email to one owner per job, so the transport is the slow part and there
   // is nothing to gain from running two at once.
   workers.push(new Worker("leadworks-billing", async (job: Job) => {
-    await runTrialNudge(job as Job<TrialNudgeData>);
+    await runBillingJob(job as Job<TrialNudgeData | CancellationData>);
   }, { connection, concurrency: 1 }));
 
   // Last, because a schedule this process could not add is not six Workers that failed to

@@ -381,3 +381,53 @@ export function renderPaymentRecoveredEmail(data: {
     ),
   };
 }
+
+/**
+ * The cancellation confirmation. They already clicked cancel in the portal, so
+ * this is not a retention attempt dressed as a receipt — asking twice in the
+ * same email is what gets a billing message marked as spam. It answers the two
+ * questions a cancellation actually raises: will I be charged again, and is my
+ * data gone. Then one link, and no pressure.
+ */
+export function renderCancellationEmail(data: {
+  product: string;
+  name: string | null;
+  pricingUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  return {
+    subject: `${data.product} — your subscription is canceled`,
+    ...layout(
+      data.product,
+      "Canceled, and nothing was deleted",
+      `${greeting} your ${data.product} subscription has ended. There is nothing left to cancel and no further charge will be made. Your workspace and everything you built in it are still there — sign in whenever you like. If it turns out to have earned its place, starting a new plan is one page.`,
+      "Choose a plan",
+      data.pricingUrl,
+    ),
+  };
+}
+
+/**
+ * The one attempt to win them back, a week after the cancellation: long enough
+ * that the product is missed, short enough that the reason they bought has not
+ * faded. The whole pitch is that coming back costs nothing and loses nothing —
+ * the new plan opens on another card-up trial, so the risk that made them leave
+ * is not repeated.
+ */
+export function renderWinbackEmail(data: {
+  product: string;
+  name: string | null;
+  pricingUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  return {
+    subject: `Your ${data.product} workspace is still exactly as you left it`,
+    ...layout(
+      data.product,
+      "A week on — your data is untouched",
+      `${greeting} it has been a week since your ${data.product} subscription ended, and nothing has been deleted. Your records, configuration and history are where you left them. Coming back is not a re-onboarding: choose a plan and the workspace picks up as it was, and it opens with another 14 days before the first charge — so returning costs you nothing until it is worth something again.`,
+      "Pick it back up",
+      data.pricingUrl,
+    ),
+  };
+}
