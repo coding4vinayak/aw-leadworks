@@ -233,7 +233,7 @@ export function renderWelcomeEmail(data: {
     ...layout(
       data.product,
       `Your ${data.workspaceName} workspace is ready`,
-      `${greeting} your ${data.product} workspace is set up. Add a source, set the qualification rules, and the pipeline starts filling. Your CRM bill is complicated enough — ours is one flat price.`,
+      `${greeting} your ${data.product} workspace is set up. Add a source, set the qualification rules, and the pipeline starts filling. When you are ready, every paid plan starts with a 14-day free trial: no charge before day 14, cancel any time from the portal. Your CRM bill is complicated enough — ours is one flat price.`,
       "Open your dashboard",
       data.dashboardUrl,
     ),
