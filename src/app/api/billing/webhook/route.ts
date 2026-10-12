@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
+import { prisma } from "@/lib/db";
 import { appBaseUrl } from "@/lib/tokens";
-import { getEmailSender, renderPaymentFailedEmail, renderReceiptEmail } from "@/lib/email";
+import {
+  getEmailSender,
+  renderPaymentFailedEmail,
+  renderPaymentRecoveredEmail,
+  renderReceiptEmail,
+  renderTrialEndedEmail,
+} from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +73,58 @@ async function sendDunning(stripeSub: Stripe.Subscription) {
     .catch(() => undefined);
 }
 
+/**
+ * The two transitions that deserve an email of their own: a trial that
+ * converted to a paid plan (the money moment, and the one buyers most often
+ * forget they authorised) and a past-due subscription that recovered (silence
+ * here reads as "still broken" and prompts a cancellation).
+ *
+ * Reads the previous status from the local row *before* the sync overwrites
+ * it — Stripe events do not carry the old state, and a transition you cannot
+ * see is a transition you cannot announce.
+ */
+async function syncAndAnnounce(stripeSub: Stripe.Subscription) {
+  const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
+  const previous = workspaceId
+    ? await prisma.subscription.findUnique({ where: { workspaceId }, select: { status: true } })
+    : null;
+
+  await syncSubscriptionFromStripe(stripeSub);
+  if (!previous || previous.status === stripeSub.status) return;
+
+  const converted =
+    (previous.status === "trialing" && stripeSub.status === "active") ||
+    (previous.status === "past_due" && stripeSub.status === "active");
+  if (!converted) return;
+
+  const customerId = typeof stripeSub.customer === "string" ? stripeSub.customer : stripeSub.customer.id;
+  const customer = await getStripe().customers.retrieve(customerId);
+  const email = "email" in customer ? customer.email : null;
+  if (!email) return;
+  const name = "name" in customer ? customer.name ?? null : null;
+
+  const itemPeriodEnd = stripeSub.items.data[0]?.current_period_end;
+  const periodEnd = typeof itemPeriodEnd === "number" ? new Date(itemPeriodEnd * 1000) : null;
+
+  const rendered =
+    previous.status === "trialing"
+      ? renderTrialEndedEmail({
+          product: productName(),
+          name,
+          periodEnd,
+          portalUrl: `${appBaseUrl()}/dashboard`,
+        })
+      : renderPaymentRecoveredEmail({
+          product: productName(),
+          name,
+          portalUrl: `${appBaseUrl()}/dashboard`,
+        });
+
+  await getEmailSender()
+    .send(email, rendered.subject, rendered.html, rendered.text)
+    .catch(() => undefined);
+}
+
 export async function POST(request: Request) {
   const signature = request.headers.get("stripe-signature");
   const rawBody = await request.text();
@@ -92,7 +151,7 @@ export async function POST(request: Request) {
     case "customer.subscription.updated":
     case "customer.subscription.deleted": {
       const stripeSub = event.data.object as Stripe.Subscription;
-      await syncSubscriptionFromStripe(stripeSub);
+      await syncAndAnnounce(stripeSub);
       break;
     }
     case "invoice.payment_failed": {

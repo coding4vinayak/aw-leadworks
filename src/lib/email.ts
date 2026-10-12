@@ -300,3 +300,53 @@ export function renderPaymentFailedEmail(data: {
     ),
   };
 }
+
+/**
+ * Trial over, first real charge taken. The buyer could cancel here, so this is
+ * the one email that has to remind them why they bought — no feature pitch,
+ * just the plain fact that the trial converted and what the next invoice is.
+ */
+export function renderTrialEndedEmail(data: {
+  product: string;
+  name: string | null;
+  periodEnd: Date | null;
+  portalUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  const next = data.periodEnd
+    ? new Intl.DateTimeFormat("en", { dateStyle: "long" }).format(data.periodEnd)
+    : "your next billing date";
+  return {
+    subject: `Your ${data.product} trial is now a paid plan`,
+    ...layout(
+      data.product,
+      "Trial ended — paid plan active",
+      `${greeting} your 14-day trial just converted and your first payment went through. Your next invoice is dated ${next}. Everything stays exactly as you left it; cancel any time from the portal and you are not billed again.`,
+      "Billing portal",
+      data.portalUrl,
+    ),
+  };
+}
+
+/**
+ * The card worked again. Short, and says thank you — a customer who fixed a
+ * failed payment is one support ticket away from churning, and this email is
+ * the cheapest way to make sure they do not open it.
+ */
+export function renderPaymentRecoveredEmail(data: {
+  product: string;
+  name: string | null;
+  portalUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  return {
+    subject: `${data.product} — payment recovered, thanks for fixing it`,
+    ...layout(
+      data.product,
+      "You are back in good standing",
+      `${greeting} your last invoice has been paid and your workspace is back in good standing. Nothing changed while it was past due — your data, keys and history are all where you left them.`,
+      "Open your dashboard",
+      data.portalUrl,
+    ),
+  };
+}
