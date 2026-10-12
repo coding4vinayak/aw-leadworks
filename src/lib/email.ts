@@ -275,3 +275,28 @@ export function renderReceiptEmail(data: {
     ),
   };
 }
+
+
+/**
+ * Dunning. A declined card that nobody mentions is churn in slow motion: the
+ * buyer thinks everything is fine until access stops. This email goes out on
+ * every invoice.payment_failed, so the last one before Stripe cancels is
+ * always seen.
+ */
+export function renderPaymentFailedEmail(data: {
+  product: string;
+  name: string | null;
+  portalUrl: string;
+}): { subject: string; html: string; text: string } {
+  const greeting = data.name ? `Hi ${data.name},` : "Hi,";
+  return {
+    subject: `Action needed — your ${data.product} payment failed`,
+    ...layout(
+      data.product,
+      "We could not take your last payment",
+      `${greeting} your most recent invoice was declined. Your card updates and retries automatically, but the fastest fix is to confirm a working card in the billing portal. If payment keeps failing, access to your workspace ends when Stripe cancels the subscription.`,
+      "Update payment method",
+      data.portalUrl,
+    ),
+  };
+}

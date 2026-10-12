@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
 import { appBaseUrl } from "@/lib/tokens";
-import { getEmailSender, renderReceiptEmail } from "@/lib/email";
+import { getEmailSender, renderPaymentFailedEmail, renderReceiptEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +38,28 @@ async function sendReceipt(session: Stripe.Checkout.Session) {
     periodEnd,
     portalUrl: `${appBaseUrl()}/dashboard`,
     trialing,
+  });
+  await getEmailSender()
+    .send(email, subject, html, plain)
+    .catch(() => undefined);
+}
+
+/**
+ * Same best-effort rule as the receipt: the sync has already committed, so a
+ * mail failure must not make Stripe retry the whole webhook. The buyer learns
+ * about the decline from the portal banner if not from us — but usually from us.
+ */
+async function sendDunning(stripeSub: Stripe.Subscription) {
+  const customerId = typeof stripeSub.customer === "string" ? stripeSub.customer : stripeSub.customer.id;
+  const customer = await getStripe().customers.retrieve(customerId);
+  // A DeletedCustomer response has no email/name — guard before reading.
+  const email = "email" in customer ? customer.email : null;
+  if (!email) return;
+  const name = "name" in customer ? customer.name ?? null : null;
+  const { subject, html, text: plain } = renderPaymentFailedEmail({
+    product: productName(),
+    name,
+    portalUrl: `${appBaseUrl()}/dashboard`,
   });
   await getEmailSender()
     .send(email, subject, html, plain)
@@ -88,6 +110,7 @@ export async function POST(request: Request) {
       if (subId) {
         const stripeSub = await getStripe().subscriptions.retrieve(subId);
         await syncSubscriptionFromStripe(stripeSub);
+        await sendDunning(stripeSub);
       }
       break;
     }
