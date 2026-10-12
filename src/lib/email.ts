@@ -246,11 +246,24 @@ export function renderReceiptEmail(data: {
   planLabel: string;
   periodEnd: Date | null;
   portalUrl: string;
+  trialing?: boolean;
 }): { subject: string; html: string; text: string } {
   const greeting = data.name ? `Hi ${data.name},` : "Hi,";
   const renews = data.periodEnd
     ? new Intl.DateTimeFormat("en", { dateStyle: "long" }).format(data.periodEnd)
     : "your next billing date";
+  if (data.trialing) {
+    return {
+      subject: `${data.product} — trial started`,
+      ...layout(
+        data.product,
+        "Trial started",
+        `${greeting} your ${data.planLabel} trial is active. Your first invoice is dated ${renews}. Cancel any time from the billing portal before then and you are not charged.`,
+        "Billing portal",
+        data.portalUrl,
+      ),
+    };
+  }
   return {
     subject: `${data.product} — payment received`,
     ...layout(

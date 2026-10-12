@@ -57,6 +57,7 @@ type SubscriptionState = {
  */
 function PlanBanner({ billing, subscription }: { billing?: string; subscription: SubscriptionState }) {
   const paid = subscription ? ["trialing", "active", "past_due"].includes(subscription.status) : false;
+  const trialing = subscription?.status === "trialing";
   const justBack = billing === "success" || billing === "portal";
   const renews = subscription?.stripeCurrentPeriodEnd
     ? new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(subscription.stripeCurrentPeriodEnd)
@@ -65,7 +66,11 @@ function PlanBanner({ billing, subscription }: { billing?: string; subscription:
   if (justBack && paid) {
     return (
       <div className="rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-        Payment received — welcome aboard. Your plan is <strong>{subscription!.status}</strong>.
+        {trialing ? (
+          <>Trial started — welcome aboard. Your first invoice is {renews ?? "in 14 days"}. Cancel any time before then and you are not charged.</>
+        ) : (
+          <>Payment received — welcome aboard. Your plan is <strong>{subscription!.status}</strong>.</>
+        )}
       </div>
     );
   }
@@ -74,9 +79,11 @@ function PlanBanner({ billing, subscription }: { billing?: string; subscription:
     return (
       <div className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
         <span className="flex items-center gap-2">
-          <Badge tone="green">{subscription!.status}</Badge>
+          <Badge tone={trialing ? "blue" : "green"}>{subscription!.status}</Badge>
           <span className="text-gray-700">
-            Pro plan active{renews ? <>, renews {renews}</> : null}.
+            {trialing
+              ? <>Trial active{renews ? <>, first charge {renews}</> : null}.</>
+              : <>Pro plan active{renews ? <>, renews {renews}</> : null}.</>}
           </span>
         </span>
         <ManageBillingButton />
@@ -88,10 +95,10 @@ function PlanBanner({ billing, subscription }: { billing?: string; subscription:
     <div className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 text-sm">
       <span className="flex items-center gap-2">
         <Badge tone="gray">free</Badge>
-        <span className="text-gray-700">You are on the free demo. Unlimited sources, leads and exports from $49/mo.</span>
+        <span className="text-gray-700">You are on the free demo. Full product for 14 days on your first paid plan — no charge before day 14, cancel any time from the portal.</span>
       </span>
       <Link href="/pricing" className="shrink-0 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition">
-        Upgrade
+        Start free trial
       </Link>
     </div>
   );

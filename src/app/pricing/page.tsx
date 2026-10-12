@@ -19,13 +19,13 @@ export default function Page() {
             <p className="text-sm font-semibold uppercase tracking-wide text-gray-600">Monthly</p>
             <p className="mt-2 text-4xl font-bold">$49</p>
             <p className="mt-1 text-sm text-gray-600">per month</p>
-            <BuyButton priceId="FLAT_MONTHLY" label="Start now" />
+            <BuyButton priceId="FLAT_MONTHLY" label="Start 14-day free trial" />
           </div>
           <div className="rounded-2xl border-2 border-blue-600 p-6 bg-blue-50">
             <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Annual — 2 months free</p>
             <p className="mt-2 text-4xl font-bold">$490</p>
             <p className="mt-1 text-sm text-gray-600">per month, billed yearly</p>
-            <BuyButton priceId="FLAT_ANNUAL" label="Go annual" />
+            <BuyButton priceId="FLAT_ANNUAL" label="Start 14-day free trial" />
           </div>
           <div className="rounded-2xl border p-6 border-gray-200 bg-white shadow-sm">
             <p className="text-sm font-semibold uppercase tracking-wide text-gray-600">Enterprise</p>
@@ -36,7 +36,7 @@ export default function Page() {
         </div>
         <h2 className="mt-12 text-xl font-bold">Questions</h2>
         <div className="mt-4 space-y-4">
-          <div><p className="font-semibold text-gray-900">Is there a trial?</p><p className="mt-1 text-gray-600">Yes — the live demo workspace has a real source, rule, and export profile. No card required.</p></div>
+          <div><p className="font-semibold text-gray-900">Is there a trial?</p><p className="mt-1 text-gray-600">Yes, two. The live demo workspace is open to anyone, no card. And every paid plan starts with a 14-day free trial — cancel from the billing portal any time before day 14 and you are not charged.</p></div>
           <div><p className="font-semibold text-gray-900">Where does the data come from?</p><p className="mt-1 text-gray-600">Your sources: scrapers you configure, APIs you connect, CSVs you upload. We never resell third-party lists.</p></div>
           <div><p className="font-semibold text-gray-900">Can I cancel anytime?</p><p className="mt-1 text-gray-600">Yes. Plans are month-to-month; service runs to the end of your billing period.</p></div>
           <div><p className="font-semibold text-gray-900">Do you offer annual billing?</p><p className="mt-1 text-gray-600">Yes — $490 per year, two months free, one invoice.</p></div>

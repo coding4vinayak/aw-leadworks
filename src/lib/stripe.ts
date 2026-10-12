@@ -69,7 +69,7 @@ export async function createCheckoutSession(workspaceId: string, priceId: keyof 
     line_items: [{ price: PRICES[priceId], quantity: 1 }],
     allow_promotion_codes: true,
     billing_address_collection: "required",
-    subscription_data: { metadata: { workspaceId } },
+    subscription_data: { metadata: { workspaceId }, trial_period_days: 14 },
     success_url: `${returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: returnUrl,
   });
