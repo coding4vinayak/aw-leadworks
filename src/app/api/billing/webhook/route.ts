@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
 import { prisma } from "@/lib/db";
 import { appBaseUrl } from "@/lib/tokens";
-import { armCancellationJobs, scheduleTrialNudges } from "@/lib/billing-jobs";
+import { armCancellationJobs, ownerOf, scheduleTrialNudges } from "@/lib/billing-jobs";
 import {
   getEmailSender,
   renderPaymentFailedEmail,
@@ -56,21 +56,25 @@ async function sendReceipt(session: Stripe.Checkout.Session) {
  * Same best-effort rule as the receipt: the sync has already committed, so a
  * mail failure must not make Stripe retry the whole webhook. The buyer learns
  * about the decline from the portal banner if not from us — but usually from us.
+ *
+ * The address comes from the workspace, not from Stripe. `ensureCustomer`
+ * creates the customer with an empty email — checkout collects one from the
+ * buyer, but nothing guarantees Stripe writes it back — so a customer-shaped
+ * lookup is a way to lose a declined-payment notice over a field this app
+ * already holds. One source also means one answer for every billing mail.
  */
 async function sendDunning(stripeSub: Stripe.Subscription) {
-  const customerId = typeof stripeSub.customer === "string" ? stripeSub.customer : stripeSub.customer.id;
-  const customer = await getStripe().customers.retrieve(customerId);
-  // A DeletedCustomer response has no email/name — guard before reading.
-  const email = "email" in customer ? customer.email : null;
-  if (!email) return;
-  const name = "name" in customer ? customer.name ?? null : null;
+  const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
+  if (!workspaceId) return;
+  const owner = await ownerOf(workspaceId);
+  if (!owner) return;
   const { subject, html, text: plain } = renderPaymentFailedEmail({
     product: productName(),
-    name,
+    name: owner.user.name,
     portalUrl: `${appBaseUrl()}/dashboard`,
   });
   await getEmailSender()
-    .send(email, subject, html, plain)
+    .send(owner.user.email, subject, html, plain)
     .catch(() => undefined);
 }
 
@@ -100,16 +104,6 @@ async function armTrialNudges(stripeSub: Stripe.Subscription) {
 }
 
 /**
- * The two transitions that deserve an email of their own: a trial that
- * converted to a paid plan (the money moment, and the one buyers most often
- * forget they authorised) and a past-due subscription that recovered (silence
- * here reads as "still broken" and prompts a cancellation).
- *
- * Reads the previous status from the local row *before* the sync overwrites
- * it — Stripe events do not carry the old state, and a transition you cannot
- * see is a transition you cannot announce.
- */
-/**
  * The two mails an ended subscription gets: the confirmation now, and the
  * come-back offer a week later. Both are armed rather than sent inline for the
  * reason every mail here has the same shape — the sync has already committed,
@@ -131,6 +125,43 @@ async function armCancellation(stripeSub: Stripe.Subscription) {
 }
 
 /**
+ * Say what the buyer just agreed to, and who gets told. Split out of
+ * `syncAndAnnounce` because the answer has to be reachable without a Stripe
+ * round-trip: the customer this app creates has no email of its own, and a
+ * decline or a conversion that cannot find an address must not go silent.
+ */
+async function announceTransition(workspaceId: string, from: string, stripeSub: Stripe.Subscription) {
+  const converted =
+    (from === "trialing" && stripeSub.status === "active") ||
+    (from === "past_due" && stripeSub.status === "active");
+  if (!converted) return;
+
+  const owner = await ownerOf(workspaceId);
+  if (!owner) return;
+
+  const itemPeriodEnd = stripeSub.items.data[0]?.current_period_end;
+  const periodEnd = typeof itemPeriodEnd === "number" ? new Date(itemPeriodEnd * 1000) : null;
+
+  const rendered =
+    from === "trialing"
+      ? renderTrialEndedEmail({
+          product: productName(),
+          name: owner.user.name,
+          periodEnd,
+          portalUrl: `${appBaseUrl()}/dashboard`,
+        })
+      : renderPaymentRecoveredEmail({
+          product: productName(),
+          name: owner.user.name,
+          portalUrl: `${appBaseUrl()}/dashboard`,
+        });
+
+  await getEmailSender()
+    .send(owner.user.email, rendered.subject, rendered.html, rendered.text)
+    .catch(() => undefined);
+}
+
+/**
  * The two transitions that deserve an email of their own: a trial that
  * converted to a paid plan (the money moment, and the one buyers most often
  * forget they authorised) and a past-due subscription that recovered (silence
@@ -148,39 +179,16 @@ async function syncAndAnnounce(stripeSub: Stripe.Subscription) {
 
   await syncSubscriptionFromStripe(stripeSub);
   await armTrialNudges(stripeSub);
-  if (!previous || previous.status === stripeSub.status) return;
+  if (!previous || !workspaceId || previous.status === stripeSub.status) return;
 
-  const converted =
-    (previous.status === "trialing" && stripeSub.status === "active") ||
-    (previous.status === "past_due" && stripeSub.status === "active");
-  if (!converted) return;
-
-  const customerId = typeof stripeSub.customer === "string" ? stripeSub.customer : stripeSub.customer.id;
-  const customer = await getStripe().customers.retrieve(customerId);
-  const email = "email" in customer ? customer.email : null;
-  if (!email) return;
-  const name = "name" in customer ? customer.name ?? null : null;
-
-  const itemPeriodEnd = stripeSub.items.data[0]?.current_period_end;
-  const periodEnd = typeof itemPeriodEnd === "number" ? new Date(itemPeriodEnd * 1000) : null;
-
-  const rendered =
-    previous.status === "trialing"
-      ? renderTrialEndedEmail({
-          product: productName(),
-          name,
-          periodEnd,
-          portalUrl: `${appBaseUrl()}/dashboard`,
-        })
-      : renderPaymentRecoveredEmail({
-          product: productName(),
-          name,
-          portalUrl: `${appBaseUrl()}/dashboard`,
-        });
-
-  await getEmailSender()
-    .send(email, rendered.subject, rendered.html, rendered.text)
-    .catch(() => undefined);
+  try {
+    await announceTransition(workspaceId, previous.status, stripeSub);
+  } catch (error) {
+    // Swallowed on purpose. The sync above has already overwritten the status,
+    // so the retry that answering non-200 buys no longer sees a transition to
+    // announce: a loud failure here does not delay the mail, it deletes it.
+    console.error("[billing] transition mail not sent:", error);
+  }
 }
 
 export async function POST(request: Request) {

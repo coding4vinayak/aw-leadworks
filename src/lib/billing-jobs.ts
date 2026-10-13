@@ -37,8 +37,13 @@ function daysUntil(date: Date): number {
  * Whoever gets billed gets told. The oldest OWNER membership is the account
  * that ran checkout, so it is the address that recognises the message; a later
  * OWNER added by an invite is not.
+ *
+ * Exported, because the mails the webhook sends inline need the same answer.
+ * Asking Stripe instead would mean a second API call inside a webhook that has
+ * already committed, on a customer this app created with an empty email — and
+ * the address is one the workspace has always known and Stripe may never have.
  */
-async function ownerOf(workspaceId: string) {
+export async function ownerOf(workspaceId: string) {
   return prisma.membership.findFirst({
     where: { workspaceId, role: "OWNER" },
     orderBy: { createdAt: "asc" },
