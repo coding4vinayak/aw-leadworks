@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
-import { createCheckoutSession, PRICES, sameOriginReturnUrl } from "@/lib/stripe";
+import {
+  createCheckoutSession,
+  PRICES,
+  sameOriginReturnUrl,
+  SUBSCRIPTION_STATUS_ACTIVE,
+} from "@/lib/stripe";
 import { getSession } from "@/lib/session";
+import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +31,28 @@ export async function POST(request: Request) {
   }
   const ret = sameOriginReturnUrl(returnUrl);
   if (!ret) return NextResponse.json({ error: "returnUrl must be a page on this site" }, { status: 400 });
+
+  // A second checkout is a second subscription. Stripe keeps charging the first
+  // one — nothing here cancels it, and the local row is keyed by workspace, so
+  // it ends up describing the newer of the two while the older invoice carries
+  // on arriving. That is a refund conversation at best and a chargeback at
+  // worst, and it is the buyer's last impression of the product. Changing what
+  // you pay for is the portal's job, and the portal is where a card that is
+  // failing gets fixed before Stripe cancels on its own.
+  const current = await prisma.subscription.findUnique({
+    where: { workspaceId: session.workspaceId },
+    select: { status: true },
+  });
+  if (current && (SUBSCRIPTION_STATUS_ACTIVE as readonly string[]).includes(current.status)) {
+    return NextResponse.json(
+      {
+        error:
+          `This workspace is already on a ${current.status} plan. Switch plan or fix the card in the ` +
+          "billing portal — a second checkout would be a second subscription, and a second invoice.",
+      },
+      { status: 409 },
+    );
+  }
 
   try {
     const url = await createCheckoutSession(session.workspaceId, priceId as keyof typeof PRICES, ret);
