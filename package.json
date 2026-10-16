@@ -30,7 +30,7 @@
     "prisma": "^7.10.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "stripe": "^22.6.2",
+    "stripe": "^23.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.23.8"
   },

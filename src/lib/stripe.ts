@@ -11,7 +11,7 @@ export function getStripe(): Stripe {
   const key = process.env.STRIPE_SECRET_KEY ?? "";
   if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
   if (!_stripe) {
-    _stripe = new Stripe(key, { apiVersion: "2026-08-26.dahlia", typescript: true });
+    _stripe = new Stripe(key, { apiVersion: "2026-09-30.endive", typescript: true });
   }
   return _stripe;
 }
@@ -93,7 +93,7 @@ export function verifyWebhook(rawBody: string, signature: string | null) {
   // verification works without an API key (builds, unit tests).
   const client = process.env.STRIPE_SECRET_KEY
     ? getStripe()
-    : new Stripe("sk_webhook_verify_only", { apiVersion: "2026-08-26.dahlia" });
+    : new Stripe("sk_webhook_verify_only", { apiVersion: "2026-09-30.endive" });
   return client.webhooks.constructEvent(rawBody, signature, secret);
 }
 
