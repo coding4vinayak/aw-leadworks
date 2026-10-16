@@ -18,6 +18,10 @@
  * route-auth's: what we are pinning is a shape (a check sits above a fetch, an
  * import reaches a call site), and shape rot looks like a passing runtime test with
  * a removed line. Mutants in §8.61's after-probe are the proof.
+ *
+ * The event menu is pinned the same way below: `WEBHOOK_EVENTS` is the
+ * subscription vocabulary, every name in it must have an emitter, and both
+ * subscription writes refuse a name outside it.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -87,6 +91,27 @@ describe("#17 sender module", () => {
     );
   });
 
+  it("also sends the generic `sha256=` spelling, which is what a nuCRM plugin webhook verifies", () => {
+    // Same digest, second name: `x-webhook-signature: sha256=<hex over raw body>`
+    // is the convention nuCRM's inbound plugin webhook reads, so a pointer at
+    // that endpoint verifies leadworks with no adapter between them. The
+    // family header above stays byte-identical for receivers that already
+    // verify it.
+    assert.match(
+      sender,
+      /"X-Webhook-Signature"\s*:\s*`sha256=\$\{signature\}`/,
+      "the generic header must carry the same digest with the sha256= prefix",
+    );
+  });
+
+  it("stamps each logical event with a stable id so a receiver can dedupe", () => {
+    assert.match(
+      sender,
+      /id:\s*`evt_\$\{crypto\.randomBytes/,
+      "payload id must be an evt_-prefixed random, generated once per dispatch — not per delivery",
+    );
+  });
+
   it("bounds each delivery with a timeout so a hung receiver cannot pin the caller", () => {
     assert.match(
       sender,
@@ -135,5 +160,54 @@ describe("#17 wire-up at POST /api/leads", () => {
       /return\s+NextResponse\.json\(\s*lead,\s*\{\s*status:\s*201\s*\}\s*\)/,
       "the response shape is unchanged — webhooks are best-effort on top of a successful create, not a replacement for it",
     );
+  });
+});
+
+describe("the event menu is the emitter list", () => {
+  const listRoute = readFileSync(join(ROOT, "src/app/api/webhooks/route.ts"), "utf8");
+  const patchRoute = readFileSync(join(ROOT, "src/app/api/webhooks/[id]/route.ts"), "utf8");
+  const enrichment = readFileSync(join(ROOT, "src/lib/enrichment.ts"), "utf8");
+  const exporter = readFileSync(join(ROOT, "src/lib/exporter.ts"), "utf8");
+  const allSources = sender + leadsRoute + enrichment + exporter;
+
+  it("declares the three events and nothing else", () => {
+    const match = /export const WEBHOOK_EVENTS = \[([^\]]+)\] as const/.exec(sender);
+    assert.ok(match, "the list must be a const tuple, so `WebhookEvent` is a closed union the compiler checks");
+    assert.deepEqual(
+      [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]),
+      ["lead.created", "enrichment.completed", "export.completed"],
+    );
+  });
+
+  it("has an emission call site for every declared event", () => {
+    // A name in the menu with no emitter is the dead-feature bug from the other
+    // side: stored, listed, and unanswered forever. Adding a fourth name here
+    // means adding its emission, or this loop fails.
+    for (const event of ["lead.created", "enrichment.completed", "export.completed"]) {
+      const pattern = new RegExp(`dispatchWebhookEvent\\([^\\n]*"${event.replace(/\./g, "\\.")}"`);
+      assert.match(allSources, pattern, `no dispatchWebhookEvent call site names ${event}`);
+    }
+  });
+
+  it("emits enrichment.completed only after the job row says COMPLETED", () => {
+    const doneAt = enrichment.search(/status: "COMPLETED", completedAt/);
+    const emittedAt = enrichment.search(/dispatchWebhookEvent\(\s*job\.workspaceId,\s*"enrichment\.completed"/);
+    assert.notEqual(doneAt, -1, "runEnrichmentJob writes the terminal row");
+    assert.notEqual(emittedAt, -1, "runEnrichmentJob must emit enrichment.completed");
+    assert.ok(doneAt < emittedAt, "a receiver that sees the event must find the job already done");
+  });
+
+  it("emits export.completed only after the export and job rows say COMPLETED", () => {
+    const doneAt = exporter.search(/status: "COMPLETED", completedAt/);
+    const emittedAt = exporter.search(/dispatchWebhookEvent\(\s*job\.workspaceId,\s*"export\.completed"/);
+    assert.notEqual(doneAt, -1, "runExportJob writes the terminal rows");
+    assert.notEqual(emittedAt, -1, "runExportJob must emit export.completed");
+    assert.ok(doneAt < emittedAt, "a receiver that fetches the export on this event must find the file it names");
+  });
+
+  it("refuses an unknown name on both subscription writes", () => {
+    assert.match(listRoute, /unknownEventsProblem\(events\.values\)/, "POST must refuse, not store, a name nothing emits");
+    assert.match(patchRoute, /unknownEventsProblem\(events\.values\)/, "PATCH must apply the same rule as POST");
+    assert.match(sender, /return `Unknown events: \$\{invalid\.join\(", "\)\}/, "the refusal must name the unknown ones");
   });
 });

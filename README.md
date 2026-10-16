@@ -175,12 +175,44 @@ GET    /api/exports?workspaceId=           # exports
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
 GET    /api/exports/{id}                   # status + download
 GET    /api/webhooks?workspaceId=          # subscriptions
+POST   /api/webhooks                       # subscribe; deliverable events are
+                                           # the three the product emits
+                                           # (see *Webhooks (outbound)*)
 GET    /api/ai/explain-lead?id=            # explain a score in words
 ```
 
 Duplicates merge on email, phone, LinkedIn or fuzzy name match — the most
 complete record wins and nothing is silently dropped. Exports land in
 CSV, JSON, XLSX or PDF with scheduled profiles for weekly drops.
+
+## Webhooks (outbound)
+
+`POST /api/webhooks` takes `{ workspaceId, url, events }` and answers `201`
+with the created subscription and its `secret`. A subscription can name only
+the events this product emits — an unknown name is refused with the list
+rather than stored, because a subscription filtered on a name nothing sends
+is the same silence as no subscription at all:
+
+| Event | Fires when |
+|---|---|
+| `lead.created` | a lead is created through `POST /api/leads` |
+| `enrichment.completed` | an enrichment job finishes; payload carries `jobId`, `processed`, `enriched`, `failed` |
+| `export.completed` | an export job finishes; payload carries `exportId`, `format`, `recordCount`, `fileSize` |
+
+Each delivery is a JSON body `{ id, event, timestamp, data }`, signed
+HMAC-SHA256 over the raw body with the subscription's secret, under two
+headers carrying the same digest: `X-Leadworks-Signature: <hex>` (this
+product's spelling) and `X-Webhook-Signature: sha256=<hex>`. The second is the
+generic spelling a nuCRM plugin webhook verifies out of the box — point one at
+`/api/tenant/plugins/webhook/{id}` with the same secret and nuCRM accepts the
+call with no adapter in between. `id` names the logical event; a receiver that
+deduplicates on it is already correct on the day delivery grows retries.
+
+Delivery is one attempt, best-effort and never throwing: a receiver that is
+down is logged and skipped, and never fails the lead create or the job whose
+work already committed. `tests/unit/webhook-dispatch.test.ts` pins the
+wiring — an event declared without an emitter, or an emitter that loses its
+call site, fails the suite.
 
 ## AI (optional)
 
