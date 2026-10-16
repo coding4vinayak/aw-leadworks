@@ -3,6 +3,29 @@ import { assertAllowedTarget } from "./egress";
 import crypto from "crypto";
 
 /**
+ * The events this product emits, and the only events a subscription may name.
+ *
+ * The list exists because the alternative shipped and failed once already in
+ * this family: a dispatcher is only half the contract, and a subscription
+ * filtered on a name nothing sends is the same silence as no subscription at
+ * all — indistinguishable, from the receiver's side, from a correct name for
+ * an event that does not exist yet. `unknownEventsProblem` refuses the typo at
+ * subscription time, the guard test refuses a declared event with no emitter,
+ * and the README documents these three names as the contract. Adding an event
+ * is two lines — the name here, the emission there — and the guard fails until
+ * both exist.
+ */
+export const WEBHOOK_EVENTS = ["lead.created", "enrichment.completed", "export.completed"] as const;
+export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
+
+/** The reason to show the caller, or null when every name is one this product emits. */
+export function unknownEventsProblem(requested: string[]): string | null {
+  const invalid = requested.filter((e) => !(WEBHOOK_EVENTS as readonly string[]).includes(e));
+  if (invalid.length === 0) return null;
+  return `Unknown events: ${invalid.join(", ")}. Valid events: ${WEBHOOK_EVENTS.join(", ")}`;
+}
+
+/**
  * Best-effort outbound delivery for leadworks Webhook rows.
  *
  * #17 measured the gap: the Webhook table existed, `api/webhooks/route.ts` let a
@@ -29,7 +52,7 @@ import crypto from "crypto";
  */
 export async function dispatchWebhookEvent(
   workspaceId: string,
-  event: string,
+  event: WebhookEvent,
   data: unknown,
 ): Promise<void> {
   const hooks = await prisma.webhook.findMany({
@@ -40,7 +63,12 @@ export async function dispatchWebhookEvent(
   );
   if (matching.length === 0) return;
 
-  const payload = { event, timestamp: new Date().toISOString(), data };
+  const payload = {
+    id: `evt_${crypto.randomBytes(12).toString("base64url")}`,
+    event,
+    timestamp: new Date().toISOString(),
+    data,
+  };
   await Promise.allSettled(matching.map((hook) => deliver(hook.id, hook.url, hook.secret, payload)));
 }
 
@@ -48,7 +76,7 @@ async function deliver(
   hookId: string,
   rawUrl: string,
   secret: string,
-  payload: { event: string; timestamp: string; data: unknown },
+  payload: { id: string; event: string; timestamp: string; data: unknown },
 ): Promise<void> {
   const body = JSON.stringify(payload);
   const signature = crypto.createHmac("sha256", secret).update(body).digest("hex");
@@ -59,6 +87,12 @@ async function deliver(
       headers: {
         "Content-Type": "application/json",
         "X-Leadworks-Signature": signature,
+        // The same digest, spelled the way receivers outside this family
+        // expect: `sha256=` + hex over the raw body is GitHub's convention and
+        // what an inbound nuCRM plugin webhook verifies. The family header
+        // stays byte-identical — a receiver that verifies it keeps working,
+        // and one that only knows the generic name now does too.
+        "X-Webhook-Signature": `sha256=${signature}`,
         "X-Leadworks-Event": payload.event,
         "User-Agent": "Leadworks-Webhook/1.0",
       },

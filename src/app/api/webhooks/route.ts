@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { readJson, validateBody, eventNames } from "@/lib/validate";
+import { unknownEventsProblem } from "@/lib/webhooks";
 import { WEBHOOK_CREATE } from "@/lib/fields";
 import crypto from "crypto";
 
@@ -37,6 +38,12 @@ async function POST_impl(request: Request) {
   // 500 on `.length`.
   const events = eventNames(body.events);
   if (!events.ok) return events.error;
+
+  // A name this product never emits is a subscription that never fires — the
+  // same silence as no subscription at all, arrived at from the other side.
+  // The typo is refused here instead of stored.
+  const unknown = unknownEventsProblem(events.values);
+  if (unknown) return NextResponse.json({ error: unknown }, { status: 400 });
 
   const secret = crypto.randomBytes(32).toString("hex");
   const webhook = await prisma.webhook.create({

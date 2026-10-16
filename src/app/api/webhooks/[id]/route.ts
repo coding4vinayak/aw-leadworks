@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { eventNames, NO_FIELD_TO_UPDATE, readJson, validateBody } from "@/lib/validate";
+import { unknownEventsProblem } from "@/lib/webhooks";
 import { WEBHOOK_PATCH } from "@/lib/fields";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,11 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   // same: an array or a comma string both arrive, one comma string is stored.
   const events = body.events === undefined ? undefined : eventNames(body.events);
   if (events && !events.ok) return events.error;
+  // Same rule as POST: a name this product never emits is refused, not stored.
+  if (events?.ok) {
+    const unknown = unknownEventsProblem(events.values);
+    if (unknown) return NextResponse.json({ error: unknown }, { status: 400 });
+  }
 
   const data = { ...input.data, ...(events?.values ? { events: events.values.join(",") } : {}) };
   // Not `requireWrite`: a body holding only `events` is a write, and the table

@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
+import { dispatchWebhookEvent } from "./webhooks";
 import { asInputJson, asRecord } from "./json";
 import { stringify } from "csv-stringify/sync";
 import * as XLSX from "xlsx";
@@ -64,6 +65,17 @@ export async function runExportJob(jobId: string): Promise<void> {
     await prisma.job.update({
       where: { id: job.id },
       data: { status: "COMPLETED", completedAt: new Date(), progress: 100, processedItems: leads.length },
+    });
+
+    // Last, after both rows say COMPLETED — a receiver that fetches the export
+    // on this event must find the file it names. Best-effort: the dispatcher
+    // never throws, so a subscriber's outage is a log line, not a FAILED job
+    // for work that actually finished.
+    await dispatchWebhookEvent(job.workspaceId, "export.completed", {
+      exportId: exportRecord.id,
+      format: config.format,
+      recordCount: leads.length,
+      fileSize: stats.size,
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";

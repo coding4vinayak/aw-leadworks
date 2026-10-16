@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
+import { dispatchWebhookEvent } from "./webhooks";
 
 export interface EnrichmentConfig {
   providers: string[];
@@ -64,6 +65,16 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
   await prisma.job.update({
     where: { id: jobId },
     data: { status: "COMPLETED", completedAt: new Date(), progress: 100, processedItems: processed, failedItems: failed },
+  });
+
+  // After the write that makes the event true, and bounded: the dispatcher
+  // never throws and each delivery carries a 5s abort, so a receiver that is
+  // down cannot fail a job whose real work has committed.
+  await dispatchWebhookEvent(job.workspaceId, "enrichment.completed", {
+    jobId: job.id,
+    processed,
+    enriched,
+    failed,
   });
 }
 
