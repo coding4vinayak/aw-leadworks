@@ -5,8 +5,8 @@
  * `env()` from `prisma/config`, because that helper throws when the variable
  * is unset and CI runs `prisma generate` with no DATABASE_URL at all.
  *
- * The fallback keeps v6's file: `file:./dev.db` in the schema used to resolve
- * against the schema directory, so the database lives at `prisma/dev.db`.
+ * The fallback matches `docker-compose.yml`: local development needs nothing
+ * but `docker compose up -d`.
  */
 import { defineConfig } from "prisma/config";
 
@@ -17,6 +17,6 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env.DATABASE_URL ?? "file:./prisma/dev.db",
+    url: process.env.DATABASE_URL ?? "postgresql://leadworks:leadworks@localhost:5432/leadworks",
   },
 });

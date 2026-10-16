@@ -24,8 +24,7 @@ to **hello@abetworks.in** and we will acknowledge within 3 business days.
 
 - `render.yaml` declares no shared secrets; every `envVars` entry is
   `sync: false` so the value lives in the provider's dashboard, not in git.
-- `DATABASE_URL` must point at an authenticated Postgres (the SQLite default
-  is dev-only).
+- `DATABASE_URL` must point at an authenticated Postgres.
 - `REDIS_URL` must not be exposed to the public internet. BullMQ has no
   auth layer of its own.
 

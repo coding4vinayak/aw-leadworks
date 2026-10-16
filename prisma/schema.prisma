@@ -1,7 +1,7 @@
 // LeadWorks - Lead Sourcing & Enrichment
-// SQLite by default so the product runs with zero infrastructure.
-// For Postgres: change `provider` below to "postgresql", swap the better-sqlite3
-// adapter in `src/lib/db.ts` for @prisma/adapter-pg, and point DATABASE_URL.
+// Postgres in every environment: docker-compose.yml runs one locally, a
+// managed instance serves production. Runtime adapter in `src/lib/db.ts`,
+// CLI datasource in `prisma.config.ts`; `npm run db:deploy` applies migrations.
 
 generator client {
   provider = "prisma-client"
@@ -9,7 +9,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 model Workspace {
