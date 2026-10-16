@@ -334,7 +334,10 @@ if (probeUrl && !probeNamesLiveDb) {
     it("leaves one scheduler, one delayed job at the next boundary, and no residue", async () => {
       const mod = await import("../../src/lib/queue");
       const queue = mod.queues.scheduled;
-      const client = await queue.waitUntilReady();
+      // bullmq 6: waitUntilReady() resolves void; the raw Redis client lives on
+      // the backend now, which is what the db assertion below is asking about.
+      await queue.waitUntilReady();
+      const client = await queue.getBackend().client;
       assert.equal((client as unknown as { options?: { db?: number } }).options?.db, expectedDb,
         "the probe must land on the db it was given, not on the import-time default");
       const delayedKey = `bull:${queue.name}:delayed`;
@@ -379,7 +382,8 @@ if (probeUrl) {
 
       // Touch all six the way /api/health does, then ask the connection where it is.
       for (const key of Object.keys(mod.queues)) void mod.queues[key as keyof typeof mod.queues];
-      const client = await first.waitUntilReady();
+      await first.waitUntilReady();
+      const client = await first.getBackend().client;
       assert.equal((client as unknown as { options?: { db?: number } }).options?.db, expectedDb,
         "the probe must land on the db it was given, not on the import-time default");
 
