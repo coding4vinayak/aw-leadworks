@@ -1,4 +1,4 @@
-import type { InputJsonValue } from "@prisma/client/runtime/library";
+import type { Prisma } from "@/generated/prisma/client";
 
 /**
  * Re-wrap a JSON blob read back from our own database for a Prisma write.
@@ -8,8 +8,8 @@ import type { InputJsonValue } from "@prisma/client/runtime/library";
  * satisfies the write side; this documents the single place the conversion
  * happens instead of scattering `as` casts across every job runner.
  */
-export function asInputJson(value: unknown): InputJsonValue {
-  return value as InputJsonValue;
+export function asInputJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
 }
 
 /** Spread-safe view of a stored JSON object (config blobs, filter maps). */

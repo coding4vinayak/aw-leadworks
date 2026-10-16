@@ -15,7 +15,8 @@
     "seed:key": "tsx prisma/seed-key.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.3",
+    "@prisma/adapter-better-sqlite3": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "@sentry/nextjs": "^11.6.0",
     "axios": "^1.7.7",
     "bullmq": "^5.15.0",
@@ -26,7 +27,7 @@
     "ioredis": "^5.4.1",
     "next": "16.4.0",
     "playwright": "^1.64.0",
-    "prisma": "^6.19.3",
+    "prisma": "^7.10.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "stripe": "^22.6.2",
