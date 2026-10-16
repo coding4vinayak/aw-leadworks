@@ -1,14 +1,15 @@
 // LeadWorks - Lead Sourcing & Enrichment
 // SQLite by default so the product runs with zero infrastructure.
-// For Postgres: change `provider` to "postgresql" and point DATABASE_URL.
+// For Postgres: change `provider` below to "postgresql", swap the better-sqlite3
+// adapter in `src/lib/db.ts` for @prisma/adapter-pg, and point DATABASE_URL.
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
 }
 
 model Workspace {

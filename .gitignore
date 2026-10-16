@@ -45,5 +45,12 @@ next-env.d.ts
 /prisma/*.db
 /prisma/*.db-journal
 
+# prisma 7: generated client (npx prisma generate)
+/src/generated/
+
+# prisma 7: a database created from an unwrapped `file:./dev.db`
+/dev.db
+/dev.db-journal
+
 # but the example env file should be committed
 !.env.example
