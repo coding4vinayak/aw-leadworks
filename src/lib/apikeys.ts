@@ -55,8 +55,8 @@ export async function requireApiKey(request: Request): Promise<AuthedKey> {
     throw new ApiKeyError("Invalid API key.");
   }
 
-  // Fire-and-forget: awaiting this touch would put every authenticated request
-  // behind SQLite's single-writer lock. A missed timestamp is harmless.
+  // Fire-and-forget: a missed timestamp is harmless, and it is not worth an
+  // extra round-trip on every authenticated request to make it exact.
   prisma.apiKey.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
   return { workspaceId: record.workspaceId, keyId: record.id };
 }
