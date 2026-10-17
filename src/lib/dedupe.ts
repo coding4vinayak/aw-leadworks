@@ -7,20 +7,100 @@ export interface DedupeConfig {
   keepOldest?: boolean;
 }
 
+export const DEDUPE_STRATEGIES = ["email", "phone", "linkedin", "company_name", "fuzzy"] as const;
+export const DEDUPE_ACTIONS = ["merge", "delete", "flag"] as const;
+
+/**
+ * The config a job must carry to be runnable — read as the caller's words, not
+ * as truthiness. Before this, an unrecognised strategy matched nothing:
+ * `areDuplicates` fell through to `false`, the job counted zero groups,
+ * reported COMPLETED and told the caller their list was clean. A dedupe run
+ * that silently does nothing is worse than one that fails, because the caller
+ * stops looking.
+ */
+export function readDedupeConfig(raw: unknown): DedupeConfig {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("config must be an object with a strategy");
+  }
+  const { strategy, action, threshold, keepOldest } = raw as Record<string, unknown>;
+  if (typeof strategy !== "string" || !(DEDUPE_STRATEGIES as readonly string[]).includes(strategy)) {
+    throw new Error(`unknown strategy ${JSON.stringify(strategy)} — use one of ${DEDUPE_STRATEGIES.join(", ")}`);
+  }
+  if (action !== undefined && (typeof action !== "string" || !(DEDUPE_ACTIONS as readonly string[]).includes(action))) {
+    throw new Error(`unknown action ${JSON.stringify(action)} — use one of ${DEDUPE_ACTIONS.join(", ")}`);
+  }
+  if (threshold !== undefined && typeof threshold !== "number") {
+    throw new Error("threshold must be a number");
+  }
+  if (keepOldest !== undefined && typeof keepOldest !== "boolean") {
+    throw new Error("keepOldest must be true or false");
+  }
+  return {
+    strategy: strategy as DedupeConfig["strategy"],
+    ...(action !== undefined ? { action: action as DedupeConfig["action"] } : {}),
+    ...(threshold !== undefined ? { threshold } : {}),
+    ...(keepOldest !== undefined ? { keepOldest } : {}),
+  };
+}
+
+/** The fields merge copies when the master is missing them. */
+const MERGE_SCALARS = [
+  "email", "phone", "linkedinUrl", "firstName", "lastName", "company", "title",
+  "department", "seniority", "location", "country", "industry", "companySize", "revenue",
+] as const;
+
+/**
+ * What a `merge` action writes onto the master. Pure so the rule is testable:
+ * scalar fields fill blanks only (the master is the survivor, so it never
+ * loses a value); array fields union; object fields merge with the master's
+ * keys winning. Returns {} when the duplicate carries nothing new.
+ */
+export function planMerge(master: Record<string, any>, duplicate: Record<string, any>): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+  for (const field of MERGE_SCALARS) {
+    if (!master[field] && duplicate[field]) updates[field] = duplicate[field];
+  }
+  const union = (a: unknown, b: unknown): unknown[] =>
+    [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])])];
+  for (const field of ["technologies", "intentSignals", "tags"] as const) {
+    if (Array.isArray(master[field]) || Array.isArray(duplicate[field])) {
+      const merged = union(master[field], duplicate[field]);
+      if (merged.length > 0) updates[field] = merged;
+    }
+  }
+  const object = (v: unknown): Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  for (const field of ["socialProfiles", "customFields"] as const) {
+    const a = object(master[field]);
+    const b = object(duplicate[field]);
+    if (Object.keys(b).length) updates[field] = { ...b, ...a };
+  }
+  return updates;
+}
+
 export async function runDedupeJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
 
-  const config = job.config as unknown as DedupeConfig;
   let duplicatesFound = 0;
   let duplicatesResolved = 0;
 
   try {
+    const config = readDedupeConfig(job.config);
+
     const leads = await prisma.lead.findMany({
       where: { workspaceId: job.workspaceId },
-      select: { id: true, email: true, phone: true, linkedinUrl: true, company: true, firstName: true, lastName: true, createdAt: true },
+      // Every field `planMerge` can carry over has to be in this select, or the
+      // merge writes back blanks for data the duplicate actually had.
+      select: {
+        id: true, email: true, phone: true, linkedinUrl: true, firstName: true,
+        lastName: true, company: true, title: true, department: true, seniority: true,
+        location: true, country: true, industry: true, companySize: true, revenue: true,
+        technologies: true, intentSignals: true, socialProfiles: true, customFields: true,
+        tags: true, createdAt: true,
+      },
     });
 
     const groups = findDuplicateGroups(leads, config.strategy, config.threshold);
@@ -33,14 +113,22 @@ export async function runDedupeJob(jobId: string): Promise<void> {
       const duplicates = group.filter(l => l.id !== master.id);
 
       for (const dup of duplicates) {
-        await mergeRecords(master, dup, config.action || "merge");
+        await mergeRecords(master, dup, config.action || "merge", job.id);
         duplicatesResolved++;
       }
     }
 
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "COMPLETED", completedAt: new Date(), progress: 100, processedItems: duplicatesResolved },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        progress: 100,
+        // What was found and what was done with it. A COMPLETED job that found
+        // duplicates and resolved none is visible here instead of implied.
+        totalItems: duplicatesFound,
+        processedItems: duplicatesResolved,
+      },
     });
   } catch (error) {
     await prisma.job.update({
@@ -93,8 +181,18 @@ function areDuplicates(a: any, b: any, strategy: string): boolean {
   }
 }
 
-function normalizePhone(phone: string): string {
-  return phone.replace(/[^\d+]/g, "").replace(/^\+?1/, "");
+/**
+ * Exported for unit tests: the comparison behind the `phone` strategy.
+ *
+ * Digits only, then a leading NANP `1` dropped, so all the spellings a CRM
+ * stores for one number compare equal: `+1 (555) 010-0199`, `1-555-010-0199`
+ * and `5550100199` are one number, and `+44 20 7946 0958` equals
+ * `44 20 7946 0958` (the earlier `[^\d+]` kept the plus, so those two did
+ * not match each other). Stripping the sign is safe for the same reason the
+ * `+1` strip is: the digits identify the number.
+ */
+export function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, "").replace(/^1/, "");
 }
 
 function fuzzyMatch(a: any, b: any): boolean {
@@ -157,42 +255,47 @@ function calculateCompleteness(lead: any): number {
   return score;
 }
 
-async function mergeRecords(master: any, duplicate: any, action: string): Promise<void> {
-  // Merge data from duplicate into master
-  const updates: any = {};
-  const fields = ["email", "phone", "linkedinUrl", "firstName", "lastName", "company", "title", "department", "seniority", "location", "country", "industry", "companySize", "revenue"];
+/**
+ * Resolve one duplicate. The three actions are the ones the config names:
+ *
+ * - `merge` (the default): copy what the master is missing from the duplicate
+ *   — scalars fill blanks, arrays union, object fields merge — then delete the
+ *   duplicate. One enriched survivor.
+ * - `delete`: delete the duplicate without copying anything.
+ * - `flag`: keep both rows; tag the duplicate `duplicate` and leave a NOTE on
+ *   its timeline naming the master, so a human decides.
+ *
+ * Measured before this: none of the three did anything. The branches were
+ * comments, the job still counted every duplicate as resolved, and reported
+ * COMPLETED on a list that had not changed.
+ */
+async function mergeRecords(master: any, duplicate: any, action: string, jobId: string): Promise<void> {
+  if (action === "flag") {
+    const tags = Array.isArray(duplicate.tags) ? duplicate.tags : [];
+    await prisma.lead.update({
+      where: { id: duplicate.id },
+      data: { tags: [...new Set([...tags, "duplicate"])] },
+    });
+    await prisma.leadActivity.create({
+      data: {
+        leadId: duplicate.id,
+        type: "NOTE",
+        description: `Flagged as a possible duplicate of lead ${master.id}`,
+        metadata: { duplicateOf: master.id, jobId },
+      },
+    });
+    return;
+  }
 
-  for (const field of fields) {
-    if (!master[field] && duplicate[field]) {
-      updates[field] = duplicate[field];
+  if (action === "merge") {
+    const updates = planMerge(master, duplicate);
+    if (Object.keys(updates).length > 0) {
+      await prisma.lead.update({ where: { id: master.id }, data: updates });
     }
+    await prisma.lead.delete({ where: { id: duplicate.id } });
+    return;
   }
 
-  // Merge arrays
-  if (master.technologies && duplicate.technologies) {
-    updates.technologies = [...new Set([...(master.technologies || []), ...(duplicate.technologies || [])])];
-  }
-  if (master.intentSignals && duplicate.intentSignals) {
-    updates.intentSignals = [...new Set([...(master.intentSignals || []), ...(duplicate.intentSignals || [])])];
-  }
-  if (master.socialProfiles && duplicate.socialProfiles) {
-    updates.socialProfiles = { ...master.socialProfiles, ...duplicate.socialProfiles };
-  }
-  if (master.customFields && duplicate.customFields) {
-    updates.customFields = { ...master.customFields, ...duplicate.customFields };
-  }
-  if (master.tags && duplicate.tags) {
-    updates.tags = [...new Set([...(master.tags || []), ...(duplicate.tags || [])])];
-  }
-
-  if (Object.keys(updates).length > 0) {
-    // Update master with merged data
-  }
-
-  // Delete or archive duplicate based on action
-  if (action === "delete") {
-    // Delete duplicate
-  } else if (action === "flag") {
-    // Mark as duplicate
-  }
+  // "delete": drop the duplicate outright — the master keeps exactly its own data.
+  await prisma.lead.delete({ where: { id: duplicate.id } });
 }
