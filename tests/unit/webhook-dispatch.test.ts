@@ -210,4 +210,12 @@ describe("the event menu is the emitter list", () => {
     assert.match(patchRoute, /unknownEventsProblem\(events\.values\)/, "PATCH must apply the same rule as POST");
     assert.match(sender, /return `Unknown events: \$\{invalid\.join\(", "\)\}/, "the refusal must name the unknown ones");
   });
+
+  it("classifies the destination on both subscription writes, before storing it", () => {
+    // The write-time half of the pair whose delivery-time half is the
+    // `assertAllowedTarget` above the fetch: an internal destination must be
+    // refused when written, not stored and then silently never delivered.
+    assert.match(listRoute, /classifyTarget\(input\.data\.url, "url"\)/, "POST must classify the destination");
+    assert.match(patchRoute, /classifyTarget\(input\.data\.url, "url"\)/, "PATCH must classify a repointed destination");
+  });
 });

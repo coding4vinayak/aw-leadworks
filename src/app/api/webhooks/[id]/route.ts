@@ -3,6 +3,7 @@ import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { eventNames, NO_FIELD_TO_UPDATE, readJson, validateBody } from "@/lib/validate";
 import { unknownEventsProblem } from "@/lib/webhooks";
+import { classifyTarget } from "@/lib/egress";
 import { WEBHOOK_PATCH } from "@/lib/fields";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,12 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   if (events?.ok) {
     const unknown = unknownEventsProblem(events.values);
     if (unknown) return NextResponse.json({ error: unknown }, { status: 400 });
+  }
+
+  // Same refusal as POST when the patch repoints the subscription.
+  if (input.data.url !== undefined) {
+    const target = await classifyTarget(input.data.url, "url");
+    if (!target.ok) return NextResponse.json({ error: target.reason }, { status: 400 });
   }
 
   const data = { ...input.data, ...(events?.values ? { events: events.values.join(",") } : {}) };
