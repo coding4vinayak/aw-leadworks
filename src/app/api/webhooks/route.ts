@@ -3,6 +3,7 @@ import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { readJson, validateBody, eventNames } from "@/lib/validate";
 import { unknownEventsProblem } from "@/lib/webhooks";
+import { classifyTarget } from "@/lib/egress";
 import { WEBHOOK_CREATE } from "@/lib/fields";
 import crypto from "crypto";
 
@@ -44,6 +45,13 @@ async function POST_impl(request: Request) {
   // The typo is refused here instead of stored.
   const unknown = unknownEventsProblem(events.values);
   if (unknown) return NextResponse.json({ error: unknown }, { status: 400 });
+
+  // The destination is refused here when it names an internal address — the
+  // same rule `assertAllowedTarget` enforces immediately above the delivery
+  // fetch — so a subscription that could never deliver is not stored. The
+  // documented local override (`ABET_ALLOW_PRIVATE_TARGETS=1`) still applies.
+  const target = await classifyTarget(input.data.url, "url");
+  if (!target.ok) return NextResponse.json({ error: target.reason }, { status: 400 });
 
   const secret = crypto.randomBytes(32).toString("hex");
   const webhook = await prisma.webhook.create({
