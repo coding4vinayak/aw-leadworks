@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { importCsvAction, type ImportState } from "@/app/import-actions";
-import { MAX_IMPORT_ROWS } from "@/lib/import-limits";
+import { MAX_IMPORT_ROWS, MAX_REPORTED_PROBLEMS } from "@/lib/import-limits";
 import { problemsToCsv } from "@/lib/import-problems";
 import type { ImportProblem } from "@/lib/csv-parse";
 
@@ -15,8 +15,11 @@ function downloadProblems(problems: ImportProblem[]) {
   const a = document.createElement("a");
   a.href = url;
   a.download = "import-problems.csv";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  // Revoking in the same tick can cancel the save in some browsers.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function SubmitButton() {
@@ -93,7 +96,7 @@ export function CsvImport() {
               </div>
               {state.problemsTruncated ? (
                 <p className="mt-1 text-xs text-green-800">
-                  The report carries the first 50 issues; fix those and run the file again.
+                  The report carries the first {MAX_REPORTED_PROBLEMS} issues; fix those and run the file again.
                 </p>
               ) : null}
             </div>
