@@ -167,6 +167,7 @@ GET    /api/jobs/{id}                      # detail + results
 POST   /api/jobs/{id}?action=retry|cancel  # re-run or stop
 GET    /api/leads?workspaceId=             # list, filter status/minScore
 POST   /api/leads                          # create
+POST   /api/leads/import                   # CSV import (text/csv or JSON)
 GET    /api/leads/{id}                     # detail + enrichment log
 POST   /api/leads/{id}?action=enrich       # enrich on demand
 GET    /api/lead-lists?workspaceId=        # lists
@@ -187,6 +188,34 @@ Duplicates merge on email, phone, LinkedIn or fuzzy name match — the most
 complete record wins and nothing is silently dropped. Exports land in
 CSV, JSON, XLSX or PDF with scheduled profiles for weekly drops.
 
+### Importing a list
+
+`POST /api/leads/import` takes the list a buyer already has, as `text/csv` or as
+JSON `{ "csv": "..." }` (the dashboard uses the same importer through a server
+action, so the browser never needs a key):
+
+```bash
+curl -X POST http://127.0.0.1:3300/api/leads/import \
+  -H "Authorization: Bearer $LEADWORKS_KEY" \
+  -H "Content-Type: text/csv" \
+  --data-binary @leads.csv
+```
+
+The first row must be a header. Aliases such as `E-mail`, `Company Name`,
+`First Name` and `LinkedIn URL` are understood, and a row is accepted with an
+email, phone or LinkedIn URL. Up to 1,000 rows / 5 MB per request. Duplicates —
+within the file or already in the workspace, matched case-insensitively by
+email — are skipped, never merged or silently overwritten. The response reports
+`imported`, `total`, `invalid`, `duplicatesInFile`, `duplicatesExisting` and up
+to 50 `problems`, each with the real file line. The dashboard shows the first
+five and downloads the whole report as CSV (`line,field,message`); cells use the
+same formula-escaping rule as an export. Every created row emits `lead.created`,
+the same event `POST /api/leads` emits.
+
+Unlike discovery from a source — which merges on email, phone, LinkedIn or a
+fuzzy name match — an import is the customer's own list: a duplicate address is
+not a better record, it is the same person twice.
+
 ## Webhooks (outbound)
 
 `POST /api/webhooks` takes `{ workspaceId, url, events }` and answers `201`
@@ -197,7 +226,7 @@ is the same silence as no subscription at all:
 
 | Event | Fires when |
 |---|---|
-| `lead.created` | a lead is created through `POST /api/leads` |
+| `lead.created` | a lead is created through `POST /api/leads` or a CSV import |
 | `enrichment.completed` | an enrichment job finishes; payload carries `jobId`, `processed`, `enriched`, `failed` |
 | `export.completed` | an export job finishes; payload carries `exportId`, `format`, `recordCount`, `fileSize` |
 

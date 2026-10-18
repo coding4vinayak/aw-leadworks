@@ -57,6 +57,55 @@ export default function Home() {
           </div>
           </div>
         </section>
+        <section className="mx-auto max-w-4xl px-6 py-12">
+          <div className="grid gap-6 rounded-2xl border border-blue-100 bg-blue-50/60 p-6 sm:p-8 lg:grid-cols-2 lg:items-center">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Bring your list</p>
+              <h2 className="mt-2 text-2xl font-bold">Your CSV, not a demo list.</h2>
+              <p className="mt-3 text-sm text-gray-700">
+                Export from the CRM you already pay for and drop it in. A header row is enough — aliases like{" "}
+                <code className="rounded bg-white px-1">E-mail</code>,{" "}
+                <code className="rounded bg-white px-1">Company Name</code> and{" "}
+                <code className="rounded bg-white px-1">LinkedIn URL</code> are understood. Duplicates are
+                skipped in the file and against the workspace, and every bad row is named by its real line,
+                so nobody imports 998 rows and wonders which two vanished.
+              </p>
+              <ul className="mt-4 space-y-1 text-sm text-gray-700">
+                <li>Up to 1,000 rows / 5 MB per import, from the dashboard or <code>POST /api/leads/import</code>.</li>
+                <li>Email, phone or LinkedIn is enough; extra columns are ignored.</li>
+                <li>Every imported row emits <code>lead.created</code>, the same event a single create emits.</li>
+              </ul>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <Link href="/signup" className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition">
+                  Import your list
+                </Link>
+                <Link href="/pricing" className="rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-semibold hover:bg-gray-50 transition">
+                  See plans
+                </Link>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">A four-row file, as the API answers it</p>
+              <pre className="mt-2 overflow-x-auto rounded-xl bg-gray-900 p-4 text-left text-[12px] leading-6 text-gray-100"><code>{`POST /api/leads/import  →  201 Created
+
+{
+  "imported": 2,
+  "duplicatesExisting": 0,
+  "total": 4,
+  "invalid": 1,
+  "duplicatesInFile": 1,
+  "problems": [
+    {
+      "line": 5,
+      "field": "email",
+      "message": "email does not look like an email address: \\"not-an-email\\""
+    }
+  ],
+  "problemsTruncated": false
+}`}</code></pre>
+            </div>
+          </div>
+        </section>
         <section className="border-y border-gray-200 bg-gray-50">
           <div className="mx-auto max-w-4xl space-y-6 px-6 py-12">
             <h2 className="text-2xl font-bold">Live in three steps</h2>
