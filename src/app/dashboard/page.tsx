@@ -8,6 +8,7 @@ import { createFirstKey } from "@/app/key-actions";
 import { ApiKeyOnboarding } from "@/components/api-key-onboarding";
 import { AiPanel, type AiField } from "@/components/ai-panel";
 import { ManageBillingButton } from "@/components/manage-billing";
+import { CsvImport } from "@/components/csv-import";
 
 export const dynamic = "force-dynamic";
 
@@ -223,6 +224,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <Card label="Sources" value={sources.length} sub={`${sources.filter((s) => s.isActive).length} active`} />
           <Card label="Jobs running" value={jobs.filter((j) => j.status === "RUNNING" || j.status === "PENDING").length} />
         </div>
+
+        {session && resolved.via === "session" && (
+          <div className="mb-6">
+            <CsvImport />
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
           <h2 className="text-lg font-bold text-gray-900 mb-4">Top leads by score</h2>

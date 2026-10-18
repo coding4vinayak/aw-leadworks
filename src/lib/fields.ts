@@ -1,4 +1,5 @@
 import type { Schema } from "./validate";
+import { MAX_IMPORT_BYTES } from "./import-limits";
 import {
   EXPORT_FORMATS,
   JOB_STATUSES,
@@ -233,4 +234,14 @@ export const WEBHOOK_CREATE = {
 export const WEBHOOK_PATCH = {
   url: { kind: "text", format: "url", max: 2000 },
   isActive: { kind: "bool" },
+} satisfies Schema;
+
+/**
+ * The JSON envelope for `POST /api/leads/import`. The rows inside the CSV are
+ * judged by `csv-parse.ts` using `LEAD_CREATE`; this table only guarantees the
+ * request carries a string before the parser starts. The cap is the same
+ * `MAX_IMPORT_BYTES` the route checks, in one shared place.
+ */
+export const LEAD_IMPORT = {
+  csv: { kind: "text", required: true, max: MAX_IMPORT_BYTES },
 } satisfies Schema;
