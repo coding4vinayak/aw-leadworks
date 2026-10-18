@@ -4,8 +4,20 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { importCsvAction, type ImportState } from "@/app/import-actions";
 import { MAX_IMPORT_ROWS } from "@/lib/import-limits";
+import { problemsToCsv } from "@/lib/import-problems";
+import type { ImportProblem } from "@/lib/csv-parse";
 
 const INITIAL: ImportState = null;
+
+function downloadProblems(problems: ImportProblem[]) {
+  const blob = new Blob([problemsToCsv(problems)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "import-problems.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -56,13 +68,35 @@ export function CsvImport() {
         >
           <p>{state.message}</p>
           {state.ok && state.problems.length > 0 ? (
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
-              {state.problems.map((p) => (
-                <li key={`${p.line}-${p.field}-${p.message}`}>
-                  Line {p.line}: {p.field} — {p.message}
-                </li>
-              ))}
-            </ul>
+            <div className="mt-2">
+              <ul className="list-disc space-y-1 pl-5 text-xs">
+                {state.problems.slice(0, 5).map((p) => (
+                  <li key={`${p.line}-${p.field}-${p.message}`}>
+                    Line {p.line}: {p.field} — {p.message}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                {state.problems.length > 5 ? (
+                  <span className="text-green-800">
+                    Showing 5 of {state.problems.length}
+                    {state.problemsTruncated ? "+" : ""} issues.
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => downloadProblems(state.problems)}
+                  className="font-semibold text-green-900 underline underline-offset-2 hover:text-green-950"
+                >
+                  Download problems (CSV)
+                </button>
+              </div>
+              {state.problemsTruncated ? (
+                <p className="mt-1 text-xs text-green-800">
+                  The report carries the first 50 issues; fix those and run the file again.
+                </p>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

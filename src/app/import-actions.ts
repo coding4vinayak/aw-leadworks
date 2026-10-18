@@ -11,8 +11,10 @@ export type ImportState =
       imported: number;
       duplicates: number;
       invalid: number;
-      /** The first few row problems, for the browser; the API returns more. */
+      /** Up to `MAX_REPORTED_PROBLEMS`; the card shows five and downloads all. */
       problems: ImportProblem[];
+      /** True when the file had more problems than the report carries. */
+      problemsTruncated: boolean;
     }
   | { ok: false; message: string }
   | null;
@@ -71,6 +73,7 @@ export async function importCsvAction(_prev: ImportState, formData: FormData): P
     imported: result.imported,
     duplicates: skipped,
     invalid: result.invalid,
-    problems: result.problems.slice(0, 5),
+    problems: result.problems,
+    problemsTruncated: result.problemsTruncated,
   };
 }

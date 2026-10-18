@@ -207,8 +207,10 @@ email, phone or LinkedIn URL. Up to 1,000 rows / 5 MB per request. Duplicates �
 within the file or already in the workspace, matched case-insensitively by
 email — are skipped, never merged or silently overwritten. The response reports
 `imported`, `total`, `invalid`, `duplicatesInFile`, `duplicatesExisting` and up
-to 50 `problems`, each with the real file line. Every created row emits
-`lead.created`, the same event `POST /api/leads` emits.
+to 50 `problems`, each with the real file line. The dashboard shows the first
+five and downloads the whole report as CSV (`line,field,message`); cells use the
+same formula-escaping rule as an export. Every created row emits `lead.created`,
+the same event `POST /api/leads` emits.
 
 Unlike discovery from a source — which merges on email, phone, LinkedIn or a
 fuzzy name match — an import is the customer's own list: a duplicate address is

@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseLeadCsv, MAX_IMPORT_ROWS } from "../../src/lib/csv-parse";
+import { problemsToCsv } from "../../src/lib/import-problems";
 
 test("quoted commas, escaped quotes, CRLF and a BOM survive with real line numbers", () => {
   const csv =
@@ -226,4 +227,16 @@ test("every data row lands in exactly one bucket", () => {
   const r = parseLeadCsv(csv);
   assert.equal(r.total, 5);
   assert.equal(r.rows.length + r.invalidRows + r.duplicatesInFile.length, r.total);
+});
+
+test("the problems report is a CSV a buyer can open beside the file", () => {
+  const csv = problemsToCsv([
+    { line: 5, field: "email", message: 'email does not look like an email address: "not-an-email"' },
+    { line: 7, field: '=HYPERLINK("http://x")', message: "header, with comma" },
+  ]);
+  const lines = csv.trimEnd().split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], '"line","field","message"');
+  assert.equal(lines[1], '"5","email","email does not look like an email address: ""not-an-email"""');
+  assert.equal(lines[2], '"7","\'=HYPERLINK(""http://x"")","header, with comma"');
 });
