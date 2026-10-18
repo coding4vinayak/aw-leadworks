@@ -33,6 +33,23 @@ test("header aliases and casing are understood, not demanded", () => {
   assert.equal(d.lastName, "Doe");
 });
 
+test("a HubSpot-shaped export maps Country/Region and Number of Employees", () => {
+  const csv =
+    "First Name,Last Name,Email Address,Company Name,Job Title,Phone Number,Country/Region,Number of Employees,Annual Revenue,LinkedIn URL\n" +
+    "Jane,Doe,jane@x.com,Acme,VP Sales,+1 (415) 555-0100,United States,51-200,$10M,linkedin.com/in/jane\n";
+  const d = parseLeadCsv(csv).rows[0].data;
+  assert.equal(d.email, "jane@x.com");
+  assert.equal(d.firstName, "Jane");
+  assert.equal(d.lastName, "Doe");
+  assert.equal(d.company, "Acme");
+  assert.equal(d.title, "VP Sales");
+  assert.equal(d.phone, "+14155550100");
+  assert.equal(d.country, "United States");
+  assert.equal(d.companySize, "51-200");
+  assert.equal(d.revenue, "$10M");
+  assert.equal(d.linkedinUrl, "https://linkedin.com/in/jane");
+});
+
 test("semicolon and tab files parse too", () => {
   const semi = parseLeadCsv("email;first name\njane@x.com;Jane\n");
   assert.equal(semi.rows.length, 1);
