@@ -11,3 +11,6 @@ User-Agent: PerplexityBot
 Allow: /
 User-Agent: Google-Extended
 Allow: /
+
+# Search engines: the full public page list is at https://leadworks.abetworks.in/sitemap.xml
+Sitemap: https://leadworks.abetworks.in/sitemap.xml
