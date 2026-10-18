@@ -12,6 +12,14 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@prisma/client", "prisma", "@prisma/adapter-pg", "pg", "bullmq", "ioredis", "cheerio"],
   transpilePackages: ["playwright"],
+  experimental: {
+    serverActions: {
+      // The dashboard's CSV card caps at `MAX_IMPORT_BYTES` (5 MB). The
+      // framework default is 1 MB, which would reject a legal import with a
+      // generic action error before the server action ever saw the file.
+      bodySizeLimit: "5mb",
+    },
+  },
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
