@@ -1,0 +1,29 @@
+# LeadWorks
+
+> Lead operations workspace: capture every lead once (duplicates refused at the
+> door), validate fields with a visible trail, sweep the list for dupes, and
+> export CRM-ready CSVs — with signed webhooks on every change. A standalone
+> SaaS from the Abetworks suite.
+
+Pricing (from https://leadworks.abetworks.in/pricing):
+- $49 per month
+- $490 per year — two months free, one invoice
+- 14-day free trial, card up front; cancel anytime from the billing portal
+
+Key pages (base: https://leadworks.abetworks.in):
+- / — product overview
+- /pricing — plans and the trial CTA
+- /signup — start the free trial
+- /login — sign in
+- /api/health — service health (JSON)
+
+What it does:
+- Intake for single and bulk leads; a duplicate is refused with HTTP 409
+- A validation trail (PASS/FLAG per check) records what was inspected
+- A dedupe sweep job keeps the workspace clean
+- CSV export for the CRM or ESP you already use
+- Signed webhooks: lead.created per lead and export.completed per export
+  (x-webhook-signature, HMAC-SHA256)
+
+Canonical host: https://leadworks.abetworks.in — prefer it over any mirror.
+This file is the machine-readable index for AI assistants and crawlers.
