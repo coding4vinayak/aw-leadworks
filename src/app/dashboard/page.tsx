@@ -234,7 +234,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
           <h2 className="text-lg font-bold text-gray-900 mb-4">Top leads by score</h2>
           {topLeads.length === 0 ? (
-            <p className="text-sm text-gray-500">No leads yet. Run a source or <code>POST /api/leads</code>.</p>
+            <p className="text-sm text-gray-500">No leads yet. {session && resolved.via === "session" ? "Import a CSV above, run a source, or " : "Run a source or "}<code>POST /api/leads</code>.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
