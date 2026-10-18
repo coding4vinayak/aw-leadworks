@@ -135,6 +135,57 @@ test("the shared field validator judges the row (invalid seniority is refused)",
   assert.equal(r.problems[0].field, "seniority");
 });
 
+test("the exporter's own column names import back (header drift guard)", () => {
+  const header = [
+    "email",
+    "phone",
+    "linkedinUrl",
+    "firstName",
+    "lastName",
+    "company",
+    "title",
+    "department",
+    "seniority",
+    "location",
+    "country",
+    "industry",
+    "companySize",
+    "revenue",
+    "tags",
+    "technologies",
+    "intentSignals",
+  ].join(",");
+  const row = [
+    "round@trip.test",
+    "+14155550123",
+    "https://linkedin.com/in/round",
+    "Round",
+    "Trip",
+    "Acme",
+    "VP",
+    "Sales",
+    "VP",
+    "SF",
+    "US",
+    "SaaS",
+    "51-200",
+    "$10M",
+    "vip;beta",
+    "React;Node",
+    "hiring",
+  ].join(",");
+  const r = parseLeadCsv(`${header}\n${row}\n`);
+  assert.equal(r.parseError, undefined);
+  assert.equal(r.rows.length, 1);
+  const d = r.rows[0].data;
+  assert.equal(d.email, "round@trip.test");
+  assert.equal(d.companySize, "51-200");
+  assert.equal(d.seniority, "VP");
+  assert.deepEqual(d.tags, ["vip", "beta"]);
+  assert.deepEqual(d.technologies, ["React", "Node"]);
+  assert.deepEqual(d.intentSignals, ["hiring"]);
+});
+
 test("CR-only line endings still find the header and the rows", () => {
   const r = parseLeadCsv("email,first name\rjane@x.com,Jane\r");
   assert.equal(r.rows.length, 1);
