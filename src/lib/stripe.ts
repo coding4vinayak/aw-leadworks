@@ -23,6 +23,23 @@ export const PRICES = {
 
 export const SUBSCRIPTION_STATUS_ACTIVE = ["trialing", "active", "past_due"] as const;
 
+/**
+ * The statuses where Stripe already holds a subscription for this workspace.
+ *
+ * `SUBSCRIPTION_STATUS_ACTIVE` answers "does this workspace have the product"
+ * and gates access. This set answers a different question — "would a second
+ * checkout be a second subscription" — and it is wider by exactly the status
+ * dunning ends in: `unpaid`. That one has no access any more, but it is still
+ * a live subscription with an open invoice, and the portal is where the
+ * invoice gets paid. A new checkout pays neither invoice, so it buys a second
+ * subscription instead of settling the first.
+ *
+ * `incomplete` is deliberately not here: that subscription was never paid,
+ * Stripe expires it on its own, and starting checkout again is precisely how
+ * the buyer whose card was declined tries once more.
+ */
+export const SUBSCRIPTION_STATUS_OPEN = [...SUBSCRIPTION_STATUS_ACTIVE, "unpaid"] as const;
+
 export async function ensureCustomer(workspaceId: string, email: string, name: string) {
   const ws = await prisma.workspace.findUnique({
     where: { id: workspaceId },
@@ -62,17 +79,58 @@ export function sameOriginReturnUrl(raw: unknown): string | null {
   }
 }
 
-export async function createCheckoutSession(workspaceId: string, priceId: keyof typeof PRICES, returnUrl: string) {  const customerId = await ensureCustomer(workspaceId, "", "");
-  const session = await getStripe().checkout.sessions.create({
-    mode: "subscription",
-    customer: customerId,
-    line_items: [{ price: PRICES[priceId], quantity: 1 }],
-    allow_promotion_codes: true,
-    billing_address_collection: "required",
-    subscription_data: { metadata: { workspaceId }, trial_period_days: 14 },
-    success_url: `${returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: returnUrl,
-  });
+/**
+ * One open Checkout Session per workspace per price.
+ *
+ * Every press of "Subscribe" ends here, and a second Checkout Session is not
+ * a second attempt at paying — it is a second subscription if both are ever
+ * completed, with a second invoice and a second charge. So before minting one
+ * this hands back a session that is already open for the same workspace and
+ * price: a double-clicked button, the page open in two tabs, and a buyer who
+ * came back a day later all land on the one checkout they started. Sessions
+ * open on the *other* price are expired rather than left behind — a plan
+ * change goes through the portal, and a stale session is exactly how a plan
+ * change becomes a second subscription. If the lookup itself fails the
+ * checkout still has to work — a buyer must not be stopped by our
+ * convenience check — and the key below still collapses a double-click.
+ *
+ * The idempotency key covers the one window a list cannot: two clicks that
+ * have both looked before either creates. Same workspace, same price, same
+ * ten seconds — the two requests share a key, and Stripe answers the second
+ * with the first's session instead of making another.
+ */
+export async function createCheckoutSession(workspaceId: string, priceId: keyof typeof PRICES, returnUrl: string) {
+  const customerId = await ensureCustomer(workspaceId, "", "");
+
+  try {
+    const open = await getStripe().checkout.sessions.list({ customer: customerId, status: "open", limit: 10 });
+    const mine = open.data.filter((s) => s.metadata?.workspaceId === workspaceId);
+    const reusable = mine.find((s) => s.metadata?.priceId === priceId && s.url);
+    if (reusable?.url) return reusable.url;
+    await Promise.all(
+      mine
+        .filter((s) => s.metadata?.priceId !== priceId)
+        .map((s) => getStripe().checkout.sessions.expire(s.id).catch(() => undefined)),
+    );
+  } catch (err) {
+    console.error("[billing] checkout reuse lookup failed — creating a fresh session:", err);
+  }
+
+  const session = await getStripe().checkout.sessions.create(
+    {
+      mode: "subscription",
+      customer: customerId,
+      line_items: [{ price: PRICES[priceId], quantity: 1 }],
+      allow_promotion_codes: true,
+      billing_address_collection: "required",
+      // Stamped so the next press of this button can recognise this session.
+      metadata: { workspaceId, priceId },
+      subscription_data: { metadata: { workspaceId }, trial_period_days: 14 },
+      success_url: `${returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: returnUrl,
+    },
+    { idempotencyKey: `checkout:${workspaceId}:${priceId}:${Math.floor(Date.now() / 10_000)}` },
+  );
   return session.url;
 }
 

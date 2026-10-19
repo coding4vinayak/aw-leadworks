@@ -34,8 +34,8 @@ describe("the page asks who is looking at it", () => {
     assert.doesNotMatch(page, /subscriptions\.retrieve|subscriptions\.list/);
   });
 
-  it("uses the same active set as the checkout route and the banner", () => {
-    assert.match(page, /SUBSCRIPTION_STATUS_ACTIVE as readonly string\[\]\)\.includes\(plan\.status\)/);
+  it("uses the same live-subscription set as the checkout route", () => {
+    assert.match(page, /SUBSCRIPTION_STATUS_OPEN as readonly string\[\]\)\.includes\(plan\.status\)/);
     assert.doesNotMatch(page, /\[\s*"trialing"/, "the set is named once, in lib/stripe.ts");
   });
 });
@@ -56,6 +56,13 @@ describe("a paying workspace is not sold a trial", () => {
   it("decides by the price on the row, not by which card is highlighted", () => {
     assert.match(page, new RegExp(`plan\\?\\.stripePriceId === PRICES\\.${MONTHLY}`));
     assert.match(page, new RegExp(`plan\\?\\.stripePriceId === PRICES\\.${ANNUAL}`));
+  });
+
+  it("gives the buy buttons back to a workspace that cancelled", () => {
+    // "Your plan" is only true while there is a live subscription to be on;
+    // the price id survives a cancellation, and keying off it alone left
+    // churned buyers with no way back in.
+    assert.equal((page.match(/billed && plan\?\.stripePriceId/g) ?? []).length, 2);
   });
 
   it("says nothing when it knows nothing", () => {
@@ -91,5 +98,10 @@ describe("the line about the current plan", () => {
 
   it("tells a past-due buyer that paying again is the wrong fix", () => {
     assert.match(PLAN_LINE[1], /a new subscription would not pay the old one/);
+  });
+
+  it("tells an unpaid buyer the invoice, not the card, is what settles it", () => {
+    assert.match(PLAN_LINE[1], /plan\.status === "unpaid"/);
+    assert.match(PLAN_LINE[1], /the open invoice is settled/);
   });
 });

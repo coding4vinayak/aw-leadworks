@@ -4,7 +4,7 @@ import { BuyButton } from "@/components/buy-button";
 import { ManageBillingButton } from "@/components/manage-billing";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
-import { PRICES, SUBSCRIPTION_STATUS_ACTIVE } from "@/lib/stripe";
+import { PRICES, SUBSCRIPTION_STATUS_OPEN } from "@/lib/stripe";
 
 export const metadata: Metadata = {
   title: "Pricing — LeadWorks",
@@ -40,6 +40,9 @@ function planLine(plan: Plan): string {
   if (plan.status === "past_due") {
     return `This workspace is on the ${named} plan, and its last payment was declined. Updating the card is the fix — a new subscription would not pay the old one.`;
   }
+  if (plan.status === "unpaid") {
+    return `This workspace is on the ${named} plan, and its payments have run out. The portal is where the open invoice is settled — a new subscription would not pay the old one.`;
+  }
   return `This workspace is on the ${named} plan${renews ? `, renews ${renews}` : ""}.`;
 }
 
@@ -51,7 +54,7 @@ export default async function Page() {
         select: { status: true, stripePriceId: true, stripeCurrentPeriodEnd: true },
       })
     : null;
-  const billed = plan !== null && (SUBSCRIPTION_STATUS_ACTIVE as readonly string[]).includes(plan.status);
+  const billed = plan !== null && (SUBSCRIPTION_STATUS_OPEN as readonly string[]).includes(plan.status);
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
@@ -70,7 +73,7 @@ export default async function Page() {
             <p className="text-sm font-semibold uppercase tracking-wide text-gray-600">Monthly</p>
             <p className="mt-2 text-4xl font-bold">$49</p>
             <p className="mt-1 text-sm text-gray-600">per month</p>
-            {plan?.stripePriceId === PRICES.FLAT_MONTHLY ? (
+            {billed && plan?.stripePriceId === PRICES.FLAT_MONTHLY ? (
               <p className="mt-6 rounded-lg bg-green-50 px-4 py-2 text-center text-sm font-semibold text-green-700">Your plan</p>
             ) : billed ? (
               <div className="mt-6">
@@ -84,7 +87,7 @@ export default async function Page() {
             <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">Annual — 2 months free</p>
             <p className="mt-2 text-4xl font-bold">$490</p>
             <p className="mt-1 text-sm text-gray-600">per month, billed yearly</p>
-            {plan?.stripePriceId === PRICES.FLAT_ANNUAL ? (
+            {billed && plan?.stripePriceId === PRICES.FLAT_ANNUAL ? (
               <p className="mt-6 rounded-lg bg-green-50 px-4 py-2 text-center text-sm font-semibold text-green-700">Your plan</p>
             ) : billed ? (
               <div className="mt-6">
