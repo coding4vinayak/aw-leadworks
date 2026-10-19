@@ -113,7 +113,7 @@ describe("the transition itself still decides the mail", () => {
   });
 
   it("ignores a status it has already reported", () => {
-    assert.match(body(webhook, "syncAndAnnounce"), /previous\.status === stripeSub\.status\) return;/);
+    assert.match(body(webhook, "syncAndAnnounce"), /if \(previous && workspaceId && previous\.status !== stripeSub\.status\) \{/);
   });
 });
 

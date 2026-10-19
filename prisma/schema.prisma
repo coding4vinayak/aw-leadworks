@@ -46,6 +46,10 @@ model Subscription {
   stripeCurrentPeriodEnd DateTime?
   status             String   @default("incomplete") // incomplete | trialing | active | past_due | canceled | unpaid
   cancelAtPeriodEnd  Boolean  @default(false)
+  // The newest `event.created` this row has applied — the watermark that lets
+  // the webhook refuse an older snapshot delivered after a newer one. Null
+  // until the first subscription event; live retrievals never move it.
+  lastStripeEventAt  DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -53,6 +57,22 @@ model Subscription {
 
   @@index([stripeCustomerId])
   @@index([stripeSubscriptionId])
+}
+
+/// One row per Stripe event this app has claimed. Stripe delivers webhooks at
+/// least once — a delivery that times out is retried, and the dashboard's
+/// Resend button replays one on demand — so the event id is the idempotency
+/// key: the first delivery processes, a re-delivery is answered `duplicate`
+/// without touching state. A null `processedAt` means a delivery was claimed
+/// but never finished; its retry may run the handler again rather than skip.
+model StripeEvent {
+  id             String    @id
+  type           String
+  eventCreatedAt DateTime
+  processedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([eventCreatedAt])
 }
 
 model Source {

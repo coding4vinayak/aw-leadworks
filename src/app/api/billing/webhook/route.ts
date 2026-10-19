@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { getStripe, verifyWebhook, syncSubscriptionFromStripe } from "@/lib/stripe";
 import { prisma } from "@/lib/db";
 import { appBaseUrl } from "@/lib/tokens";
+import { claimStripeEvent, finishStripeEvent } from "@/lib/billing-events";
 import { armCancellationJobs, ownerOf, scheduleTrialNudges } from "@/lib/billing-jobs";
 import {
   getEmailSender,
@@ -17,11 +18,20 @@ export const dynamic = "force-dynamic";
 const productName = () => process.env.PRODUCT_NAME ?? "Abetworks";
 
 /**
+ * The statuses that still describe an open payment problem. Dunning tells the
+ * buyer their payment failed, so it is only true for these — a fresh retrieve
+ * that comes back `active` means the failure is resolved (or Stripe is still
+ * retrying the charge) and the mail would be telling a healthy buyer a lie.
+ */
+const DUNNING_STATUSES = ["past_due", "unpaid", "incomplete"] as const;
+
+/**
  * Confirms the payment to the buyer. Driven off the checkout session (which
  * carries the customer email and the period end) rather than a later
- * subscription event, so the receipt fires exactly once per purchase. Best-
- * effort: a mail outage must not turn a paid, already-synced checkout into a
- * failed webhook — Stripe would retry and re-run the sync.
+ * subscription event, so the receipt fires exactly once per purchase — and
+ * the event claim in POST is what keeps that true when Stripe redelivers.
+ * Best-effort: a mail outage must not turn a paid, already-synced checkout
+ * into a failed webhook — Stripe would retry and re-run the sync.
  */
 async function sendReceipt(session: Stripe.Checkout.Session) {
   const email = session.customer_details?.email ?? session.customer_email;
@@ -170,25 +180,46 @@ async function announceTransition(workspaceId: string, from: string, stripeSub: 
  * Reads the previous status from the local row *before* the sync overwrites
  * it — Stripe events do not carry the old state, and a transition you cannot
  * see is a transition you cannot announce.
+ *
+ * `eventCreatedAt` is the event's own `created`. Stripe delivers in no
+ * promised order, so an older snapshot arriving after a newer one has been
+ * applied is refused here: it would otherwise drag the row backwards (a
+ * "trialing" snapshot overwriting "active" for a buyer who is paying). The
+ * exact replay of a settled event never reaches this point — the claim in
+ * POST answers it. Returns whether the event was applied; `false` means a
+ * late, already-superseded snapshot, which must not arm anything either.
  */
-async function syncAndAnnounce(stripeSub: Stripe.Subscription) {
+async function syncAndAnnounce(stripeSub: Stripe.Subscription, eventCreatedAt: number) {
   const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
   const previous = workspaceId
-    ? await prisma.subscription.findUnique({ where: { workspaceId }, select: { status: true } })
+    ? await prisma.subscription.findUnique({
+        where: { workspaceId },
+        select: { status: true, lastStripeEventAt: true },
+      })
     : null;
 
-  await syncSubscriptionFromStripe(stripeSub);
-  await armTrialNudges(stripeSub);
-  if (!previous || !workspaceId || previous.status === stripeSub.status) return;
-
-  try {
-    await announceTransition(workspaceId, previous.status, stripeSub);
-  } catch (error) {
-    // Swallowed on purpose. The sync above has already overwritten the status,
-    // so the retry that answering non-200 buys no longer sees a transition to
-    // announce: a loud failure here does not delay the mail, it deletes it.
-    console.error("[billing] transition mail not sent:", error);
+  const at = new Date(eventCreatedAt * 1000);
+  if (previous?.lastStripeEventAt && at < previous.lastStripeEventAt) {
+    console.log(
+      `[billing] stale subscription event skipped: ${at.toISOString()} < ${previous.lastStripeEventAt.toISOString()}`,
+    );
+    return false;
   }
+
+  await syncSubscriptionFromStripe(stripeSub, at);
+  await armTrialNudges(stripeSub);
+
+  if (previous && workspaceId && previous.status !== stripeSub.status) {
+    try {
+      await announceTransition(workspaceId, previous.status, stripeSub);
+    } catch (error) {
+      // Swallowed on purpose. The sync above has already overwritten the status,
+      // so the retry that answering non-200 buys no longer sees a transition to
+      // announce: a loud failure here does not delay the mail, it deletes it.
+      console.error("[billing] transition mail not sent:", error);
+    }
+  }
+  return true;
 }
 
 export async function POST(request: Request) {
@@ -201,6 +232,27 @@ export async function POST(request: Request) {
   } catch (err) {
     console.error("[billing] webhook signature verification failed:", err);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+  }
+
+  const claim = await claimStripeEvent(event).catch((error) => {
+    // Nothing has happened yet, so the failure can be loud: the claim table is
+    // the record that this delivery was seen, and a delivery without a record
+    // must be retried by Stripe rather than half-processed.
+    console.error("[billing] event claim failed:", error);
+    return null;
+  });
+  if (!claim) {
+    return NextResponse.json({ error: "Event not recorded" }, { status: 500 });
+  }
+  if (claim !== "process") {
+    // "duplicate" is a replay of a settled event. "in_flight" is the same id
+    // arriving while its first attempt is still running — non-2xx asks Stripe
+    // to come back later, by which time the first attempt has finished
+    // ("duplicate") or died ("retry" on a later delivery). "retry" itself
+    // means a claim was written once and never finished: run it again now.
+    console.log(`[billing] ${event.type}: ${claim} (${event.id})`);
+    if (claim === "duplicate") return NextResponse.json({ received: true, duplicate: true });
+    if (claim === "in_flight") return NextResponse.json({ error: "Event already in flight" }, { status: 409 });
   }
 
   switch (event.type) {
@@ -216,13 +268,13 @@ export async function POST(request: Request) {
     }
     case "customer.subscription.created":
     case "customer.subscription.updated": {
-      await syncAndAnnounce(event.data.object as Stripe.Subscription);
+      await syncAndAnnounce(event.data.object as Stripe.Subscription, event.created);
       break;
     }
     case "customer.subscription.deleted": {
       const stripeSub = event.data.object as Stripe.Subscription;
-      await syncAndAnnounce(stripeSub);
-      await armCancellation(stripeSub);
+      const applied = await syncAndAnnounce(stripeSub, event.created);
+      if (applied) await armCancellation(stripeSub);
       break;
     }
     case "invoice.payment_failed": {
@@ -240,7 +292,9 @@ export async function POST(request: Request) {
       if (subId) {
         const stripeSub = await getStripe().subscriptions.retrieve(subId);
         await syncSubscriptionFromStripe(stripeSub);
-        await sendDunning(stripeSub);
+        if ((DUNNING_STATUSES as readonly string[]).includes(stripeSub.status)) {
+          await sendDunning(stripeSub);
+        }
       }
       break;
     }
@@ -248,5 +302,6 @@ export async function POST(request: Request) {
       console.log(`[billing] unhandled event: ${event.type}`);
   }
 
+  await finishStripeEvent(event.id);
   return NextResponse.json({ received: true });
 }
