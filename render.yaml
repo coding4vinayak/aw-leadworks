@@ -10,7 +10,7 @@ services:
     runtime: node
     plan: free
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     envVars:

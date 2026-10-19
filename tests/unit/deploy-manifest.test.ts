@@ -3,7 +3,7 @@
 // needs — and a new env read in src/ can never silently miss the deploy.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,5 +42,16 @@ describe("the Render manifest declares every env the code reads", () => {
     }
     const missing = [...read].filter((v) => !declared.has(v) && !RUNTIME_PROVIDED.has(v)).sort();
     assert.deepEqual(missing, [], `render.yaml is missing: ${missing.join(", ")}`);
+  });
+
+  it("healthCheckPath points at the route that pings the database — not a page", () => {
+    const manifest = readFileSync(path.join(ROOT, "render.yaml"), "utf8");
+    const health = manifest.match(/healthCheckPath:\s*(\S+)/)?.[1];
+    assert.ok(health, "render.yaml declares a healthCheckPath");
+    assert.equal(health, "/api/health", "the health check is the DB-pinging route, not a page");
+    assert.ok(
+      existsSync(path.join(ROOT, "src/app", health.slice(1), "route.ts")),
+      `${health} is backed by a route file`,
+    );
   });
 });
