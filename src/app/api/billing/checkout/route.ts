@@ -3,7 +3,7 @@ import {
   createCheckoutSession,
   PRICES,
   sameOriginReturnUrl,
-  SUBSCRIPTION_STATUS_ACTIVE,
+  SUBSCRIPTION_STATUS_OPEN,
 } from "@/lib/stripe";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
@@ -38,12 +38,16 @@ export async function POST(request: Request) {
   // on arriving. That is a refund conversation at best and a chargeback at
   // worst, and it is the buyer's last impression of the product. Changing what
   // you pay for is the portal's job, and the portal is where a card that is
-  // failing gets fixed before Stripe cancels on its own.
+  // failing gets fixed before Stripe cancels on its own. The refusal set is
+  // wider than "has access": `unpaid` is a subscription whose dunning ran out,
+  // with an open invoice the portal can settle — a new checkout pays neither.
+  // `incomplete` is deliberately allowed: it never charged and Stripe expires
+  // it on its own, and starting over is how a declined card tries again.
   const current = await prisma.subscription.findUnique({
     where: { workspaceId: session.workspaceId },
     select: { status: true },
   });
-  if (current && (SUBSCRIPTION_STATUS_ACTIVE as readonly string[]).includes(current.status)) {
+  if (current && (SUBSCRIPTION_STATUS_OPEN as readonly string[]).includes(current.status)) {
     return NextResponse.json(
       {
         error:

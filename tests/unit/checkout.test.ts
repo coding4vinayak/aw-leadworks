@@ -49,12 +49,39 @@ describe("one subscription per workspace", () => {
     assert.doesNotMatch(checkout, /subscriptions\.list/, "an API call here decides nothing that the database does not already know");
   });
 
-  it("refuses only the statuses that are actually billed", () => {
-    assert.match(checkout, /SUBSCRIPTION_STATUS_ACTIVE as readonly string\[\]\)\.includes\(current\.status\)/);
-    // A cancelled workspace, and one whose first checkout never completed, are
-    // precisely the people this page exists for.
-    assert.doesNotMatch(checkout, /\[\s*"trialing"/, "the active set is named once, in lib/stripe.ts");
+  it("refuses every status that is still a live subscription", () => {
+    assert.match(checkout, /SUBSCRIPTION_STATUS_OPEN as readonly string\[\]\)\.includes\(current\.status\)/);
+    assert.doesNotMatch(checkout, /\[\s*"trialing"/, "the set is named once, in lib/stripe.ts");
+    // The access set is unchanged — unpaid is a live subscription, not access
+    // — and the refusal set is it plus the status dunning ends in, whose open
+    // invoice the portal settles.
     assert.match(stripeModule, /export const SUBSCRIPTION_STATUS_ACTIVE = \["trialing", "active", "past_due"\] as const;/);
+    assert.match(stripeModule, /export const SUBSCRIPTION_STATUS_OPEN = \[\.\.\.SUBSCRIPTION_STATUS_ACTIVE, "unpaid"\] as const;/);
+    // `incomplete` stays allowed on purpose: it never charged, Stripe expires
+    // it on its own, and starting over is how a declined card tries again.
+    assert.doesNotMatch(stripeModule, /SUBSCRIPTION_STATUS_OPEN = \[[^\]]*"incomplete"/);
+  });
+
+  it("hands back the session already open instead of minting a twin", () => {
+    // A double-clicked button and the same page in two tabs are one intent,
+    // so the second press gets the first press's session — not a second one
+    // that could be completed as a second subscription.
+    assert.match(stripeModule, /checkout\.sessions\.list\(\{ customer: customerId, status: "open", limit: 10 \}\)/);
+    assert.match(stripeModule, /s\.metadata\?\.workspaceId === workspaceId/);
+    assert.match(stripeModule, /s\.metadata\?\.priceId === priceId/);
+    // A session open on the other price is expired rather than left behind.
+    assert.match(stripeModule, /checkout\.sessions\.expire\(s\.id\)/);
+    // Stamped, so the next press can recognise its own session.
+    assert.match(stripeModule, /metadata: \{ workspaceId, priceId \}/);
+  });
+
+  it("shares one idempotency key across clicks that race the lookup", () => {
+    // Two requests in the same ten seconds carry one key, so Stripe answers
+    // the second with the first's session instead of making another.
+    assert.match(
+      stripeModule,
+      /idempotencyKey: `checkout:\$\{workspaceId\}:\$\{priceId\}:\$\{Math\.floor\(Date\.now\(\) \/ 10_000\)\}`/,
+    );
   });
 
   it("returns before it can make a customer or a subscription", () => {
