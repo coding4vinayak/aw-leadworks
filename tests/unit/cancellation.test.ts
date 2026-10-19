@@ -104,8 +104,8 @@ describe("arming the pair", () => {
   it("arms from the deleted event only, after the sync, and never instead of it", () => {
     const branch = /case "customer\.subscription\.deleted": \{([\s\S]*?)\n\s*\}/.exec(webhook);
     assert.ok(branch, "the deleted event has its own case");
-    assert.match(branch[1], /await syncAndAnnounce\(stripeSub\);/);
-    assert.match(branch[1], /await armCancellation\(stripeSub\);/);
+    assert.match(branch[1], /const applied = await syncAndAnnounce\(stripeSub, event\.created\);/);
+    assert.match(branch[1], /if \(applied\) await armCancellation\(stripeSub\);/);
     // created and updated must not arm a cancellation mail.
     assert.doesNotMatch(webhook, /case "customer\.subscription\.created":\n\s*case "customer\.subscription\.updated":\n\s*case "customer\.subscription\.deleted":/);
   });

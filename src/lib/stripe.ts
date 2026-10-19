@@ -97,7 +97,16 @@ export function verifyWebhook(rawBody: string, signature: string | null) {
   return client.webhooks.constructEvent(rawBody, signature, secret);
 }
 
-export async function syncSubscriptionFromStripe(stripeSub: Stripe.Subscription) {
+/**
+ * Write what Stripe says about a subscription to the local row.
+ *
+ * `appliedEventAt` is the `event.created` of the snapshot being applied, when
+ * the caller has an event (the webhook's subscription branches). It becomes
+ * the row's `lastStripeEventAt` watermark so a later-arriving older event can
+ * be refused before it drags the status backwards. Live retrievals pass
+ * nothing: they are current by definition and must keep syncing.
+ */
+export async function syncSubscriptionFromStripe(stripeSub: Stripe.Subscription, appliedEventAt?: Date) {
   const workspaceId = stripeSub.metadata.workspaceId as string | undefined;
   if (!workspaceId) return;
 
@@ -113,6 +122,7 @@ export async function syncSubscriptionFromStripe(stripeSub: Stripe.Subscription)
       stripeCurrentPeriodEnd: periodEnd,
       status,
       cancelAtPeriodEnd: stripeSub.cancel_at_period_end,
+      ...(appliedEventAt ? { lastStripeEventAt: appliedEventAt } : {}),
     },
     create: {
       workspaceId,
@@ -122,6 +132,7 @@ export async function syncSubscriptionFromStripe(stripeSub: Stripe.Subscription)
       stripeCurrentPeriodEnd: periodEnd,
       status,
       cancelAtPeriodEnd: stripeSub.cancel_at_period_end,
+      lastStripeEventAt: appliedEventAt ?? null,
     },
   });
 }
