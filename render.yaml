@@ -22,3 +22,31 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false       # optional; billing 500s without it
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_FLAT_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_FLAT_ANNUAL
+        sync: false
+      - key: SESSION_COOKIE
+        sync: false       # optional; defaults to abetworks_session
+      - key: PRODUCT_NAME
+        sync: false       # the name mail says (default: Abetworks)
+      - key: RESEND_API_KEY
+        sync: false       # optional; without a provider mail is logged, not sent
+      - key: EMAIL_FROM
+        sync: false       # e.g. "Abetworks <noreply@abetworks.in>"
+      - key: EMAIL_WEBHOOK_URL
+        sync: false       # alternative to Resend; same {from,to,subject,html,text} JSON
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false       # sent as Authorization: Bearer to EMAIL_WEBHOOK_URL
+      - key: LLM_API_KEY
+        sync: false       # optional; without a key the deterministic scorer answers
+      - key: LLM_BASE_URL
+        sync: false       # optional; OpenAI-compatible base (default https://api.openai.com/v1)
+      - key: LLM_MODEL
+        sync: false       # optional; default gpt-4o-mini
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
