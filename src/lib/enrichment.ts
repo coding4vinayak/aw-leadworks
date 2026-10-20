@@ -1,11 +1,20 @@
 import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
 import { dispatchWebhookEvent } from "./webhooks";
+import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
 
 export interface EnrichmentConfig {
   providers: string[];
   fields: string[];
   confidenceThreshold?: number;
+  /**
+   * The rule's `conditions`, copied in by the door that queued this job
+   * (`scheduler.ts`, `?action=run`). A job that carries none — the single-lead
+   * `?action=enrich`, an old row, a bulk call from the UI — is enriched the way
+   * LeadWorks has always enriched it. Held as `unknown` because a job config is a
+   * JSON column like any other: this function decides what a bad one means.
+   */
+  conditions?: unknown;
   [key: string]: any;
 }
 
@@ -79,11 +88,17 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
 }
 
 async function getLeadsToEnrich(workspaceId: string, config: EnrichmentConfig): Promise<any[]> {
-  const where: any = { workspaceId, status: { in: ["NEW", "ENRICHED"] } };
-  if (config.fields.length > 0) {
-    // Add logic to filter by missing fields
+  const stored = readStoredConditions(config.conditions);
+  if (stored.problem !== null) {
+    console.warn(`Enrichment job skipped: the conditions it carries cannot be read — ${stored.problem}`);
+    return [];
   }
-  return prisma.lead.findMany({ where, take: 1000 });
+  const leads = await prisma.lead.findMany({ where: leadWhere(workspaceId, stored.conditions), take: 1000 });
+  // The `where` and this predicate are two readings of one declaration, and what
+  // comes back from here is a row the app is about to write to. Where a stored row
+  // defeats the SQL translation — a `tags` column holding something other than the
+  // array the column promises — the person is left alone. Filtering can only narrow.
+  return leads.filter((lead) => leadMatches(stored.conditions, lead));
 }
 
 async function enrichLead(lead: any, config: EnrichmentConfig): Promise<EnrichmentResult | null> {
@@ -228,11 +243,13 @@ export async function runScheduledEnrichment(): Promise<void> {
 
   for (const rule of rules) {
     // Check schedule - simplified
-    const now = new Date();
-    const cronParts = rule.actions; // Would parse schedule from rule config
-    // Simplified - run every hour
+    const stored = readStoredConditions(rule.conditions);
+    if (stored.problem !== null) {
+      console.warn(`Enrichment rule ${rule.id} skipped: conditions cannot be read — ${stored.problem}`);
+      continue;
+    }
     const leads = await prisma.lead.findMany({
-      where: { workspaceId: rule.workspaceId, status: { in: ["NEW", "ENRICHED"] } },
+      where: leadWhere(rule.workspaceId, stored.conditions),
       take: 100,
     });
 
@@ -240,6 +257,7 @@ export async function runScheduledEnrichment(): Promise<void> {
       await runBulkEnrichment(rule.workspaceId, leads.map(l => l.id), {
         providers: (rule.providers as string[]) || [],
         fields: [],
+        conditions: stored.conditions,
       });
     }
   }

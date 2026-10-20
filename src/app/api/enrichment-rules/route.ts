@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { pageParams } from "@/lib/pagination";
+import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { RULE_CREATE } from "@/lib/fields";
+import { conditionsProblem, normalizeConditions } from "@/lib/rule-conditions";
 
 export const dynamic = "force-dynamic";
 
@@ -40,8 +42,18 @@ async function POST_impl(request: Request) {
   const input = validateBody(body, RULE_CREATE);
   if (!input.ok) return input.error;
 
+  // `kind: "json"` already refused `42`; nothing refused `{ department: "Ops" }`,
+  // which is a valid object and a filter no lead can ever satisfy — the rule would
+  // sit active and enrich nobody, forever, looking like a quiet week.
+  const problem = conditionsProblem(input.data.conditions);
+  if (problem !== null) return NextResponse.json({ error: problem }, { status: 400 });
+
   const rule = await prisma.enrichmentRule.create({
-    data: { workspaceId, ...input.data },
+    data: {
+      workspaceId,
+      ...input.data,
+      conditions: asInputJson(normalizeConditions(input.data.conditions)),
+    },
   });
 
   return NextResponse.json(rule, { status: 201 });

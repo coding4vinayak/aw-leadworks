@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
 import { asInputJson, asRecord } from "./json";
+import { leadWhere, readStoredConditions } from "./rule-conditions";
 
 /**
  * One minute's worth of the schedule: every active source, export profile and SCHEDULED
@@ -8,6 +9,11 @@ import { asInputJson, asRecord } from "./json";
  * and queue entries they describe. The `scheduled` worker's handler is its only call site,
  * and `registerScheduledSweep()` in `queue.ts` is what produces the jobs that handler waits
  * for.
+ *
+ * A rule's `conditions` decide which leads its job is about: the same
+ * `leadWhere` the enrichment worker applies to that job's config comes from here, so the
+ * minute that queues the work and the worker that does it cannot pick different crowds.
+ * A rule whose stored conditions cannot be read contributes a log line and nothing else.
  */
 export async function runScheduledJobs(): Promise<void> {
   const now = new Date();
@@ -77,8 +83,15 @@ export async function runScheduledJobs(): Promise<void> {
 
   for (const rule of rules) {
     if (shouldRunNow(typeof rule.actions === "string" ? rule.actions : "", now)) { // schedule stored in actions for now
+      const stored = readStoredConditions(rule.conditions);
+      if (stored.problem !== null) {
+        // Nothing was queued and no lead was touched: a blob that cannot be read
+        // is not a licence to fall back to the whole workspace.
+        console.warn(`Enrichment rule ${rule.id} skipped: conditions cannot be read — ${stored.problem}`);
+        continue;
+      }
       const leads = await prisma.lead.findMany({
-        where: { workspaceId: rule.workspaceId, status: { in: ["NEW", "ENRICHED"] } },
+        where: leadWhere(rule.workspaceId, stored.conditions),
         take: 100,
       });
 
@@ -88,7 +101,7 @@ export async function runScheduledJobs(): Promise<void> {
             workspaceId: rule.workspaceId,
             type: "ENRICH",
             status: "PENDING",
-            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: [], confidenceThreshold: 0.5 },
+            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions) },
           },
         });
         await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });

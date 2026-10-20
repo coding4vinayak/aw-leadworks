@@ -80,6 +80,13 @@ import { NextResponse } from "next/server";
  *  - A field the route did not declare never reaches Prisma. That is what the
  *    `sourceId: "nope"` rows above are: an id passed on faith to a `create`.
  *
+ * A Json column is where this rule stops: `kind: "json"` can say a value is an
+ * object, and nothing about what the object means. `{ department: "Ops" }` in
+ * `EnrichmentRule.conditions` was a 201 through every version of this file, and a
+ * rule that would never match a lead — so that column has a second check of its own
+ * in `src/lib/rule-conditions.ts`, which is where the row's *meaning* is decided.
+ * Same 400, same "every problem at once", one file per column that needs it.
+ *
  * This is `src/lib/ids.ts` for the rest of the request — and now the same rule:
  * `asStrings` there calls `stringList` here, so an array of strings is checked
  * one way whether it is `listIds`, `tags` or `providers`. `withAuth` deliberately

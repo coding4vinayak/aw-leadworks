@@ -173,7 +173,9 @@ POST   /api/leads/{id}?action=enrich       # enrich on demand
 GET    /api/lead-lists?workspaceId=        # lists
 POST   /api/lead-lists/{id}?action=add-leads|remove-leads
 GET    /api/enrichment-rules?workspaceId=  # rules
-POST   /api/enrichment-rules/{id}?action=run  # run a rule now
+POST   /api/enrichment-rules               # create; `conditions` is required (see below)
+PATCH  /api/enrichment-rules/{id}          # change a rule, its conditions included
+POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appliesTo }
 GET    /api/exports?workspaceId=           # exports
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
 GET    /api/exports/{id}                   # status + download
@@ -215,6 +217,55 @@ the same event `POST /api/leads` emits.
 Unlike discovery from a source — which merges on email, phone, LinkedIn or a
 fuzzy name match — an import is the customer's own list: a duplicate address is
 not a better record, it is the same person twice.
+
+### An enrichment rule applies the conditions it declares
+
+`schema.prisma` declares `EnrichmentRule.conditions Json // When to apply this
+rule`, and `POST /api/enrichment-rules` requires the field: a rule cannot be
+created without saying when it applies. Until now nothing read it back. The
+three doors that pick leads — the scheduled sweep in `src/lib/scheduler.ts`, the
+worker's `getLeadsToEnrich`, and `runScheduledEnrichment` — each carried their
+own `status: { in: ["NEW", "ENRICHED"] }`, so `{ status: "NEW" }` selected the
+same crowd as `{ status: "CONVERTED" }`, and the seeded rule named *Auto-enrich
+new leads* did not mean its own name.
+
+A condition names one of four `Lead` attributes:
+
+```json
+{ "status": "NEW", "seniority": ["VP", "C_LEVEL"], "score": { "gte": 60 }, "tags": ["high-intent"] }
+```
+
+One value or a list; the two enums are folded to the uppercase the column spells
+and any other word is refused with the column's own list quoted; `score` takes
+whole-number bounds inside 0-100, and an inverted pair is refused because no
+number is both. Keys the schema has no column for — `department`, `region` — are
+refused by name, every problem in one 400, because a filter on a column that does
+not exist matches nothing forever and looks like a quiet week.
+
+What is stored is the normalized shape, and what runs is one translation of it
+(`leadWhere`), shared by all three doors, so the minute that queues a job and the
+worker that runs it cannot pick different crowds. Two rules keep the rewrite from
+widening what a rule already did: a rule that declares *nothing* keeps
+`NEW | ENRICHED` rather than the whole workspace, and a stored blob that cannot
+be read selects nobody — the schedule skips it with a log line, `?action=run`
+answers 400 (that call has a caller to tell), and a job that arrives with such a
+config enriches zero rows. `?action=run` answers `appliesTo` in words
+(`status NEW, seniority VP or C_LEVEL`) so an operator can see what they just
+fired.
+
+Tags are the one attribute compared exactly, both in SQL and in memory: measured
+against this workspace's own seeded leads (`["vip", "dubai"]`),
+`array_contains` with `vip` returned 2 rows and with `VIP` returned 0, so
+upper-casing a tag at the door would store a rule the query cannot honour. The
+worker re-checks every row it fetched with the same declaration before writing to
+it, which can only narrow what is enriched.
+
+Pinned offline by `tests/unit/rule-conditions.test.ts` (46: the schema's own
+words, every refusal, both readings of one declaration agreeing, and a scan
+showing each door calling the translation in the right order with the hardcoded
+set gone from `src/` entirely). The live proof — two leads differing only in the
+attribute a rule conditions on, one queue run, one row enriched — is
+`demo/run-demo.sh leadworks` STEP 9.
 
 ## Webhooks (outbound)
 
