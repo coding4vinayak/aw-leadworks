@@ -263,9 +263,14 @@ it, which can only narrow what is enriched.
 Pinned offline by `tests/unit/rule-conditions.test.ts` (46: the schema's own
 words, every refusal, both readings of one declaration agreeing, and a scan
 showing each door calling the translation in the right order with the hardcoded
-set gone from `src/` entirely). The live proof — two leads differing only in the
-attribute a rule conditions on, one queue run, one row enriched — is
-`demo/run-demo.sh leadworks` STEP 9.
+set gone from `src/` entirely). The live proof — three unspeakable declarations
+refused 400 by name, then four accepted rules visiting 2, 2, 0 and 0 leads out of
+the 24 NEW leads the workspace holds: a tag, that tag AND a seniority that fits,
+that tag AND a seniority that cannot, and the same tag written in capitals — is
+`demo/run-demo.sh leadworks` STEP 9. What that step measures is *reach*: which
+leads a rule puts in front of the worker. The provider stubs do not write a row
+yet, so a visited lead lands in the job's `failedItems` and the step prints
+`processed=0, failed=2` rather than dressing it up.
 
 ## Webhooks (outbound)
 
