@@ -254,18 +254,22 @@ describe("the provider names a rule may list", () => {
     }
   });
 
-  it("matches the worker's switch in both directions", () => {
-    const body = blankComments(functionBody(enrichment, "enrichWithProvider")!);
-    const cases = [...body.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]);
-    assert.deepEqual([...ENRICHMENT_PROVIDERS].sort(), [...new Set(cases)].sort(), "the list and the switch cannot drift apart");
+  it("matches the worker's dispatch table in both directions", () => {
+    // The dispatch table is PROVIDER_IMPLEMENTATIONS in enrichment-providers-impl.ts
+    const implBody = readFileSync(new URL("../../src/lib/enrichment-providers-impl.ts", import.meta.url), "utf8");
+    // Match the object literal after the = sign (handles multi-line type annotation)
+    const implMatch = implBody.match(/PROVIDER_IMPLEMENTATIONS\s*:\s*Record<string,[\s\S]*?\)\s*=>\s*Promise<Partial<EnrichmentResult>\s*\|\s*null>>\s*=\s*\{([\s\S]*?)\n\s*\}/);
+    assert.ok(implMatch, "PROVIDER_IMPLEMENTATIONS object not found in enrichment-providers-impl.ts");
+    const implKeys = [...implMatch[1].matchAll(/([a-z_]+)\s*:/g)].map((m) => m[1]);
+    assert.deepEqual([...ENRICHMENT_PROVIDERS].sort(), [...new Set(implKeys)].sort(), "the list and the implementation keys cannot drift apart");
   });
 
   it("has exactly one provider that answers without a key", () => {
-    // The rest are call sites a key belongs in; a placeholder that returns invented
-    // company data lands in a customer's row and reads like research.
+    // Only `derive` works without an API key; the rest require credentials and return null
+    // when unconfigured. The test ensures no provider invents data.
     const body = blankComments(enrichment);
     assert.ok(!/industry:\s*"SaaS"/.test(body), "the fabricated company answers must stay deleted");
-    assert.ok(!/companySize:\s*"/.test(body), body.slice(first(body, "case"), first(body, "case") + 400));
+    assert.ok(!/companySize:\s*"/.test(body), "fabricated company size must stay deleted");
     assert.ok(!/return \{ confidence:/.test(body), "a confidence no provider earned");
   });
 });
@@ -442,10 +446,11 @@ describe("the worker and the doors are wired", () => {
   });
 
   it("derives from the row's own title", () => {
-    const body = blankComments(functionBody(enrichment, "deriveFromRow")!);
-    assert.match(body, /seniorityFromTitle\(lead\.title\)/);
+    // The derive provider is now in PROVIDER_IMPLEMENTATIONS
+    const implBody = readFileSync(new URL("../../src/lib/enrichment-providers-impl.ts", import.meta.url), "utf8");
+    assert.match(implBody, /seniorityFromTitle\(lead\.title\)/, "derive provider reads lead.title");
     const dispatch = blankComments(functionBody(enrichment, "enrichWithProvider")!);
-    assert.match(dispatch, /case "derive":\s*return deriveFromRow\(lead, fields\);/);
+    assert.match(dispatch, /PROVIDER_IMPLEMENTATIONS\[provider\]/, "dispatch uses implementation map");
   });
 
   it("refuses an unusable provider at create, before the row exists", () => {

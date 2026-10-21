@@ -36,7 +36,7 @@ import { join } from "node:path";
 import { blankComments, countCodeMentions, functionBody } from "./route-handlers";
 import { LEAD_CREATE, LEAD_PATCH } from "../../src/lib/fields";
 import { ENRICH_WRITABLE } from "../../src/lib/enrich-plan";
-import { namedLeads } from "../../src/lib/validator";
+import { crowdWhere, namedLeads } from "../../src/lib/lead-crowd";
 import {
   SCORE_COLUMNS,
   SCORE_TERMS,
@@ -626,18 +626,21 @@ describe("the seven writers, scanned from the source", () => {
 
 describe("the crowd a validation job may re-price", () => {
   it("reads the ids it was given, and nothing it was not", () => {
-    assert.equal(namedLeads({ checks: [] }), null, "no list means the whole workspace");
-    assert.equal(namedLeads({ checks: [], leadIds: [] }), null, "an empty list is not a crowd");
-    assert.equal(namedLeads({ checks: [], leadIds: "lead_1" }), null, "a string is not a list");
-    assert.equal(namedLeads({ checks: [], leadIds: { id: "lead_1" } }), null, "an object is not a list");
-    assert.deepEqual(namedLeads({ checks: [], leadIds: [42, null, "", "  ", {}, "lead_1"] }), ["lead_1"]);
-    assert.deepEqual(namedLeads({ checks: [], leadIds: ["lead_1", "lead_1", "lead_2"] }), ["lead_1", "lead_2"], "named twice, checked once");
+    assert.equal(namedLeads(undefined), null, "no list means the whole workspace");
+    assert.equal(namedLeads([]), null, "an empty list is not a crowd");
+    assert.equal(namedLeads("lead_1"), null, "a string is not a list");
+    assert.equal(namedLeads({ id: "lead_1" }), null, "an object is not a list");
+    assert.deepEqual(namedLeads([42, null, "", "  ", {}, "lead_1"]), ["lead_1"]);
+    assert.deepEqual(namedLeads(["lead_1", "lead_1", "lead_2"]), ["lead_1", "lead_2"], "named twice, checked once");
   });
 
   it("keeps the workspace filter whichever way the crowd goes", () => {
     const code = blankComments(validator);
-    assert.match(code, /where: crowd \? \{ workspaceId: job\.workspaceId, id: \{ in: crowd \} \} : \{ workspaceId: job\.workspaceId \}/);
-    assert.equal((code.match(/workspaceId: job\.workspaceId/g) ?? []).length, 2, "both branches stay scoped");
+    assert.match(code, /where: crowdWhere\(\{ workspaceId: job\.workspaceId \}, namedLeads\(config\.leadIds\)\)/);
+    assert.equal((code.match(/workspaceId: job\.workspaceId/g) ?? []).length, 1, "one where, and it is scoped");
+    // The scope lives in the base the caller passes, so the narrowing cannot replace it.
+    assert.deepEqual(crowdWhere({ workspaceId: "ws_1" }, ["lead_1"]), { workspaceId: "ws_1", id: { in: ["lead_1"] } });
+    assert.deepEqual(crowdWhere({ workspaceId: "ws_1" }, null), { workspaceId: "ws_1" });
   });
 
   it("is the module's own arithmetic at that write too", () => {

@@ -334,6 +334,28 @@ a workspace fill with leads that never got the fields they asked for; the rules 
 now refuses it with the list of names the worker dispatches on, and folds `Apollo`
 onto the spelling the `switch` compares (`enrichment-providers.ts`).
 
+### The button on a lead's own row
+
+`POST /api/leads/{id}?action=enrich` is the one door that names a person rather than a
+rule, and until this round the id in its URL was decoration: it queued a job whose
+config carried no `conditions` and no lead at all, the worker read the workspace's
+default crowd — **every lead, `take: 1000`** — and visited all of them, with the three
+providers it hardcoded (`apollo`, `clearbit`, `hunter`) that answer nothing without a
+key. Measured against the running app before this round's fix, on a workspace holding 20
+leads: one click on one lead's row reported **`processed=20`**, and because every
+provider stayed silent, the sweep filled no column and left no stamp either — all 20
+rows still `lastEnrichedAt: null`, `totalItems: 0`, the whole list walked for nothing.
+
+The door now says who it means. `EnrichmentConfig.leadIds` is the crowd a job may
+visit, read as the caller-writable JSON it is (`namedLeads` in
+`src/lib/lead-crowd.ts`: non-strings dropped, blanks dropped, duplicates folded, a
+non-array or an empty list meaning *not named*), and the query stays scoped to the
+job's own `workspaceId` whichever way it goes — an id belonging to another tenant
+visits nobody. `?action=enrich` writes `leadIds: [id]`, and lists `derive` first,
+because a keyless box has exactly one provider that answers. A job carrying both a rule
+and a crowd visits the intersection: the id named must still satisfy the rule's
+`conditions`, because **filtering can only narrow**.
+
 Pinned offline by `tests/unit/enrich-write.test.ts` (42: the schema's own words, the
 title table answer for answer, the provider list checked against the worker's
 `switch` in both directions from the source, the write plan's every refusal, and a
