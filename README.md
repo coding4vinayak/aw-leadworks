@@ -935,7 +935,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 28 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 28 in the suite: the 46 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
