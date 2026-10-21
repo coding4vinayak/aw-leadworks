@@ -671,6 +671,7 @@ stored, and the next minute hands *both* columns to the rule at 95 and starves t
 to outrank it — ownership followed the number, both minutes. 24 checks in this step, and the
 whole run against the round #34 build was **153 ✓ / 0 ✗**, exit 0; STEP 16 below prints
 the count against this one.
+whole run against this build is **153 ✓ / 0 ✗**, exit 0.
 
 What this does not claim: the two visits that remain are still two visits. A rule the ranking
 left a remainder for still walks into a provider that has no opinion on it — `derive` reads
