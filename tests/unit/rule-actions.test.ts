@@ -294,7 +294,11 @@ describe("the wiring, from the source", () => {
     assert.equal(countCodeMentions(code, "rule-actions"), 1, "one import of the reader");
     const sweep = blankComments(functionBody(scheduler, "runScheduledJobs")!);
     assert.match(sweep, /shouldRunNow\(declared\.schedule \?\? "", now\)/);
-    assert.match(sweep, /fields: declared\.fields \?\? \[\]/, "the minute carries the rule's own list");
+    // #34: the list on the job is the rule's own, filtered by what a higher-ranked rule
+    // claimed — `planTick` is the only place that decides it, and `due` is built from the
+    // rules this minute is actually due for.
+    assert.match(sweep, /const plan = planTick\(due\)/, "one walk decides who owns what");
+    assert.match(sweep, /config: \{[^}]*\bfields,/, "the minute carries the rule's own list, narrowed by the ranking");
     const warn = sweep.indexOf("console.warn(`Enrichment rule");
     assert.ok(warn > -1, "a junk blob is logged");
     assert.ok(sweep.indexOf("prisma.lead.findMany") > sweep.indexOf("continue;", warn), "and skipped before any lead is read");
@@ -303,8 +307,14 @@ describe("the wiring, from the source", () => {
   it("has the sweep and the queue-side copy read the same declaration", () => {
     const copy = blankComments(functionBody(enrichment, "runScheduledEnrichment")!);
     assert.match(copy, /actionsProblem\(rule\.actions\)/);
-    assert.match(copy, /fields: declared\.fields \?\? \[\]/);
-    assert.ok(blankComments(enrichment).includes("readRuleActions"), "the worker file imports the reader");
+    assert.match(copy, /const plan = planTick\(due\)/, "the same tick walk the minute runs");
+    assert.match(copy, /providers: rule\.providers,\s*fields,/, "and the same field list on the way in");
+    // One reader of the declaration, in one module: the copy reaches it through the
+    // ranking, and keeping a second `readRuleActions` call here is how the two sweeps
+    // would start disagreeing about who owns a column.
+    const code = blankComments(enrichment);
+    assert.ok(code.includes('from "./rule-priority"'), "the copy imports the ranking");
+    assert.ok(!/\breadRuleActions\b/.test(code), "and holds no second reader of the declaration");
   });
 
   it("narrows what a visit writes, after the visit is known to have happened", () => {
