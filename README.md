@@ -181,6 +181,7 @@ POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appl
 GET    /api/exports?workspaceId=           # exports
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
 GET    /api/exports/{id}                   # status + download
+DELETE /api/exports/{id}                   # delete the record — and, when it named one, the file it wrote
 GET    /api/webhooks?workspaceId=          # subscriptions
 POST   /api/webhooks                       # subscribe; deliverable events are
                                            # the three the product emits
@@ -195,6 +196,9 @@ export carries the date its own download door closes (`EXPORT_RETENTION_MS`, sev
 days by default); one sweep minute after that date the file itself is gone — see *How long
 an export's file answers*.
 days by default — see *How long an export's file answers*).
+days by default); one sweep minute after that date the file itself is gone, and deleting the
+record takes the file with it in the same request — see *How long an export's file answers* and
+the two sections after it.
 
 ### Importing a list
 
@@ -957,14 +961,14 @@ file. Its other limit stands as written — the stamp lands only on rows the wor
 already `COMPLETED` keeps its `null` unless someone chooses to backfill it, which is an operator
 decision with an `UPDATE` in it rather than something a feature does quietly.
 
-### …and the next minute takes the file: `planPurge`, and the only `unlink` in the app
+### …and the next minute takes the file: `planPurge`, and the app's first `unlink`
 
 Closing the door left the copy on the disk, and measured again the same day that was the whole
 story: **27 `COMPLETED` rows, 2 of them past their date with both files still there byte-exact**
 (`/tmp/export_1792571592233.csv` at 4,195 bytes, `export_1792571761063.csv` at 957); **51 files
-matching `/tmp/export_*` against those 27 rows, so 24 named by no row at all** — the work of
-`DELETE /api/exports/{id}`, which has always removed the row and left the file; **0 rows whose
-file was missing**, i.e. the missing-file 410 had never fired in this database; and **zero sites
+matching `/tmp/export_*` against those 27 rows, so 24 named by no row at all** — which this
+section called the work of `DELETE /api/exports/{id}`, wrongly: the next section measures those
+24 and retires the claim; **0 rows whose file was missing**, i.e. the missing-file 410 had never fired in this database; and **zero sites
 in `src/` that had ever deleted anything** — the application had never removed a file it
 created.
 
@@ -979,8 +983,9 @@ Two pieces, in the order that makes a deletion safe:
   not an export artifact`.
 - **`purgeRetiredExports()` acts on what the plan returned**, at the top of the once-a-minute
   sweep and inside its own `try`/`catch`, so a filesystem that misbehaves cannot cost the jobs
-  the calendar is due for that minute. It is the only `unlink` in `src/`, and it runs only on
-  the `filePath` the plan handed back. A file already gone — `/tmp` is reclaimed by the
+  the calendar is due for that minute. It was then the only `unlink` in `src/`, and it runs only
+  on the `filePath` the plan handed back; `#37` adds the second one, at the door that deletes a
+  row, and both consult the same guard. A file already gone — `/tmp` is reclaimed by the
   operating system on its own schedule — is counted as *already gone*, not reported as a
   deletion or a failure. Every removal is one stdout line naming the row id, the path, and
   **the date that authorized it**.
@@ -990,25 +995,28 @@ record of an export that happened and the date on it is what says the bytes are 
 also why both doors keep answering the *retired* sentence after the sweep instead of the
 missing-file one: they ask the date before they ask the disk.
 
-Two things this leaves alone, on purpose:
+Two things it left alone on purpose — and the second is what the next section is for:
 
 - **`null` is not an expiry, so it is not a deletion.** The 25 exports finished before `#35`
   keep their files — a lifetime nobody promised cannot have passed. Backfilling their
   `expiresAt` is an operator decision with an `UPDATE` in it, and the sweep will honour whatever
   date that sets.
-- **The 24 orphans stay.** Reclaiming a file no row names needs a rule about what a file means
-  once its record is gone, and `DELETE /api/exports/{id}` needs deciding first — delete the
-  bytes with the row, or refuse to delete the row while its file is still served. This round
-  counts them, pins by test that it changed nothing about them, and leaves the decision to the
-  next.
+- **The 24 orphans stayed.** Reclaiming a file no row names needs a rule about what a file
+  means once its record is gone, and `DELETE /api/exports/{id}` needed deciding first — delete
+  the bytes with the row, or refuse to delete the row while its file is still served. This round
+  counted them, pinned by test that it changed nothing about them, and left the decision to the
+  next, which took it: the door now deletes the file, and the files with no row at all are
+  counted out loud every minute and still left alone.
 
 Pinned offline by `tests/unit/export-retention.test.ts` (the file's 17 new tests: the shape
 guard proven against the four template literals the worker actually builds its paths from and
 the 17 shapes it must refuse — including `/tmp/export_1792571592233.csv || rm -rf /tmp`; the
 whole four-reason table; the inclusive boundary shared with the door to the millisecond; the
 25 unstamped rows kept whatever their paths; `planPurge`'s purity; and the sweep scanned from
-source — one `unlink` in `src/`, after `planPurge`, on `plan.remove`'s own `filePath`, with no
-`prisma.export.update` in it and `DELETE /api/exports/{id}` unchanged).
+source — one `unlink` in `src/` at that build, after `planPurge`, on `plan.remove`'s own
+`filePath`, with no `prisma.export.update` in it, and `DELETE /api/exports/{id}` unchanged. Both
+of those last claims are retargeted below: the count is now two, and the door is no longer
+unchanged).
 
 The live proof is `demo/run-demo.sh leadworks` STEP 17, run against the export STEP 16 had just
 refused: its 957 bytes are on the disk when the step begins and **gone 34 s later**, with the row
@@ -1019,6 +1027,78 @@ in the server's stdout — `Export cmvhzikll002jekqcflv4wmx3: retired file remov
 plus 25/25 pre-`#35` rows' files still on disk**. 9 checks in this step, and the whole run
 against this build is **173 ✓ / 0 ✗**, exit 0.
 
+### …and the record that is deleted takes its file: one guard, two callers, and a count of what has no owner
+
+`#36` closed a retired export's door, reclaimed its bytes a minute later, and left two sentences
+about the residue: *the 24 files no row names are `DELETE /api/exports/{id}`'s work*, and *that
+door deletes the row and only the row*. Measured before this round, the first was wrong and the
+second was a decision nobody had taken yet.
+
+The count says so. `Job` rows of type `EXPORT` number **60 against 29 `Export` rows**, and **all
+31** jobs naming an `exportId` with no row were created inside one hour — 2026-10-17 07:00 —
+**24 of them `COMPLETED`**: the same 24, in the same five minutes (07:40–07:45) the orphan mtimes
+fill. The demo never calls `DELETE` on an export and its first export code was committed about
+three hours after that window, no test calls the four writers, and three sampled orphans have
+`atime == mtime` — nobody ever downloaded them either. So the residue is **job history from a
+window in which the table was emptied**, and the door's measured contribution to it is *zero rows
+in this database*. That is a fact about the data, not a defence of the code: the door would have
+left the file, and until now it did.
+
+- **`planRowDelete(filePath)` is the guard, already written.** The same `isExportArtifact`
+  question `planPurge` asks, with the same two words for saying no — `no file`, `path is not an
+  export artifact`. What it deliberately does *not* receive is a clock: deleting a record is not
+  a retention decision, so an export one second from its expiry is still deleted the moment its
+  caller asks. `expiresAt` governs the doors that serve, never the record.
+- **The row goes first, and the order is chosen out of the two failures available.** A row
+  outliving its file is a download door pointing at nothing — the state the operating system used
+  to produce by reclaiming `/tmp`, and the reason a second 410 sentence exists at all. A file
+  outliving its row is what this directory already holds. One is a broken promise to a caller and
+  the other is bytes answering to nobody, so the delete happens, then `unlink` on the path read
+  before it, and a failure is reported instead of rolled back.
+- **The answer says what happened to the bytes.** `removed`, `already gone from this server` (an
+  `ENOENT` is a fact about `/tmp`, not a deletion and not a failure), `left on disk` with the
+  error's own message beside it, or the guard's reason. A bare `{ ok: true }` over a file that is
+  still there was the over-claim this round removes, and no response shape in the door still
+  allows it.
+- **`logExportFileCensus(now)` counts the files with no owner, and deletes nothing.** A file no
+  row names has no `expiresAt`, no `status` and — decisively — no `workspaceId`, so no policy can
+  be applied to it and no tenant could authorize removing it; the number goes to the server's
+  stdout, not onto an API. It also sets aside any artifact whose own filename timestamp is
+  younger than a minute, because the path is built before the row that names it is written: the
+  gap between the two, measured across the 25 live rows, is **2.3–16.1 ms**. A sweep that deleted
+  what no row names would be deleting exports being born, which is why the idea stays out of the
+  code and the count stays in the log. It prints when the number moves, not 1,440 times a day.
+
+Pinned offline by `tests/unit/export-retention.test.ts` — 69 tests in the file now (53 before
+this round, and the suite at 642 against its 626),
+and three of `#36`'s retargeted rather than deleted: *nothing in the app deletes* became *nothing
+that serves a file deletes it* (the worker, the streaming door and the list door still contain no
+deletion, and inside the detail door the `unlink` is confined to `DELETE_impl`, not to the two
+branches that hand bytes back); *one `unlink` in `src/`* became *two, and both act only on a path
+`planPurge` or `planRowDelete` named*; and `DELETE`'s own unchanged-behaviour test now pins the
+file going with the row. The new tests cover the plan's answers against the same 17 shapes a
+column can hold, the door's order read out of its source (read `filePath` → check ownership →
+delete → guard → `unlink`, four `NextResponse.json` exits each naming a byte-state, no
+`prisma.export.update` anywhere), the stamp inside a name, and the census table — named, unclaimed
+and old, unclaimed and 16 ms young, and shaped like nothing this app writes — plus the claim that
+no file route or page mentions the census at all.
+
+The live proof is `demo/run-demo.sh leadworks` STEP 18, which walks all three states a delete can
+find in one run. The export `#36`'s sweep had already reclaimed is deleted first: the door answers
+`{"ok":true,"file":"already gone from this server"}`, its id answers 404 afterwards, and the bytes the sweep removed stay removed — naming a
+missing file is not a second attempt to delete one. Then a fresh JSON export whose 1,602 bytes are
+on the disk exactly where the row says 1,602: one `DELETE` later `file: "removed"`, the file is
+not there, and neither is the row. Then the guard, in the only way it can be proven at a door — a
+row's `filePath` rewritten by hand (over `psql`) to `/tmp/leadworks-demo-not-an-export-0zrc7.txt`,
+a file the script wrote itself: the answer is `file: "path is not an export artifact"`, the
+sentinel is untouched, and the file the worker *really* wrote (`/tmp/export_1792582140622.csv`) is
+now named by no row at all — which is precisely what the sweep's line counts and no code in the
+application deletes. The run's first census line reads `Export file census: 24 files shaped like
+exports in /tmp are named by no row (65996 bytes) — left alone: no row, so no expiry, no status and
+no workspace to decide from`; one sweep minute after the guard refused, the same line says **25
+files, 66,598 bytes**, and this script's own count of the same directory against the same table's
+30 paths lands on the same 25. 16 checks in this step, 9 in STEP 17 above it, and the whole run
+against this build is **189 ✓ / 0 ✗**, exit 0.
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
@@ -1068,7 +1148,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 642 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
