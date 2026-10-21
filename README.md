@@ -933,12 +933,13 @@ export door has a PATCH verb, so there is no way to move one afterwards either. 
 were finished before the column was ever filled, and retiring them on the strength of a column
 nobody wrote would be a policy decided by a migration instead of by an operator.
 
-Pinned offline by `tests/unit/export-retention.test.ts` (36 of the 609 in the suite: the schema
+Pinned offline by `tests/unit/export-retention.test.ts` (36 tests at that round, 53 in the file
+now: the schema
 declaration, the default and the one env key, the create door dropping a caller-supplied
 lifetime, the 17 parsing cases, the arithmetic and the inclusive boundary, the three verdicts,
 the two refusal sentences staying different, and the wiring scanned from source — one stamp site
 among the ten writes, the verdict asked before `stat()`, no PATCH verb on either door, and no
-`unlink` in any file this round touches).
+`unlink` in the worker or in a door — the deletion `#36` adds is the sweep's, below).
 
 The live proof is `demo/run-demo.sh leadworks` STEP 16: with the app booted at
 `EXPORT_RETENTION_MS=25000`, a CSV export is created with `expiresAt: null`, finishes at
@@ -947,14 +948,76 @@ bytes, and **25 seconds later both doors answer 410** with
 `export retired on 2026-10-21T08:36:26.064Z — re-run the export for a fresh file`, the same
 words from both, while the row itself still reads `COMPLETED` with the same `filePath` and the
 same `fileSize`, and the unstamped export finished before this round still downloads `200`.
-11 checks in this step, and the whole run against this build is **164 ✓ / 0 ✗**, exit 0.
+11 checks in this step; the whole run against the round `#35` build was **164 ✓ / 0 ✗**, and
+STEP 17 below prints the count against this one.
 
-What this does not claim: **the bytes are still there.** A retired export is a closed door, not
-a deleted file — this round stops *serving* the copy and says so; the `unlink` and the sweep
-that would call it are the next round, and until then "the file is where the worker put it" is
-the whole truth. The stamp lands only on rows the worker finishes from here: an export that was
+What `#35` left undone, stated while it was still true: **the bytes were still there.** That
+round stopped *serving* the copy and said so; the section below is the round that takes the
+file. Its other limit stands as written — the stamp lands only on rows the worker finishes from here: an export that was
 already `COMPLETED` keeps its `null` unless someone chooses to backfill it, which is an operator
 decision with an `UPDATE` in it rather than something a feature does quietly.
+
+### …and the next minute takes the file: `planPurge`, and the only `unlink` in the app
+
+Closing the door left the copy on the disk, and measured again the same day that was the whole
+story: **27 `COMPLETED` rows, 2 of them past their date with both files still there byte-exact**
+(`/tmp/export_1792571592233.csv` at 4,195 bytes, `export_1792571761063.csv` at 957); **51 files
+matching `/tmp/export_*` against those 27 rows, so 24 named by no row at all** — the work of
+`DELETE /api/exports/{id}`, which has always removed the row and left the file; **0 rows whose
+file was missing**, i.e. the missing-file 410 had never fired in this database; and **zero sites
+in `src/` that had ever deleted anything** — the application had never removed a file it
+created.
+
+Two pieces, in the order that makes a deletion safe:
+
+- **`planPurge(rows, now)` decides, with no disk and no database.** The row's own date is asked
+  first, through the same `retentionVerdict` the doors use, *before the path is looked at* —
+  which is what makes *a purge cannot change what a door answers* true by construction rather
+  than by luck. Then that a path is named at all, then that it is a shape the worker can
+  actually produce: `/tmp/export_<digits>.<csv|json|xlsx|pdf>`. Everything else is kept, with
+  one of four reasons an operator can read back — `served`, `unstamped`, `no file`, `path is
+  not an export artifact`.
+- **`purgeRetiredExports()` acts on what the plan returned**, at the top of the once-a-minute
+  sweep and inside its own `try`/`catch`, so a filesystem that misbehaves cannot cost the jobs
+  the calendar is due for that minute. It is the only `unlink` in `src/`, and it runs only on
+  the `filePath` the plan handed back. A file already gone — `/tmp` is reclaimed by the
+  operating system on its own schedule — is counted as *already gone*, not reported as a
+  deletion or a failure. Every removal is one stdout line naming the row id, the path, and
+  **the date that authorized it**.
+
+The row is not rewritten. `filePath`, `fileSize` and `COMPLETED` all stay, because the row is the
+record of an export that happened and the date on it is what says the bytes are gone — which is
+also why both doors keep answering the *retired* sentence after the sweep instead of the
+missing-file one: they ask the date before they ask the disk.
+
+Two things this leaves alone, on purpose:
+
+- **`null` is not an expiry, so it is not a deletion.** The 25 exports finished before `#35`
+  keep their files — a lifetime nobody promised cannot have passed. Backfilling their
+  `expiresAt` is an operator decision with an `UPDATE` in it, and the sweep will honour whatever
+  date that sets.
+- **The 24 orphans stay.** Reclaiming a file no row names needs a rule about what a file means
+  once its record is gone, and `DELETE /api/exports/{id}` needs deciding first — delete the
+  bytes with the row, or refuse to delete the row while its file is still served. This round
+  counts them, pins by test that it changed nothing about them, and leaves the decision to the
+  next.
+
+Pinned offline by `tests/unit/export-retention.test.ts` (the file's 17 new tests: the shape
+guard proven against the four template literals the worker actually builds its paths from and
+the 17 shapes it must refuse — including `/tmp/export_1792571592233.csv || rm -rf /tmp`; the
+whole four-reason table; the inclusive boundary shared with the door to the millisecond; the
+25 unstamped rows kept whatever their paths; `planPurge`'s purity; and the sweep scanned from
+source — one `unlink` in `src/`, after `planPurge`, on `plan.remove`'s own `filePath`, with no
+`prisma.export.update` in it and `DELETE /api/exports/{id}` unchanged).
+
+The live proof is `demo/run-demo.sh leadworks` STEP 17, run against the export STEP 16 had just
+refused: its 957 bytes are on the disk when the step begins and **gone 34 s later**, with the row
+still reading `COMPLETED filePath=/tmp/export_1792579440609.csv fileSize=957`, both doors still
+quoting the retired sentence word for word (and not the missing-file one), the sweep's own line
+in the server's stdout — `Export cmvhzikll002jekqcflv4wmx3: retired file removed at
+/tmp/export_1792579440609.csv (retired on 2026-10-21T10:44:25.610Z)` — and **24/24 orphaned files
+plus 25/25 pre-`#35` rows' files still on disk**. 9 checks in this step, and the whole run
+against this build is **173 ✓ / 0 ✗**, exit 0.
 
 ## Score: one arithmetic, and who may change it
 
@@ -1005,7 +1068,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the 626 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
