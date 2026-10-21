@@ -16,6 +16,14 @@ export default function Page() {
         <div className="mt-8 space-y-8 border-l-2 border-blue-600 pl-6">
           <div>
             <p className="text-sm text-gray-600">October 2026</p>
+            <h2 className="text-lg font-bold">v1.1.0 — Bring the list you already have</h2>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-600">
+              <li><strong>CSV import</strong>: upload the list you already have — header aliases, semicolon or tab files, quoted and multi-line fields — and the rows that are refused come back as a downloadable report saying which row and why.</li>
+              <li>Duplicates are skipped in the file and against the workspace, case-insensitively by email, and every imported row is judged by the same validation the API uses.</li>
+            </ul>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">October 2026</p>
             <h2 className="text-lg font-bold">v1.0.1 — every lead&apos;s score is computed, and shows its work</h2>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-600">
               <li><code>score</code> is now arithmetic the row can be walked through: one table of signals in <code>lib/lead-score.ts</code>, its terms stored beside the lead. Nothing about the column&apos;s 0–100 range changed.</li>
