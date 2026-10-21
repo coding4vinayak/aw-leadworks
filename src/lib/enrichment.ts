@@ -204,6 +204,7 @@ async function updateLeadEnrichment(
       leadId: lead.id,
       provider: providers.join(","),
       fieldsEnriched: plan.written,
+      beforeData: asInputJson(plan.before),
       afterData: Object.fromEntries(plan.written.map((column) => [column, result[column]])),
       status: plan.logStatus,
       creditsUsed: providers.length,
