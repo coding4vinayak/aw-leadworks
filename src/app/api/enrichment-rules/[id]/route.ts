@@ -5,6 +5,7 @@ import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { RULE_PATCH } from "@/lib/fields";
 import { conditionsProblem, describeConditions, normalizeConditions, readStoredConditions } from "@/lib/rule-conditions";
+import { normalizeProviders, providersProblem } from "@/lib/enrichment-providers";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -37,11 +38,20 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
     if (problem !== null) return NextResponse.json({ error: problem }, { status: 400 });
   }
 
+  // A rule edited to a provider nothing implements is the same silence as one
+  // created that way, so it is refused at the same door.
+  const named = input.data.providers;
+  if (named !== undefined) {
+    const providerProblem = providersProblem(named);
+    if (providerProblem !== null) return NextResponse.json({ error: providerProblem }, { status: 400 });
+  }
+
   const rule = await prisma.enrichmentRule.update({
     where: { id },
-    data: declared === undefined
-      ? input.data
-      : { ...input.data, conditions: asInputJson(normalizeConditions(declared)) },
+    data: {
+      ...(declared === undefined ? input.data : { ...input.data, conditions: asInputJson(normalizeConditions(declared)) }),
+      ...(named === undefined ? {} : { providers: asInputJson(normalizeProviders(named)) }),
+    },
   });
   return NextResponse.json(rule);
 }
@@ -78,7 +88,7 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
         workspaceId: rule.workspaceId,
         type: "ENRICH",
         status: "PENDING",
-        config: { providers: asInputJson(rule.providers), fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions) },
+        config: { providers: asInputJson(rule.providers), fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions), ruleId: rule.id },
       },
     });
 

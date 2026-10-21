@@ -6,6 +6,7 @@ import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { RULE_CREATE } from "@/lib/fields";
 import { conditionsProblem, normalizeConditions } from "@/lib/rule-conditions";
+import { normalizeProviders, providersProblem } from "@/lib/enrichment-providers";
 
 export const dynamic = "force-dynamic";
 
@@ -48,11 +49,18 @@ async function POST_impl(request: Request) {
   const problem = conditionsProblem(input.data.conditions);
   if (problem !== null) return NextResponse.json({ error: problem }, { status: 400 });
 
+  // The same argument about the other half of the rule: `kind: "strings"` proves
+  // `providers` is a list of words, and proves nothing about whether any worker
+  // will answer one of them.
+  const providerProblem = providersProblem(input.data.providers);
+  if (providerProblem !== null) return NextResponse.json({ error: providerProblem }, { status: 400 });
+
   const rule = await prisma.enrichmentRule.create({
     data: {
       workspaceId,
       ...input.data,
       conditions: asInputJson(normalizeConditions(input.data.conditions)),
+      providers: asInputJson(normalizeProviders(input.data.providers)),
     },
   });
 

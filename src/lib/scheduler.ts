@@ -101,7 +101,7 @@ export async function runScheduledJobs(): Promise<void> {
             workspaceId: rule.workspaceId,
             type: "ENRICH",
             status: "PENDING",
-            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions) },
+            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions), ruleId: rule.id },
           },
         });
         await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });

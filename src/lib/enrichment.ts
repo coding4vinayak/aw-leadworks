@@ -2,6 +2,9 @@ import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
 import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
+import { normalizeProviders } from "./enrichment-providers";
+import { seniorityFromTitle } from "./seniority";
+import { planEnrichmentWrite, type EnrichableLead } from "./enrich-plan";
 
 export interface EnrichmentConfig {
   providers: string[];
@@ -15,6 +18,14 @@ export interface EnrichmentConfig {
    * JSON column like any other: this function decides what a bad one means.
    */
   conditions?: unknown;
+  /**
+   * The rule that queued this job, carried in by `?action=run` and the scheduler.
+   * It decides which workspace's rule page the visit shows up on, so it is checked
+   * against the job's own workspace rather than trusted: a name that does not exist
+   * would fail every log write in the job, and a foreign rule would leak this
+   * workspace's visits onto someone else's rule.
+   */
+  ruleId?: unknown;
   [key: string]: any;
 }
 
@@ -36,7 +47,6 @@ export interface EnrichmentResult {
   technologies?: string[];
   intentSignals?: string[];
   socialProfiles?: Record<string, string>;
-  confidence?: number;
   [key: string]: any;
 }
 
@@ -47,6 +57,12 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
   await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
 
   const config = job.config as unknown as EnrichmentConfig;
+  // A rule's `providers` is stored text: normalise the spelling once for the job,
+  // so a rule that lists `Apollo` reaches the case dispatching on `apollo` and a
+  // name nothing implements is not handed to the worker at all. This rewrites the
+  // parsed config, not the Job row — the row stays what its caller sent.
+  config.providers = normalizeProviders(config.providers);
+  const ruleId = await usableRuleId(job.workspaceId, config.ruleId);
   const leads = await getLeadsToEnrich(job.workspaceId, config);
   let processed = 0;
   let enriched = 0;
@@ -56,13 +72,13 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
     try {
       const result = await enrichLead(lead, config);
       if (result) {
-        await updateLeadEnrichment(lead.id, result, config.providers);
-        enriched++;
+        const written = await updateLeadEnrichment(job.workspaceId, lead, result, config.providers, ruleId);
+        if (written > 0) enriched++;
       }
       processed++;
     } catch (error) {
       failed++;
-      await logEnrichmentError(job.workspaceId, lead.id, error);
+      await logEnrichmentError(job.workspaceId, lead.id, error, ruleId);
     }
 
     await prisma.job.update({
@@ -103,115 +119,98 @@ async function getLeadsToEnrich(workspaceId: string, config: EnrichmentConfig): 
 
 async function enrichLead(lead: any, config: EnrichmentConfig): Promise<EnrichmentResult | null> {
   const results: EnrichmentResult = {};
-  let totalConfidence = 0;
-  let providerCount = 0;
+  let answered = 0;
 
   for (const provider of config.providers) {
     try {
       const result = await enrichWithProvider(lead, provider, config.fields);
       if (result) {
         Object.assign(results, result);
-        totalConfidence += result.confidence || 0.5;
-        providerCount++;
+        answered++;
       }
     } catch (error) {
       console.error(`Enrichment failed for provider ${provider}:`, error);
     }
   }
 
-  if (providerCount === 0) return null;
-  return { ...results, confidence: totalConfidence / providerCount };
+  // Nothing answered, so there is nothing to record — not even a timestamp, which
+  // would otherwise claim a visit that never happened.
+  if (answered === 0) return null;
+  return results;
 }
 
 async function enrichWithProvider(lead: any, provider: string, fields: string[]): Promise<Partial<EnrichmentResult> | null> {
   switch (provider) {
+    case "derive":
+      return deriveFromRow(lead, fields);
+    // The call sites a key belongs in. Each is dispatched; none of them returns a
+    // value, because an unconfigured provider that answers with an invented
+    // `industry: "SaaS"` writes fiction into a customer's row, which is worse than
+    // the silence these now keep. See `src/lib/enrichment-providers.ts`.
     case "apollo":
-      return await enrichWithApollo(lead, fields);
     case "clearbit":
-      return await enrichWithClearbit(lead, fields);
     case "hunter":
-      return await enrichWithHunter(lead, fields);
     case "linkedin":
-      return await enrichWithLinkedIn(lead, fields);
     case "clearbit_company":
-      return await enrichCompanyWithClearbit(lead, fields);
     case "apollo_company":
-      return await enrichCompanyWithApollo(lead, fields);
+      return null;
     default:
       return null;
   }
 }
 
-async function enrichWithApollo(lead: any, fields: string[]): Promise<Partial<EnrichmentResult>> {
-  // Apollo.io API integration
-  // Would call Apollo API with email/domain
-  return { confidence: 0.7 };
+/**
+ * The one provider that works without credentials: it reads the row the workspace
+ * already has and answers with what that row states. A title naming a
+ * `Director of Engineering` says a rung of `Lead.seniority` that nobody typed, and
+ * `seniority.ts` abstains rather than guessing when the title is not in its table.
+ * `fields` is the list the rule asked for; a derivation that is not on it is still
+ * something the row already told us, so it is offered either way and the write plan
+ * decides whether the column has a gap for it.
+ */
+async function deriveFromRow(lead: any, _fields: string[]): Promise<Partial<EnrichmentResult>> {
+  const seniority = seniorityFromTitle(lead.title);
+  return seniority === null ? {} : { seniority };
 }
 
-async function enrichWithClearbit(lead: any, fields: string[]): Promise<Partial<EnrichmentResult>> {
-  // Clearbit API integration
-  return { confidence: 0.8 };
+/** The rule a job may be logged against, or `null` when no rule of this workspace queued it. */
+async function usableRuleId(workspaceId: string, claimed: unknown): Promise<string | null> {
+  if (typeof claimed !== "string" || claimed === "") return null;
+  const owned = await prisma.enrichmentRule.findFirst({ where: { id: claimed, workspaceId }, select: { id: true } });
+  return owned?.id ?? null;
 }
 
-async function enrichWithHunter(lead: any, fields: string[]): Promise<Partial<EnrichmentResult>> {
-  // Hunter.io API integration
-  return { confidence: 0.75 };
-}
+async function updateLeadEnrichment(
+  workspaceId: string,
+  lead: EnrichableLead & { id: string },
+  result: EnrichmentResult,
+  providers: string[],
+  ruleId: string | null,
+): Promise<number> {
+  const plan = planEnrichmentWrite(lead, result);
+  await prisma.lead.update({ where: { id: lead.id }, data: plan.data });
 
-async function enrichWithLinkedIn(lead: any, fields: string[]): Promise<Partial<EnrichmentResult>> {
-  // LinkedIn API or scraping
-  return { confidence: 0.6 };
-}
-
-async function enrichCompanyWithClearbit(lead: any, fields: string[]): Promise<Partial<EnrichmentResult>> {
-  // Company enrichment via Clearbit
-  return { companySize: "51-200", industry: "SaaS", technologies: ["React", "Node.js"], confidence: 0.8 };
-}
-
-async function enrichCompanyWithApollo(lead: any, fields: string[]): Promise<Partial<EnrichmentResult>> {
-  return { companySize: "201-500", industry: "Technology", revenue: "$10M-$50M", confidence: 0.75 };
-}
-
-async function updateLeadEnrichment(leadId: string, result: EnrichmentResult, providers: string[]): Promise<void> {
-  await prisma.lead.update({
-    where: { id: leadId },
-    data: {
-      ...result,
-      lastEnrichedAt: new Date(),
-      score: calculateLeadScore(result),
-    },
-  });
-
-  await prisma.enrichmentLog.create({
-    data: {
-      workspaceId: "", // Would need to pass workspace
-      leadId,
-      provider: providers.join(","),
-      fieldsEnriched: Object.keys(result).filter(k => k !== "confidence"),
-      afterData: result,
-      status: "SUCCESS",
-      creditsUsed: providers.length,
-    },
-  });
-}
-
-function calculateLeadScore(result: EnrichmentResult): number {
-  let score = 0;
-  if (result.email) score += 20;
-  if (result.phone) score += 15;
-  if (result.linkedinUrl) score += 15;
-  if (result.title) score += 10;
-  if (result.company) score += 10;
-  if (result.technologies?.length) score += 10;
-  if (result.intentSignals?.length) score += 10;
-  if (result.confidence && result.confidence > 0.7) score += 5;
-  return Math.min(score, 100);
-}
-
-async function logEnrichmentError(workspaceId: string, leadId: string, error: unknown): Promise<void> {
   await prisma.enrichmentLog.create({
     data: {
       workspaceId,
+      ruleId,
+      leadId: lead.id,
+      provider: providers.join(","),
+      fieldsEnriched: plan.written,
+      afterData: Object.fromEntries(plan.written.map((column) => [column, result[column]])),
+      status: plan.logStatus,
+      creditsUsed: providers.length,
+    },
+  });
+
+  return plan.written.length;
+}
+
+async function logEnrichmentError(workspaceId: string, leadId: string, error: unknown, ruleId: string | null): Promise<void> {
+  await prisma.enrichmentLog.create({
+    data: {
+      workspaceId,
+      ruleId,
       leadId,
       provider: "unknown",
       fieldsEnriched: [],
@@ -258,6 +257,7 @@ export async function runScheduledEnrichment(): Promise<void> {
         providers: (rule.providers as string[]) || [],
         fields: [],
         conditions: stored.conditions,
+        ruleId: rule.id,
       });
     }
   }
