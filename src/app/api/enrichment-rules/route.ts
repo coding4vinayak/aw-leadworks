@@ -8,6 +8,7 @@ import { RULE_CREATE } from "@/lib/fields";
 import { conditionsProblem, normalizeConditions } from "@/lib/rule-conditions";
 import { normalizeActions, ruleDeclarationProblem } from "@/lib/rule-actions";
 import { normalizeProviders, providersProblem } from "@/lib/enrichment-providers";
+import { RULE_PRIORITY_ORDER } from "@/lib/rule-priority";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,12 @@ async function GET_impl(request: Request) {
     prisma.enrichmentRule.findMany({
       where,
       include: { _count: { select: { logs: true } } },
-      orderBy: { createdAt: "desc" },
+      // The ranking the column advertises is what the operator sees first, and it is a
+      // total order — `createdAt` then `id` break every tie — so page two cannot show the
+      // rule page one already showed. `createdAt: "desc"` alone was neither: it hid the
+      // number the caller set, and two rules stored in the same millisecond made the page
+      // boundary whatever the engine felt like.
+      orderBy: RULE_PRIORITY_ORDER,
       skip: (page - 1) * limit,
       take: limit,
     }),

@@ -1,5 +1,6 @@
 import type { Schema } from "./validate";
 import { MAX_IMPORT_BYTES } from "./import-limits";
+import { PRIORITY_MAX, PRIORITY_MIN } from "./rule-priority";
 import {
   EXPORT_FORMATS,
   JOB_STATUSES,
@@ -194,7 +195,10 @@ export const RULE_CREATE = {
   // the enrichment worker iterates it. `providers: "abc"` passed the old
   // `?.length` check, because a string has a length.
   providers: { kind: "strings", required: true, min: 1 },
-  priority: { kind: "int" },
+  // The ranking `rule-priority.ts` walks. An `Int` column will hold anything a client
+  // names, and a number spanning nine orders of magnitude is not a ranking — the range is
+  // stated once, here and on the edit door, and both refusals quote it.
+  priority: { kind: "int", min: PRIORITY_MIN, max: PRIORITY_MAX },
   isActive: { kind: "bool" },
 } satisfies Schema;
 
@@ -205,7 +209,7 @@ export const RULE_PATCH = {
   conditions: { kind: "json" },
   actions: { kind: "json" },
   providers: { kind: "strings", min: 1 },
-  priority: { kind: "int" },
+  priority: { kind: "int", min: PRIORITY_MIN, max: PRIORITY_MAX },
   isActive: { kind: "bool" },
 } satisfies Schema;
 
