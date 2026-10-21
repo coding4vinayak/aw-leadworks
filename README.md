@@ -578,12 +578,103 @@ with the real gap logs `{"seniority": null}` beside `{"seniority": "C_LEVEL"}`, 
 nothing for `Head of Growth`) still records the visit — a stamp, a `PARTIAL`, and nothing
 in either half of the audit; and running the same rule a second time logs `PARTIAL` with
 `beforeData {"seniority": "C_LEVEL"}`, both rows readable side by side on the lead. 10
-checks in this step, and the whole run against this build is **129 ✓ / 0 ✗**, exit 0.
+checks in this step, and the whole run against the round #33 build was **129 ✓ / 0 ✗**, exit 0;
+STEP 15 below prints the count against this one.
 
 What this does not claim: the abstaining provider and the pruned answer are *one* record,
 because in both cases nothing reached the plan. What separates them is the rule's own
 `actions` — printed above each row in that step, and stored on the rule — not anything the
 log invents.
+
+### When two rules want the same column in the same minute, the ranking says which one
+
+`schema.prisma` declares `priority Int @default(0)` on `EnrichmentRule`, both rule doors have
+always accepted it, and the list door has always handed it back. Nothing ordered by it.
+Measured against the running app before this round — one lead, three `SCHEDULED` rules over it
+each asking `seniority`, created in the order 10, 90, 50: `GET /api/enrichment-rules` returned
+**50, 90, 10** (`createdAt` reversed, the number the operator set in none of it); the sweep
+queued them **10, 90, 50** (its `findMany` carried no `orderBy` at all, so the order the
+storage engine handed the rows back in was the order they were applied in); and **the rule
+that filled the column was the one queued last** — `prio=50` logged `SUCCESS ["seniority"]`
+with `beforeData {"seniority": null}` while `prio=10` and `prio=90` logged `PARTIAL []` with
+`beforeData {"seniority": "C_LEVEL"}` — because the `enrich` worker runs five jobs at a time,
+so the three raced for one lead and whichever write landed first won it. Two sweep minutes
+later that single lead carried **six log rows, each recording `creditsUsed: 1`**, five of the
+six visits being refusals that were guaranteed before any provider woke up.
+
+An `orderBy` alone would not have made the ranking true: reordering a race leaves the race to
+decide the column. What a ranking *can* decide is who owns a column, and that has to be
+settled before anything is queued. `src/lib/rule-priority.ts` settles it — the rules due in
+one workspace are walked highest-ranked first, each claims the columns its own `actions.fields`
+asked for, and the next rule in line gets what remains. Or nothing remains, and it queues
+nothing at all.
+
+- **The order is total, and it is spelled once.** `priority desc`, `createdAt asc`, `id asc`
+  is `RULE_PRIORITY_ORDER`; the list door and both sweeps quote that one constant, so what an
+  operator reads and what the minute does are the same rule twice rather than two rules that
+  drift. The tie-breaks are not decoration: three rules created in a loop land milliseconds
+  apart, and `id` is what makes that a defined order instead of a coin toss — at the page
+  boundary as well as in the walk.
+- **A rule claims what it *asked* for, never what a provider answered.** The plan is decided
+  before any provider wakes, so the same rules produce the same plan whatever `derive` happens
+  to say. That is why the lower-ranked rule's job carries `["companySize"]` rather than the
+  `["seniority", "companySize"]` it asked for: the narrowing happens at the queue, not at the
+  write, which is the only place a concurrent worker cannot undo it.
+- **A rule left with nothing visits nobody.** No job, no log row, so nothing recorded against
+  `creditsUsed`, and no `lastEnrichedAt` stamp — #29's rule holds: a timestamp nobody asked for
+  is a lie. The skip is a line in the server log naming the columns it was left without and
+  that a higher-ranked rule owns this minute.
+- **Who may write is still decided elsewhere.** `ENRICH_WRITABLE` bounds the columns a visit
+  may touch, `restrictToDeclared` (#32) prunes what a provider answers down to what the rule
+  asked for, and `planEnrichmentWrite` (#33) records what the row said. The ranking says whose
+  word lands first, which is a different question — and the one the column advertised.
+- **`?action=run` is deliberately unranked.** A named rule run because an operator pressed the
+  button is an explicit request, and the operator outranks every number in the table; that door
+  still sends the rule's own `fields`. A source test pins that it carries no ranking at all.
+- **A rule that names no columns claims them all.** `actions.fields` absent means "the rule did
+  not say" (#32's reading), and a rule that did not say wants whatever its provider answers, so
+  it owns every writable column for this minute. Ranking is exclusivity, and a broad rule
+  outranks a narrow one by its number rather than by its breadth.
+
+`priority` is validated as an int in `0..100` at both doors, importing `PRIORITY_MIN` and
+`PRIORITY_MAX` from the module that walks the ranking so the refusal and the walk cannot
+disagree about what a number means: `101` and `9999999` are `priority must be at most 100`,
+`-1` is `priority must be at least 0`, `"2"` is refused as text and `1.5` as a fraction, and
+`null` as `priority cannot be null; omit it to leave the value alone`.
+
+Pinned offline by `tests/unit/rule-priority.test.ts` (27: the schema's own `@default(0)`; both
+door tables quoting the module's constants instead of repeating them; the six refusals above,
+and an absent key meaning no `priority` in the patch at all; the shipped seed's `priority: 1`
+still storable; 90/50/10 ordering with a `createdAt` tie and an `id` tie plus antisymmetry, so
+no sort is at the mercy of input order; `RULE_PRIORITY_ORDER` being exactly those three keys and
+agreeing with the comparator; `rankRules` leaving the caller's array alone; `planTick` keeping a
+lone rule's own order, starving 10 under 90 with the ask recorded, leaving a partial overlap with
+only its remainder, a `{}` rule claiming all 18 writable columns, no starvation across tenants,
+one plan whatever the order rules are handed over; composition with `restrictToDeclared` (#32)
+and with `planEnrichmentWrite` (#33) — the winner writing `seniority` while the loser's record
+still says `industry: null`; and the wiring scanned from source: every `enrichmentRule.findMany`
+in `src/` carrying the shared `orderBy`, the skip checks running before a rule can claim
+anything it will never visit, `planTick` before any lead is counted, both sweeps walking the one
+plan, the run door unranked, and #32/#33/#29's invariants untouched).
+
+The live proof is `demo/run-demo.sh leadworks` STEP 15: three rules created 50, 90, 10 come back
+from the door as **90, 50, 10** while their stored `createdAt`s say the opposite; the sweep
+minute that follows queues **two jobs for three due rules** — `prio=90` carrying
+`config.fields ["seniority"]`, `prio=10` carrying `["companySize"]` (the remainder, not what it
+asked for) and `prio=50` carrying nothing, with no log row and no `creditsUsed` of its own; the
+lead ends `seniority=C_LEVEL`, `ENRICHED`, **47 → 53**, with #33's gap record beside it. Then one
+number moves: `priority: 200` answers `400 priority must be at most 100`, `priority: 95` is
+stored, and the next minute hands *both* columns to the rule at 95 and starves the two that used
+to outrank it — ownership followed the number, both minutes. 24 checks in this step, and the
+whole run against this build is **153 ✓ / 0 ✗**, exit 0.
+
+What this does not claim: the two visits that remain are still two visits. A rule the ranking
+left a remainder for still walks into a provider that has no opinion on it — `derive` reads
+titles, not company sizes — and logs a `PARTIAL` and a `creditsUsed`, because no plan written
+before the provider runs can know that in advance. And the starved rule leaves no *row* behind:
+what a starvation costs is visible as the absence of a job and of a `creditsUsed`, and the
+sentence explaining it is in the server's log, not in `EnrichmentLog`. What is on the record is
+who won, which is #33's pair beside the winner's name.
 
 ## Score: one arithmetic, and who may change it
 
@@ -634,7 +725,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 546 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
