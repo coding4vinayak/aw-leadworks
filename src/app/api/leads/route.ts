@@ -5,6 +5,7 @@ import { intParam, pageParams } from "@/lib/pagination";
 import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
 import { LEAD_CREATE } from "@/lib/fields";
+import { scoredWriteData } from "@/lib/lead-score";
 import { dispatchWebhookEvent } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
@@ -80,6 +81,12 @@ async function POST_impl(request: Request) {
       intentSignals: input.data.intentSignals ?? [],
       tags: input.data.tags ?? [],
       status: "NEW",
+      // `LEAD_CREATE` has no `score`, so a created lead used to sit at the column
+      // default of 0 while the dashboard and `orderBy: { score: "desc" }` ranked
+      // buyers by it. The row's own signals are the only thing a score comes from,
+      // and they are all present here, so it is computed before the insert rather
+      // than written by a second round trip.
+      ...scoredWriteData(input.data),
       ...(lists.values.length
         ? { listMemberships: { create: lists.values.map((listId: string) => ({ listId })) } }
         : {}),

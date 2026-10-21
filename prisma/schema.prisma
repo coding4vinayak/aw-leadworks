@@ -163,7 +163,15 @@ model Lead {
   intentSignals   Json     // Buying intent indicators
   socialProfiles  Json?    // Twitter, GitHub, etc.
   customFields    Json?    // Flexible attributes
-  score           Int      @default(0) // Lead quality score 0-100
+  score           Int      @default(0) // Lead score 0-100, computed by lib/lead-score.ts
+  // A person's number, kept apart from the arithmetic so both stay visible: the
+  // score follows this when it is set, and the breakdown keeps showing what the
+  // row's own signals earned beside it. Nothing but `PATCH /api/leads/{id}` writes
+  // it, and `score: null` clears it.
+  scoreOverride   Int?     // 0-100 value a person set, or null when nobody did
+  // The terms, the gaps and the failed checks the score above was made from.
+  scoreBreakdown  Json?    // How this row's score was computed
+  scoredAt        DateTime? // When the score was last recomputed from the row
   status          String   @default("NEW") // NEW | ENRICHED | QUALIFIED | CONTACTED | CONVERTED | REJECTED
   tags            Json     // Array of tags as JSON
   sourceRef       String?  // Original source reference

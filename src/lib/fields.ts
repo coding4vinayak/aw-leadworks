@@ -104,10 +104,16 @@ export const LEAD_CREATE = {
  * `GET /api/leads?orderBy=score desc`: measured, `PATCH {score: 9999}` was a 200
  * and put that lead first for every reader of the list. `status` is the value
  * every filter and campaign comparison is written against.
+ *
+ * A caller of this door does not write `Lead.score` — they write `scoreOverride`,
+ * and `lib/lead-score.ts` computes the score from it beside the row's own signals
+ * (`score: null` gives the override back). The range stays here because the column
+ * it lands in is bounded by this door and by nothing else: the arithmetic needs no
+ * clamp, since `SCORE_TERMS` sums to exactly 100.
  */
 export const LEAD_PATCH = {
   ...LEAD_CREATE,
-  score: { kind: "int", min: 0, max: 100 },
+  score: { kind: "int", min: 0, max: 100, nullable: true },
   status: { kind: "enum", values: LEAD_STATUSES },
 } satisfies Schema;
 

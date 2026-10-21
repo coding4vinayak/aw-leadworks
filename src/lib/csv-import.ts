@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { dispatchWebhookEvent } from "./webhooks";
 import { parseLeadCsv } from "./csv-parse";
 import { MAX_REPORTED_PROBLEMS } from "./import-limits";
+import { scoredWriteData } from "./lead-score";
 import type { ParsedLeadCsv } from "./csv-parse";
 
 /**
@@ -75,6 +76,13 @@ export async function importLeadCsv(workspaceId: string, text: string): Promise<
       intentSignals: r.data.intentSignals ?? [],
       tags: r.data.tags ?? [],
       status: "NEW",
+      // The whole point of an importer is that the buyer's list arrives scored
+      // rather than at the column default of 0, which is what it did: the demo's
+      // three imported contacts carried an email, a company, a title, a location,
+      // a country and an industry and still sat at the bottom of every
+      // `orderBy: score desc` read. The row's signals are all here, so the score is
+      // computed with the row, in the same insert.
+      ...scoredWriteData(r.data),
     })),
     skipDuplicates: true,
   });

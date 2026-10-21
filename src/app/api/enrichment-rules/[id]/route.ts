@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { RULE_PATCH } from "@/lib/fields";
+import { conditionsProblem, describeConditions, normalizeConditions, readStoredConditions } from "@/lib/rule-conditions";
+import { normalizeProviders, providersProblem } from "@/lib/enrichment-providers";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +31,28 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   await assertOwns(request, _owned.workspaceId);
   const input = validateBody(raw.body, RULE_PATCH, { requireWrite: true });
   if (!input.ok) return input.error;
-  const rule = await prisma.enrichmentRule.update({ where: { id }, data: input.data });
+
+  const declared = input.data.conditions;
+  if (declared !== undefined) {
+    const problem = conditionsProblem(declared);
+    if (problem !== null) return NextResponse.json({ error: problem }, { status: 400 });
+  }
+
+  // A rule edited to a provider nothing implements is the same silence as one
+  // created that way, so it is refused at the same door.
+  const named = input.data.providers;
+  if (named !== undefined) {
+    const providerProblem = providersProblem(named);
+    if (providerProblem !== null) return NextResponse.json({ error: providerProblem }, { status: 400 });
+  }
+
+  const rule = await prisma.enrichmentRule.update({
+    where: { id },
+    data: {
+      ...(declared === undefined ? input.data : { ...input.data, conditions: asInputJson(normalizeConditions(declared)) }),
+      ...(named === undefined ? {} : { providers: asInputJson(normalizeProviders(named)) }),
+    },
+  });
   return NextResponse.json(rule);
 }
 
@@ -43,10 +66,20 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     if (!rule) return NextResponse.json({ error: "Not found" }, { status: 404 });
     await assertOwns(request, rule.workspaceId);
 
+    // The rule's own declaration, read the way the scheduler reads it. A blob that
+    // cannot be read is refused here rather than queued: this route has a caller to
+    // tell, and "0 leads" is not an answer they could act on.
+    const stored = readStoredConditions(rule.conditions);
+    if (stored.problem !== null) {
+      return NextResponse.json({ error: `rule cannot run: ${stored.problem}` }, { status: 400 });
+    }
+
     // No lead query here, where the scheduler's copy of this has one: which
-    // leads get enriched is the worker's decision (`getLeadsToEnrich` reads the
-    // same status set), and the list was loaded, counted and thrown away.
-    // `actions` — what the rule says to enrich — is not read here: the worker
+    // leads get enriched is the worker's decision, and the list was loaded,
+    // counted and thrown away. What the worker needs from this route is the
+    // declaration, so it applies the same conditions the rule states instead of
+    // the status set it used to carry in its source.
+    // `actions` — what the rule says to enrich — is still not read here: the worker
     // takes its field list from `config.fields`, which this route has always
     // sent empty, and the provider stubs in `lib/enrichment.ts` ignore that
     // list either way.
@@ -55,7 +88,7 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
         workspaceId: rule.workspaceId,
         type: "ENRICH",
         status: "PENDING",
-        config: { providers: asInputJson(rule.providers), fields: [], confidenceThreshold: 0.5 },
+        config: { providers: asInputJson(rule.providers), fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions), ruleId: rule.id },
       },
     });
 
@@ -68,7 +101,7 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
       throw error;
     }
 
-    return NextResponse.json({ jobId: job.id });
+    return NextResponse.json({ jobId: job.id, appliesTo: describeConditions(stored.conditions) });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
