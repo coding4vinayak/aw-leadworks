@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { rowAfterWrite, scoredWriteData } from "./lead-score";
+import { crowdWhere, namedLeads } from "./lead-crowd";
 
 /**
  * `flag` and `score_down` are one thing now: the validator records what failed on
@@ -16,19 +17,6 @@ export interface ValidateConfig {
   leadIds?: unknown;
 }
 
-/**
- * The ids a job was told to check, or `null` for "the whole workspace". A job's
- * `config` is caller-writable, so this is read as the untrusted thing it is:
- * non-strings are dropped and the query stays scoped to the job's own workspace
- * whichever way it goes, which measured as `leadIds: ["mine", "someone-else's"]`
- * checking one lead and no other tenant's.
- */
-export function namedLeads(config: ValidateConfig): string[] | null {
-  if (!Array.isArray(config.leadIds)) return null;
-  const ids = config.leadIds.filter((id): id is string => typeof id === "string" && id.trim() !== "");
-  return ids.length > 0 ? [...new Set(ids)] : null;
-}
-
 export async function runValidateJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
@@ -36,9 +24,12 @@ export async function runValidateJob(jobId: string): Promise<void> {
   await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
 
   const config = job.config as unknown as ValidateConfig;
-  const crowd = namedLeads(config);
+  // The crowd clause is `lead-crowd.ts`'s to write, and so is the reading of
+  // the ids: one module owns both, so "the job walked the leads it was told
+  // to" is one statement rather than two that can drift. The workspace filter
+  // rides inside `crowdWhere`, so a named crowd can never widen the query.
   const leads = await prisma.lead.findMany({
-    where: crowd ? { workspaceId: job.workspaceId, id: { in: crowd } } : { workspaceId: job.workspaceId },
+    where: crowdWhere({ workspaceId: job.workspaceId }, namedLeads(config.leadIds)),
   });
   let validated = 0;
   let failed = 0;
