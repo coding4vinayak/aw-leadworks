@@ -36,7 +36,7 @@ import { join } from "node:path";
 import { blankComments, countCodeMentions, functionBody } from "./route-handlers";
 import { LEAD_CREATE, LEAD_PATCH } from "../../src/lib/fields";
 import { ENRICH_WRITABLE } from "../../src/lib/enrich-plan";
-import { namedLeads } from "../../src/lib/lead-crowd";
+import { crowdWhere, namedLeads } from "../../src/lib/lead-crowd";
 import {
   SCORE_COLUMNS,
   SCORE_TERMS,
@@ -639,7 +639,10 @@ describe("the crowd a validation job may re-price", () => {
     // The scoping is one statement now: `crowdWhere` keeps the workspace
     // filter and adds the crowd, so a named crowd can never widen the query.
     assert.match(code, /where: crowdWhere\(\{ workspaceId: job\.workspaceId \}, namedLeads\(config\.leadIds\)\)/);
-    assert.equal((code.match(/workspaceId: job\.workspaceId/g) ?? []).length, 1, "the filter is stated once, and `crowdWhere` keeps it");
+    assert.equal((code.match(/workspaceId: job\.workspaceId/g) ?? []).length, 1, "one where, and it is scoped");
+    // The scope lives in the base the caller passes, so the narrowing cannot replace it.
+    assert.deepEqual(crowdWhere({ workspaceId: "ws_1" }, ["lead_1"]), { workspaceId: "ws_1", id: { in: ["lead_1"] } });
+    assert.deepEqual(crowdWhere({ workspaceId: "ws_1" }, null), { workspaceId: "ws_1" });
   });
 
   it("is the module's own arithmetic at that write too", () => {
