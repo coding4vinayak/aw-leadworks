@@ -235,7 +235,9 @@ export function computeLeadScore(lead: ScoreableLead): ComputedScore {
   const override = typeof lead.scoreOverride === "number" ? lead.scoreOverride : null;
   const base = override ?? computed;
   const failedChecks = recordedFailures(lead.validationResults);
-  const penalty = -failedChecks.length * VALIDATION_PENALTY_PER_FAILED_CHECK;
+  // `-0` is a number a Json column turns into `0`, so a ledger that had not been
+  // stored would not read back as itself.
+  const penalty = failedChecks.length > 0 ? -failedChecks.length * VALIDATION_PENALTY_PER_FAILED_CHECK : 0;
   const score = Math.max(0, base + penalty);
 
   return {

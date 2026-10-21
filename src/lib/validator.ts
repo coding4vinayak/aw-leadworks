@@ -6,10 +6,27 @@ import { rowAfterWrite, scoredWriteData } from "./lead-score";
  * the row, and `lib/lead-score.ts` prices the recorded failures. Both words are
  * still accepted, and neither is a subtraction this worker performs — see the note
  * in `runValidateJob`. `remove` deletes the row instead of recording on it.
+ *
+ * `leadIds` names the crowd. Without it the job walks every lead in the workspace,
+ * which is a lot of rows to re-price — or delete — on the strength of one POST.
  */
 export interface ValidateConfig {
   checks: ("email_format" | "email_deliverability" | "phone_format" | "phone_carrier" | "linkedin_format" | "linkedin_exists" | "company_exists" | "domain_valid")[];
   action?: "flag" | "remove" | "score_down";
+  leadIds?: unknown;
+}
+
+/**
+ * The ids a job was told to check, or `null` for "the whole workspace". A job's
+ * `config` is caller-writable, so this is read as the untrusted thing it is:
+ * non-strings are dropped and the query stays scoped to the job's own workspace
+ * whichever way it goes, which measured as `leadIds: ["mine", "someone-else's"]`
+ * checking one lead and no other tenant's.
+ */
+export function namedLeads(config: ValidateConfig): string[] | null {
+  if (!Array.isArray(config.leadIds)) return null;
+  const ids = config.leadIds.filter((id): id is string => typeof id === "string" && id.trim() !== "");
+  return ids.length > 0 ? [...new Set(ids)] : null;
 }
 
 export async function runValidateJob(jobId: string): Promise<void> {
@@ -19,7 +36,10 @@ export async function runValidateJob(jobId: string): Promise<void> {
   await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
 
   const config = job.config as unknown as ValidateConfig;
-  const leads = await prisma.lead.findMany({ where: { workspaceId: job.workspaceId } });
+  const crowd = namedLeads(config);
+  const leads = await prisma.lead.findMany({
+    where: crowd ? { workspaceId: job.workspaceId, id: { in: crowd } } : { workspaceId: job.workspaceId },
+  });
   let validated = 0;
   let failed = 0;
   let flagged = 0;
