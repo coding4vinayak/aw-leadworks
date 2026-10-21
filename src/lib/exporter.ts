@@ -5,6 +5,7 @@ import { asInputJson, asRecord } from "./json";
 import { stringify } from "csv-stringify/sync";
 import * as XLSX from "xlsx";
 import { csvSafeText, exportCell, pdfSafeText, readExportFilter } from "./export-format";
+import { expiryFor } from "./export-retention";
 
 export interface ExportConfig {
   format: "CSV" | "JSON" | "XLSX" | "PDF";
@@ -52,11 +53,17 @@ export async function runExportJob(jobId: string): Promise<void> {
 
     const stats = await import("fs/promises").then(fs => fs.stat(filePath));
 
+    // One moment, both facts: the row that names the file is the row that says
+    // how long it lives. `expiryFor` reads `EXPORT_RETENTION_MS` here rather
+    // than at download time, so the lifetime belongs to the export and a
+    // retention changed later cannot quietly retire files already written.
+    const finishedAt = new Date();
     await prisma.export.update({
       where: { id: exportRecord.id },
       data: {
         status: "COMPLETED",
-        completedAt: new Date(),
+        completedAt: finishedAt,
+        expiresAt: expiryFor(finishedAt),
         filePath,
         fileSize: stats.size,
         recordCount: leads.length,

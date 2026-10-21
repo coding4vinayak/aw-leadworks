@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { withAuth, assertOwns } from "@/lib/apikeys";
 import { readFile, stat } from "node:fs/promises";
 import { prisma } from "@/lib/db";
+import {
+  MISSING_EXPORT_FILE_ERROR,
+  retentionVerdict,
+  retiredExportError,
+} from "@/lib/export-retention";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +24,14 @@ const MIME: Record<string, string> = {
  * customers got a link that 404'd. Now it streams the worker-written file
  * with the right content type and an attachment filename. Missing or
  * unfinished exports 404 with a reason instead of an HTML page.
+ *
+ * Two 410s, and they mean different things: the row's own `expiresAt` (round
+ * #35) retires an export by date — its bytes may still be on disk — while a
+ * file the machine reclaimed is an accident that happened to have no date
+ * behind it. The retention check runs first, before the file is opened, so a
+ * refused-by-policy export is refused by policy and is never reported as a
+ * lost file, and the two sentences stay distinguishable to whoever has to
+ * act on them.
  */
 async function GET_impl(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -31,13 +44,17 @@ async function GET_impl(_request: Request, { params }: { params: Promise<{ id: s
       { status: 404 },
     );
   }
+  const verdict = retentionVerdict(record.expiresAt);
+  if (verdict === "retired") {
+    return NextResponse.json({ error: retiredExportError(record.expiresAt) }, { status: 410 });
+  }
   let bytes: Buffer;
   try {
     const st = await stat(record.filePath);
     if (!st.isFile()) throw new Error("not a file");
     bytes = await readFile(record.filePath);
   } catch {
-    return NextResponse.json({ error: "export file expired from this server — re-run the export" }, { status: 410 });
+    return NextResponse.json({ error: MISSING_EXPORT_FILE_ERROR }, { status: 410 });
   }
   const ext = (record.format || "csv").toLowerCase();
   return new NextResponse(new Uint8Array(bytes), {
