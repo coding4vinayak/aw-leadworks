@@ -171,7 +171,7 @@ POST   /api/leads                          # create
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
 GET    /api/leads/{id}                     # detail + enrichment log
 PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below)
-POST   /api/leads/{id}?action=enrich       # enrich on demand
+POST   /api/leads/{id}?action=enrich       # visit the one lead the URL names
 GET    /api/lead-lists?workspaceId=        # lists
 POST   /api/lead-lists/{id}?action=add-leads|remove-leads
 GET    /api/enrichment-rules?workspaceId=  # rules
@@ -332,7 +332,7 @@ research. A rule that listed a name nothing implements used to be stored, read b
 the worker and answered with silence, so the operator who typed `"hubspot"` watched
 a workspace fill with leads that never got the fields they asked for; the rules API
 now refuses it with the list of names the worker dispatches on, and folds `Apollo`
-onto the spelling the `switch` compares (`enrichment-providers.ts`).
+onto the spelling the dispatch table compares (`enrichment-providers.ts`).
 
 ### The button on a lead's own row
 
@@ -358,8 +358,12 @@ and a crowd visits the intersection: the id named must still satisfy the rule's
 
 Pinned offline by `tests/unit/enrich-write.test.ts` (42: the schema's own words, the
 title table answer for answer, the provider list checked against the worker's
-`switch` in both directions from the source, the write plan's every refusal, and a
-scan of the worker and both rule doors). The live proof is
+`PROVIDER_IMPLEMENTATIONS` table in both directions from the source, the write plan's
+every refusal, and a scan of the worker and both rule doors) and
+`tests/unit/lead-crowd.test.ts` (16: every shape a caller can write into a job config
+and which of them mean *not named*, that naming narrows a scope without ever replacing
+or widening it, and a source scan showing that the only module on the job path which
+spells an `id: { in: … }` is `lead-crowd.ts`). The live proof is
 `demo/run-demo.sh leadworks` STEP 10: three leads arrive with a title and no
 seniority, each carrying a score of 82 a person set. After one run of a rule listing
 `derive`, the `Managing Director` reads `C_LEVEL` and `ENRICHED` (not `DIRECTOR`,
@@ -371,6 +375,17 @@ written beside it — and the
 rule's own log reads one `SUCCESS` with `fieldsEnriched: ["seniority"]` beside two
 `PARTIAL` with an empty list. A second run reaches the same three leads and fills
 nothing.
+
+STEP 12 is the same visit asked for by the row's button rather than by a rule. Four
+leads arrive; the workspace holds **19**. One `POST /api/leads/{id}?action=enrich` on
+the `Chief Operating Officer` comes back `COMPLETED: processed=1 failed=0 total=1`, its
+job row carrying `leadIds: ["cmvhnw…"]` and `providers: ["derive"]`; that row reads
+`C_LEVEL` / `ENRICHED`, its score moved **47 → 53** by the seniority the visit filled,
+and the other three are unwritten — no stamp, no status. Across the whole workspace the
+rows carrying `lastEnrichedAt` went **0 → 1**: one stamp for one named lead, where the
+same click used to walk 19 rows and stamp none. The same door opened on a
+`Head of Facilities` visits exactly one row again, stamps it, and invents nothing —
+`seniority` still empty, `status` still `NEW`, the score still the 47 it arrived with.
 
 ## Score: one arithmetic, and who may change it
 
@@ -421,7 +436,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 477 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 493 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
