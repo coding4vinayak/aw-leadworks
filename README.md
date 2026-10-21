@@ -190,7 +190,9 @@ GET    /api/ai/explain-lead?id=            # explain a score in words
 
 Duplicates merge on email, phone, LinkedIn or fuzzy name match — the most
 complete record wins and nothing is silently dropped. Exports land in
-CSV, JSON, XLSX or PDF with scheduled profiles for weekly drops.
+CSV, JSON, XLSX or PDF with scheduled profiles for weekly drops, and every finished
+export carries the date its own download door closes (`EXPORT_RETENTION_MS`, seven
+days by default — see *How long an export's file answers*).
 
 ### Importing a list
 
@@ -667,7 +669,8 @@ lead ends `seniority=C_LEVEL`, `ENRICHED`, **47 → 53**, with #33's gap record 
 number moves: `priority: 200` answers `400 priority must be at most 100`, `priority: 95` is
 stored, and the next minute hands *both* columns to the rule at 95 and starves the two that used
 to outrank it — ownership followed the number, both minutes. 24 checks in this step, and the
-whole run against this build is **153 ✓ / 0 ✗**, exit 0.
+whole run against the round #34 build was **153 ✓ / 0 ✗**, exit 0; STEP 16 below prints
+the count against this one.
 
 What this does not claim: the two visits that remain are still two visits. A rule the ranking
 left a remainder for still walks into a provider that has no opinion on it — `derive` reads
@@ -679,6 +682,75 @@ who won, which is #33's pair beside the winner's name.
 stored as `"30 9 * * 1"`.
 stored as `"30 9 * * 1"` — 22 checks in this step, and the whole run against this build is
 **119 ✓ / 0 ✗**, exit 0.
+
+### How long an export's file answers: the row says, and both doors obey
+
+`Export.expiresAt DateTime?` has been in the schema since the first migration, every export
+door has handed it back, and nothing ever filled it or read it. Measured against the running
+app before this round: an export created through `POST /api/exports` came back `COMPLETED`
+1130 ms later with a real `completedAt`, a real `filePath` and 918 bytes — and
+`expiresAt: null`; both downloads answered `200`; the table held **25 `COMPLETED` exports and
+0 with an expiry stamped**, the oldest finished **four days** earlier, its file still on disk
+and still served (`200`, 1528 bytes). None of the eleven `prisma.export.*` mutations in `src/`
+passed the column, and none of the 29 `expiresAt` mentions outside `src/generated/` was about
+`Export` at all. The one place the word "expired" lived was the download door's 410 — *"export
+file expired from this server — re-run the export"* — which fires when `stat`/`readFile`
+throws, i.e. when the operating system happened to reclaim `/tmp`. A sentence about expiry with
+no date behind it anywhere, and a file the machine lost indistinguishable from a row that never
+had a lifetime.
+
+`src/lib/export-retention.ts` now does the two things that make the column true, and no more:
+
+- **the write that finishes a file also says how long it lives** — `expiryFor` stamps
+  `expiresAt` in the export worker's single `COMPLETED` update, beside the `completedAt` from
+  the same `finishedAt`, so the row that names the file is the row that owns its lifetime.
+  Nothing else stamps it: the other nine writes still pass no `expiresAt`, and the test counts
+  all ten and asserts exactly one carries the column;
+- **both doors ask before they touch the bytes** — `retentionVerdict(expiresAt, now)` answers
+  `served` / `retired` / `unstamped` (the boundary inclusive), and
+  `GET /api/exports/{id}/download` and `POST /api/exports/{id}?action=download` ask it *before*
+  opening the file. A retired export is refused by policy rather than by whatever `/tmp` did,
+  and the door that hands out the URL no longer hands out a link to a file this module has
+  already refused;
+- **the two 410s stay two sentences** — `retiredExportError` names the date the export died and
+  says re-run, `MISSING_EXPORT_FILE_ERROR` is the old wording, word for word, for a file that
+  is genuinely gone. A test asserts they differ, so they cannot drift back into one.
+
+The lifetime is `EXPORT_RETENTION_MS`, **seven days** if the operator says nothing, read when
+the export *finishes* rather than when it is served. That ordering is what makes a short value
+safe: the demo boots the app with 25 seconds and cannot retire the exports a seven-day instance
+wrote before it, because each row carries the number its own writer had. Anything that is not a
+run of digits falls back to the default rather than becoming `NaN` in a `Date` —
+`parseRetentionMs` is table-tested with 17 inputs, including `"1e9"`, `"1500.5"`, `"-5000"`,
+`"5,000"` and `"007"`. A caller still cannot name the lifetime of the file the server is about
+to write: `EXPORT_CREATE` takes `format`, `fields`, `filterJson` and `profileId`, and neither
+export door has a PATCH verb, so there is no way to move one afterwards either. And a row whose
+`expiresAt` is `null` is served, not refused — the 25 exports this round was measured against
+were finished before the column was ever filled, and retiring them on the strength of a column
+nobody wrote would be a policy decided by a migration instead of by an operator.
+
+Pinned offline by `tests/unit/export-retention.test.ts` (36 of the 609 in the suite: the schema
+declaration, the default and the one env key, the create door dropping a caller-supplied
+lifetime, the 17 parsing cases, the arithmetic and the inclusive boundary, the three verdicts,
+the two refusal sentences staying different, and the wiring scanned from source — one stamp site
+among the ten writes, the verdict asked before `stat()`, no PATCH verb on either door, and no
+`unlink` in any file this round touches).
+
+The live proof is `demo/run-demo.sh leadworks` STEP 16: with the app booted at
+`EXPORT_RETENTION_MS=25000`, a CSV export is created with `expiresAt: null`, finishes at
+`08:36:01.064Z` stamped `08:36:26.064Z` — **+25000 ms, exactly** — downloads `200` with all 957
+bytes, and **25 seconds later both doors answer 410** with
+`export retired on 2026-10-21T08:36:26.064Z — re-run the export for a fresh file`, the same
+words from both, while the row itself still reads `COMPLETED` with the same `filePath` and the
+same `fileSize`, and the unstamped export finished before this round still downloads `200`.
+11 checks in this step, and the whole run against this build is **164 ✓ / 0 ✗**, exit 0.
+
+What this does not claim: **the bytes are still there.** A retired export is a closed door, not
+a deleted file — this round stops *serving* the copy and says so; the `unlink` and the sweep
+that would call it are the next round, and until then "the file is where the worker put it" is
+the whole truth. The stamp lands only on rows the worker finishes from here: an export that was
+already `COMPLETED` keeps its `null` unless someone chooses to backfill it, which is an operator
+decision with an `UPDATE` in it rather than something a feature does quietly.
 
 ## Score: one arithmetic, and who may change it
 
@@ -729,7 +801,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the 609 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
