@@ -3,6 +3,7 @@ import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
 import { readJson, validateBody } from "@/lib/validate";
+import { rowAfterWrite, scoredWriteData } from "@/lib/lead-score";
 import { LEAD_ADD_TO_LIST, LEAD_PATCH } from "@/lib/fields";
 
 export const dynamic = "force-dynamic";
@@ -27,9 +28,9 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   const raw = await readJson(request);
   if (!raw.ok) return raw.error;
 
-  const _owned = await prisma.lead.findUnique({ where: { id }, select: { workspaceId: true } });
-  if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  await assertOwns(request, _owned.workspaceId);
+  const before = await prisma.lead.findUnique({ where: { id } });
+  if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  await assertOwns(request, before.workspaceId);
 
   // The three array columns are spread by mergeLeads, so a scalar accepted here
   // becomes a 500 in some later merge, and each field is only touched when the
@@ -40,7 +41,23 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   const input = validateBody(raw.body, LEAD_PATCH, { requireWrite: true });
   if (!input.ok) return input.error;
 
-  const lead = await prisma.lead.update({ where: { id }, data: input.data });
+  // A person's `score` lands in `scoreOverride`, never in `Lead.score`: the
+  // number the whole app sorts by is computed by `lib/lead-score.ts` from this
+  // row, of which the override is one input. The response carries both the 82
+  // someone typed and the 44 the row's signals earned, because a buyer who asks
+  // "why is this at the top of my list?" is owed the difference, not a number
+  // that hides it. `score: null` gives the override back and the score falls to
+  // the arithmetic.
+  const { score, ...fields } = input.data;
+  const scoreOverride = score === undefined ? before.scoreOverride : score;
+  const lead = await prisma.lead.update({
+    where: { id },
+    data: {
+      ...fields,
+      scoreOverride,
+      ...scoredWriteData(rowAfterWrite(before, { ...fields, scoreOverride })),
+    },
+  });
   return NextResponse.json(lead);
 }
 

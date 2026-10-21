@@ -22,9 +22,11 @@
  *   string where `technologies` is an array) is dropped rather than coerced: the log
  *   row carries what the provider said, so a mismatch is visible instead of quietly
  *   reshaped into something that looks like data.
- * - **`score` and `status` are not the enrichment's to invent.** The score stays
- *   whatever the workspace set — the number a buyer sorts the list by is not a
- *   byproduct of a call to a third party. `status` moves in exactly one direction:
+ * - **`score` is recomputed, never received.** A visit may fill the columns the
+ *   score is made of, so the score follows them — through `lib/lead-score.ts`,
+ *   which owns that arithmetic. Nothing here takes a score from a provider: a
+ *   third party's guess about a company is not the number a buyer sorts a list by.
+ *   `status` moves in exactly one direction:
  *   a lead that was `NEW` and gained a field is now what the schema's own word for
  *   that calls `ENRICHED`. A qualified, contacted, converted or rejected lead is
  *   never pulled back to an enrichment status by a background job, and `UNKNOWN`
@@ -37,13 +39,16 @@
  */
 
 import type { Prisma } from "@/generated/prisma/client";
+import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
 /**
  * The columns an enrichment may fill. Absent on purpose: `id`, `workspaceId`,
- * `sourceId`, `sourceRef`, `score`, `status`, `tags`, `validationResults`,
- * `lastContactedAt`, `createdAt` and `updatedAt` — the first group belongs to the
- * row's identity and the rest to workspaces, lists, validation and the sales
- * process, none of which is a provider's business.
+ * `sourceId`, `sourceRef`, `status`, `tags`, `validationResults`,
+ * `lastContactedAt`, `createdAt` and `updatedAt`, and the three columns
+ * `lib/lead-score.ts` owns (`score`, `scoreOverride`, `scoreBreakdown`) — the first
+ * group belongs to the row's identity, the rest to workspaces, lists, validation
+ * and the sales process, and a provider's business is none of them. A visit fills
+ * signal columns and the score follows; it does not receive a number.
  */
 export const ENRICH_WRITABLE = [
   "email",
@@ -108,19 +113,23 @@ function fits(column: string, value: unknown): boolean {
 }
 
 /**
- * The update a visit should perform, or the honest small one it should
+ * The update a visit should perform, or the honest small one it should perform
+ * when it learned nothing.
  *
  * `result` is what the providers agreed on; anything that is not a writable column
  * (`confidence`, a provider's raw payload, a name typed by someone who read a
- * different product's docs) is not written anywhere near the row.
+ * different product's docs) is not written anywhere near the row. The score is
+ * written by every plan, from the row as the plan leaves it: filling a column that
+ * the score is made of and leaving the number stale would put the buyer's sort
+ * order behind the data it is supposed to reflect.
  */
 export function planEnrichmentWrite(lead: EnrichableLead, result: Record<string, unknown> | null | undefined): EnrichmentPlan {
   const data: Record<string, unknown> = { lastEnrichedAt: new Date() };
   const written: string[] = [];
-  if (result === null || result === undefined) return { data, written, logStatus: "PARTIAL" };
+  const answers = result ?? {};
 
   for (const column of ENRICH_WRITABLE) {
-    const value = result[column];
+    const value = answers[column];
     if (value === undefined || value === null) continue;
     if (holds(lead[column])) continue;
     if (!fits(column, value)) continue;
@@ -133,5 +142,12 @@ export function planEnrichmentWrite(lead: EnrichableLead, result: Record<string,
   // row into it. Only from `NEW`, and only when a column actually filled.
   if (written.length > 0 && lead.status === "NEW") data.status = "ENRICHED";
 
-  return { data: data as Prisma.LeadUpdateInput, written, logStatus: written.length > 0 ? "SUCCESS" : "PARTIAL" };
+  // The row as this plan leaves it, which is what the score has to be computed
+  // from — computing it from `lead` would stamp the visit with the number the
+  // signals *before* the visit were worth.
+  return {
+    data: { ...data, ...scoredWriteData(rowAfterWrite(lead, data)) } as Prisma.LeadUpdateInput,
+    written,
+    logStatus: written.length > 0 ? "SUCCESS" : "PARTIAL",
+  };
 }

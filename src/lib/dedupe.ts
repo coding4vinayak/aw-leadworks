@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
 export interface DedupeConfig {
   strategy: "email" | "phone" | "linkedin" | "company_name" | "fuzzy";
@@ -290,7 +291,14 @@ async function mergeRecords(master: any, duplicate: any, action: string, jobId: 
   if (action === "merge") {
     const updates = planMerge(master, duplicate);
     if (Object.keys(updates).length > 0) {
-      await prisma.lead.update({ where: { id: master.id }, data: updates });
+      // The survivor gained the duplicate's signals, so its score is the one the
+      // merged row earns. `score` is not in `MERGE_SCALARS`: a merged lead does not
+      // inherit a number, it re-earns one. (`flag` writes a tag, and a tag is not a
+      // signal the score reads, so that branch leaves the number alone.)
+      await prisma.lead.update({
+        where: { id: master.id },
+        data: { ...updates, ...scoredWriteData(rowAfterWrite(master, updates)) },
+      });
     }
     await prisma.lead.delete({ where: { id: duplicate.id } });
     return;

@@ -35,6 +35,7 @@ import { LEAD_SENIORITIES, LEAD_STATUSES } from "../../src/lib/enums";
 import { seniorityFromTitle, seniorityTableRungs } from "../../src/lib/seniority";
 import { ENRICHMENT_PROVIDERS, normalizeProviders, providersProblem } from "../../src/lib/enrichment-providers";
 import { ENRICH_WRITABLE, planEnrichmentWrite, type EnrichableLead } from "../../src/lib/enrich-plan";
+import { readScoreLedger } from "../../src/lib/lead-score";
 
 const at = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -296,26 +297,44 @@ describe("planEnrichmentWrite: what a visit may put in the row", () => {
     assert.deepEqual(plan.data.technologies, ["React"]);
   });
 
-  it("never carries a value that is not a column", () => {
+  it("carries no value that is not a column, and none of the score's columns by name", () => {
     const plan = planEnrichmentWrite(importedLead(), {
       seniority: "DIRECTOR",
       confidence: 0.9,
       score: 5,
+      scoreOverride: 5,
       someWeirdKey: "x",
       enrichmentId: "evt_1",
     });
+    // `lead-score.ts` owns three columns and writes them through its own helper; a
+    // provider may not name them, and nothing else may appear in the update.
+    const SCORE_OWNED = ["score", "scoreBreakdown", "scoredAt"];
     const keys = Object.keys(plan.data);
     for (const key of keys) {
-      assert.ok(key === "lastEnrichedAt" || (ENRICH_WRITABLE as readonly string[]).includes(key) || key === "status", `wrote ${key}`);
+      assert.ok(
+        key === "lastEnrichedAt" || (ENRICH_WRITABLE as readonly string[]).includes(key) || key === "status" || SCORE_OWNED.includes(key),
+        `wrote ${key}`,
+      );
     }
     assert.ok(!keys.includes("confidence"));
     assert.ok(!keys.includes("someWeirdKey"));
+    assert.notEqual(plan.data.score, 5, "a provider's number is not the score");
   });
 
-  it("never touches the score", () => {
-    const plan = planEnrichmentWrite(importedLead({ score: 82, seniority: null }), { seniority: "DIRECTOR", score: 5 });
-    assert.equal(plan.data.score, undefined);
-    assert.equal(plan.written.length, 1);
+  it("receives no score, and writes the one the row earns", () => {
+    // #30 moved this column from "not the enrichment's to invent" to "not the
+    // enrichment's to receive": a visit fills signal columns, and a score that did
+    // not follow them would put the buyer's sort order behind the data.
+    const earned = planEnrichmentWrite(importedLead({ seniority: null, scoreOverride: null }), { seniority: "DIRECTOR", score: 5 });
+    assert.equal(earned.written.length, 1);
+    assert.equal(earned.data.score, 37, "email 15 + company 10 + title 6 + seniority 6");
+    assert.equal(readScoreLedger(earned.data.scoreBreakdown)!.basis, "signals");
+
+    const typed = planEnrichmentWrite(importedLead({ seniority: null, score: 0, scoreOverride: 82 }), { seniority: "DIRECTOR" });
+    assert.equal(typed.data.score, 82, "a person's number outranks the arithmetic");
+    const ledger = readScoreLedger(typed.data.scoreBreakdown)!;
+    assert.equal(ledger.basis, "override");
+    assert.equal(ledger.computed, 37, "and the row still shows what it earns beside it");
   });
 
   it("drops a value whose shape the column cannot hold, rather than coercing it", () => {

@@ -9,6 +9,7 @@ import { ApiKeyOnboarding } from "@/components/api-key-onboarding";
 import { AiPanel, type AiField } from "@/components/ai-panel";
 import { ManageBillingButton } from "@/components/manage-billing";
 import { CsvImport } from "@/components/csv-import";
+import { computeLeadScore, readScoreLedger, type ScoreBreakdown, type ScoreableLead } from "@/lib/lead-score";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +63,25 @@ type SubscriptionState = {
  * rendered on the server, so the countdown is fixed at render time and the text
  * must come from one place that React's purity rule accepts.
  */
+/**
+ * The terms a score was made of: the ledger the last writer stamped on the row, or
+ * the same arithmetic read off the row when it carries none (a lead written before
+ * `lib/lead-score.ts` existed has a `score` and no breakdown).
+ */
+function scoreLedger(lead: ScoreableLead & { scoreBreakdown?: unknown }): ScoreBreakdown {
+  return readScoreLedger(lead.scoreBreakdown) ?? computeLeadScore(lead).breakdown;
+}
+
+/** The three biggest terms, the checks' penalty if there is one, and nothing else. */
+function scoreTermsLabel(ledger: ScoreBreakdown): string {
+  if (ledger.basis === "override" && ledger.override !== null) {
+    return `typed ${ledger.override} · the row earns ${ledger.computed}`;
+  }
+  const parts = ledger.earned.slice(0, 3).map((term) => `${term.column} ${term.points}`);
+  if (ledger.penalty < 0) parts.push(`checks ${ledger.penalty}`);
+  return parts.length ? parts.join(" · ") : "no signals yet";
+}
+
 function daysUntil(periodEnd: Date | null): number | null {
   if (!periodEnd) return null;
   return Math.max(0, Math.ceil((periodEnd.getTime() - Date.now()) / 86_400_000));
@@ -185,11 +205,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       orderBy: { createdAt: "desc" },
       take: 10,
     }),
+    // No `select`: the row is what the score is made of, and this table now shows
+    // the terms beside the number. Ten rows.
     prisma.lead.findMany({
       where: { workspaceId: workspace.id },
       orderBy: { score: "desc" },
       take: 10,
-      select: { id: true, email: true, firstName: true, lastName: true, company: true, title: true, score: true, status: true },
     }),
   ]);
 
@@ -232,7 +253,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         )}
 
         <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">Top leads by score</h2>
+          <h2 className="text-lg font-bold text-gray-900 mb-1">Top leads by score</h2>
+          <p className="text-xs text-gray-500 mb-4">
+            How much this workspace knows about each row — its address, its name, its company, its
+            signals — not how important the person is. The terms under each number are the ones the
+            score was computed from; the full list is on the lead.
+          </p>
           {topLeads.length === 0 ? (
             <p className="text-sm text-gray-500">No leads yet. {session && resolved.via === "session" ? "Import a CSV above, run a source, or " : "Run a source or "}<code>POST /api/leads</code>.</p>
           ) : (
@@ -242,7 +268,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                   <tr className="text-left text-gray-500">
                     <th className="pb-2 pr-4 font-medium">Name</th>
                     <th className="pb-2 pr-4 font-medium">Company</th>
-                    <th className="pb-2 pr-4 font-medium">Score</th>
+                    <th className="pb-2 pr-4 font-medium">Score · made of</th>
                     <th className="pb-2 font-medium">Status</th>
                   </tr>
                 </thead>
@@ -253,7 +279,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                         {[l.firstName, l.lastName].filter(Boolean).join(" ") || l.email || "—"}
                       </td>
                       <td className="py-3 pr-4 text-gray-600">{l.company ?? "—"}{l.title ? ` · ${l.title}` : ""}</td>
-                      <td className="py-3 pr-4 text-gray-900 font-semibold">{l.score}</td>
+                      <td className="py-3 pr-4">
+                        <span className="text-gray-900 font-semibold">{l.score}</span>
+                        <span className="block text-xs text-gray-500">{scoreTermsLabel(scoreLedger(l))}</span>
+                      </td>
                       <td className="py-3"><Badge tone={statusTone(l.status)}>{l.status}</Badge></td>
                     </tr>
                   ))}
@@ -298,7 +327,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             config={{
               title: "Explain a lead score",
               blurb:
-                "LeadWorks already computes the score from enrichment signals. This reads it back in plain English, and says what is missing that would raise it. The score itself is never changed.",
+                "LeadWorks computes the score from the row's own signals and stamps the terms it used on the lead. This reads that arithmetic back in plain English, and says what is missing that would raise it. The score itself is never changed.",
               endpoint: "/api/ai/explain-lead",
               method: "GET",
               entityLabel: "Lead",
@@ -312,6 +341,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             }}
             fields={[
               { path: "score", title: "Deterministic score" },
+              { path: "breakdown.basis", title: "Where the number came from" },
+              { path: "breakdown.missing", title: "Signals the row does not hold", list: true },
               { path: "explanation.summary", title: "Why" },
               { path: "explanation.reasons", title: "Signals that drove it", list: true },
               { path: "explanation.gaps", title: "What is missing", list: true },

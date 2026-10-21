@@ -4,6 +4,7 @@ import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { resolveAiActor, withAiAuth } from "@/lib/ai-actor";
 import { isLlmConfigured } from "@/lib/llm";
 import { explainLeadScore } from "@/lib/ai-score";
+import { computeLeadScore, readScoreLedger } from "@/lib/lead-score";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,12 @@ export const dynamic = "force-dynamic";
  * Explains the score LeadWorks already computed. Read-only: the response
  * carries the deterministic score alongside the model's reasoning so a rep can
  * always see the number that actually drives the queue.
+ *
+ * The arithmetic comes back with it. `lib/lead-score.ts` stamps every write with
+ * the terms it used, and this route also computes the row's score again from what
+ * the row holds now: the two are the same for any lead this build wrote, and where
+ * they differ — a row this build has never written, whose score is still the column
+ * default — `stale: true` says so rather than presenting one number as the other.
  */
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -58,12 +65,24 @@ async function GET_impl(request: Request) {
     }
   }
 
+  // The arithmetic, from the row. `stamped` is what the last writer left on the
+  // lead; when the row predates the module the same function answers for it now, so
+  // the buyer is never handed a number with no terms beside it.
+  const live = computeLeadScore(lead);
+  const ledger = readScoreLedger(lead.scoreBreakdown) ?? live.breakdown;
+  const arithmetic = {
+    score: lead.score,
+    scoredAt: lead.scoredAt,
+    stale: lead.score !== live.score,
+    breakdown: ledger,
+  };
+
   if (!isLlmConfigured()) {
     return NextResponse.json({
       explained: false,
       configured: false,
-      score: lead.score,
-      reason: "No LLM_API_KEY set — the deterministic score is unaffected and still returned.",
+      ...arithmetic,
+      reason: "No LLM_API_KEY set — this is LeadWorks' own arithmetic, every term in it, and the score it produced.",
     });
   }
 
@@ -87,7 +106,7 @@ async function GET_impl(request: Request) {
     return NextResponse.json(
       {
         explained: false,
-        score: lead.score,
+        ...arithmetic,
         reason: "The model was unreachable or returned nothing usable. The score stands.",
       },
       { status: 502 },
@@ -97,7 +116,7 @@ async function GET_impl(request: Request) {
   return NextResponse.json({
     explained: true,
     // The number that actually drives the queue, not the model's opinion of it.
-    score: lead.score,
+    ...arithmetic,
     explanation: {
       summary: explanation.summary,
       reasons: explanation.reasons,

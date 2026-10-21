@@ -63,7 +63,7 @@ test("normalizePhone sees through the spellings a CRM actually stores", () => {
 
 test("the three actions are real write paths, not comments", () => {
   assert.match(src, /planMerge\(master, duplicate\)/, "merge plans the update");
-  assert.match(src, /await prisma\.lead\.update\(\{ where: \{ id: master\.id \}, data: updates \}\)/, "merge writes the enriched master");
+  assert.match(src, /await prisma\.lead\.update\([\s\S]*?where:\s*\{ id: master\.id \}[\s\S]*?scoredWriteData\(rowAfterWrite\(master, updates\)\)/, "merge writes the enriched master, and the score the merged row earns");
   assert.match(src, /await prisma\.lead\.delete\(\{ where: \{ id: duplicate\.id \} \}\)/, "merge and delete remove the duplicate");
   assert.match(src, /tags: \[\.\.\.new Set\(\[\.\.\.tags, "duplicate"\]\)\]/, "flag tags the duplicate");
   assert.match(src, /duplicateOf: master\.id, jobId/, "flag leaves the pairing on the timeline");

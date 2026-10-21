@@ -1,5 +1,12 @@
 import { prisma } from "./db";
+import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
+/**
+ * `flag` and `score_down` are one thing now: the validator records what failed on
+ * the row, and `lib/lead-score.ts` prices the recorded failures. Both words are
+ * still accepted, and neither is a subtraction this worker performs — see the note
+ * in `runValidateJob`. `remove` deletes the row instead of recording on it.
+ */
 export interface ValidateConfig {
   checks: ("email_format" | "email_deliverability" | "phone_format" | "phone_carrier" | "linkedin_format" | "linkedin_exists" | "company_exists" | "domain_valid")[];
   action?: "flag" | "remove" | "score_down";
@@ -22,19 +29,34 @@ export async function runValidateJob(jobId: string): Promise<void> {
       const results = await validateLead(lead, config);
       const failedChecks = results.filter(r => !r.valid);
 
-      if (failedChecks.length > 0) {
+      if (failedChecks.length > 0 && config.action === "remove") {
+        // The row is gone, so there is nothing left to record on it. Measured
+        // before: the delete ran and then this same loop wrote `validationResults`
+        // to the deleted id, Prisma threw P2025, the catch counted the lead in
+        // `failedItems` and the job reported COMPLETED having destroyed a lead it
+        // claims it could not process.
+        await prisma.lead.delete({ where: { id: lead.id } });
         flagged++;
-        if (config.action === "remove") {
-          await prisma.lead.delete({ where: { id: lead.id } });
-        } else if (config.action === "score_down") {
-          await prisma.lead.update({ where: { id: lead.id }, data: { score: Math.max(0, lead.score - failedChecks.length * 10) } });
-        }
+        validated++;
+        continue;
       }
 
+      // One write, and the score is recomputed rather than decremented.
+      // `validationResults` is overwritten here, which is the only reason
+      // `lead-score.ts` can read it as an input: the score stays a function of the
+      // row, so checking the same data twice cannot lower it twice. The branch this
+      // replaces was `score: Math.max(0, lead.score - failedChecks.length * 10)`
+      // against whatever number the column held — a score that decayed once per
+      // validation run, always from the 0 every lead arrives with, so it could only
+      // ever stay 0.
       await prisma.lead.update({
         where: { id: lead.id },
-        data: { validationResults: results },
+        data: {
+          validationResults: results,
+          ...scoredWriteData(rowAfterWrite(lead, { validationResults: results })),
+        },
       });
+      if (failedChecks.length > 0) flagged++;
 
       validated++;
     } catch (error) {

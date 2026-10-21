@@ -1,6 +1,7 @@
 import { chromium, Browser, Page } from "playwright";
 import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
+import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
 export interface ScrapeConfig {
   url: string;
@@ -171,9 +172,12 @@ async function saveLead(workspaceId: string, sourceId: string | undefined, lead:
       : null;
 
     if (existing) {
+      // A scrape that changes the row's signals changes its score, in the same
+      // write. `rowAfterWrite` is the row as this update leaves it, because Prisma
+      // ignores the `undefined`s a scrape's missing fields arrive as.
       await prisma.lead.update({
         where: { id: existing.id },
-        data,
+        data: { ...data, ...scoredWriteData(rowAfterWrite(existing, data)) },
       });
       return true;
     }
@@ -186,6 +190,7 @@ async function saveLead(workspaceId: string, sourceId: string | undefined, lead:
         intentSignals: lead.intentSignals ?? [],
         tags: [],
         status: "NEW",
+        ...scoredWriteData(data),
       },
     });
     return true;
