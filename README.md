@@ -580,6 +580,7 @@ in either half of the audit; and running the same rule a second time logs `PARTI
 `beforeData {"seniority": "C_LEVEL"}`, both rows readable side by side on the lead. 10
 checks in this step, and the whole run against the round #33 build was **129 ✓ / 0 ✗**, exit 0;
 STEP 15 below prints the count against this one.
+checks in this step, and the whole run against this build is **129 ✓ / 0 ✗**, exit 0.
 
 What this does not claim: the abstaining provider and the pruned answer are *one* record,
 because in both cases nothing reached the plan. What separates them is the rule's own
@@ -728,7 +729,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 573 in the suite: the 28 in the suite: the 46 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
