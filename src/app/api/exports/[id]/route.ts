@@ -3,6 +3,7 @@ import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { asInputJson } from "@/lib/json";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
+import { retentionVerdict, retiredExportError } from "@/lib/export-retention";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,13 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
 
   if (action === "download") {
     if (!exportRecord.filePath) return NextResponse.json({ error: "File not found" }, { status: 404 });
+    // The same verdict the streaming route asks, from the same module: this door
+    // used to answer with a URL to a file it had already agreed to stop serving,
+    // so the caller's next request was where they learned. A retired export is
+    // refused here with the sentence the streaming route would have given it.
+    if (retentionVerdict(exportRecord.expiresAt) === "retired") {
+      return NextResponse.json({ error: retiredExportError(exportRecord.expiresAt) }, { status: 410 });
+    }
     return NextResponse.json({ downloadUrl: `/api/exports/${id}/download` });
   }
 
