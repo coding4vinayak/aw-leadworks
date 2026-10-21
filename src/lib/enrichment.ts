@@ -4,6 +4,7 @@ import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
 import { normalizeProviders } from "./enrichment-providers";
 import { crowdWhere, namedLeads } from "./lead-crowd";
+import { actionsProblem, readRuleActions, restrictToDeclared } from "./rule-actions";
 import { asInputJson } from "./json";
 import { seniorityFromTitle } from "./seniority";
 import { planEnrichmentWrite, type EnrichableLead } from "./enrich-plan";
@@ -11,6 +12,14 @@ import { PROVIDER_IMPLEMENTATIONS } from "./enrichment-providers-impl";
 
 export interface EnrichmentConfig {
   providers: string[];
+  /**
+   * The columns this job's rule asked for — its `actions.fields`, copied in by the
+   * door that queued it (`?action=run`, `scheduler.ts`, `runScheduledEnrichment`).
+   * An empty list is not "no columns": it is the rule saying nothing about which
+   * columns, which is how every job here was queued before the declaration was read,
+   * and it is what the single-lead door sends. What a visit may write at all is
+   * `lib/enrich-plan.ts`'s decision; this list can only narrow it further.
+   */
   fields: string[];
   confidenceThreshold?: number;
   /**
@@ -153,7 +162,13 @@ async function enrichLead(lead: any, config: EnrichmentConfig): Promise<Enrichme
   // Nothing answered, so there is nothing to record — not even a timestamp, which
   // would otherwise claim a visit that never happened.
   if (answered === 0) return null;
-  return results;
+  // The rule's declaration then narrows the answer: `actions.fields` names the
+  // columns this rule asked for, and a provider's opinion about any other column is
+  // not written into anybody's row. The visit itself is real and is still recorded —
+  // `lib/enrich-plan.ts` stamps it and logs `PARTIAL` with nothing in it, which is
+  // the honest shape of "a provider answered, the rule wanted something else". An
+  // empty list means the rule said nothing about columns, and nothing is removed.
+  return restrictToDeclared(results, config.fields);
 }
 
 async function enrichWithProvider(lead: any, provider: string, fields: string[]): Promise<Partial<EnrichmentResult> | null> {
@@ -244,6 +259,16 @@ export async function runScheduledEnrichment(): Promise<void> {
       console.warn(`Enrichment rule ${rule.id} skipped: conditions cannot be read — ${stored.problem}`);
       continue;
     }
+    // The rule's own words about what to perform, read the way the sweep reads them.
+    // This copy has no cadence check — `scheduler.ts` is the function the minute
+    // actually runs — but it must not queue a visit that ignores the columns the rule
+    // named, nor one whose declaration nothing can honour.
+    const performed = actionsProblem(rule.actions);
+    if (performed !== null) {
+      console.warn(`Enrichment rule ${rule.id} skipped: its actions cannot be performed — ${performed}`);
+      continue;
+    }
+    const declared = readRuleActions(rule.actions);
     const leads = await prisma.lead.findMany({
       where: leadWhere(rule.workspaceId, stored.conditions),
       take: 100,
@@ -252,7 +277,7 @@ export async function runScheduledEnrichment(): Promise<void> {
     if (leads.length > 0) {
       await runBulkEnrichment(rule.workspaceId, leads.map(l => l.id), {
         providers: (rule.providers as string[]) || [],
-        fields: [],
+        fields: declared.fields ?? [],
         conditions: stored.conditions,
         ruleId: rule.id,
       });

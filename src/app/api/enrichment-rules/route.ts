@@ -6,6 +6,7 @@ import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { RULE_CREATE } from "@/lib/fields";
 import { conditionsProblem, normalizeConditions } from "@/lib/rule-conditions";
+import { normalizeActions, ruleDeclarationProblem } from "@/lib/rule-actions";
 import { normalizeProviders, providersProblem } from "@/lib/enrichment-providers";
 
 export const dynamic = "force-dynamic";
@@ -55,11 +56,19 @@ async function POST_impl(request: Request) {
   const providerProblem = providersProblem(input.data.providers);
   if (providerProblem !== null) return NextResponse.json({ error: providerProblem }, { status: 400 });
 
+  // And the third half, which the schema spells "what enrichment to perform" and
+  // which nothing used to read: `{ enrich: ["companySize"] }` is a valid JSON object
+  // and a declaration no build performs, and a SCHEDULED rule without a cadence the
+  // sweep can match is stored active and never runs.
+  const declaredProblem = ruleDeclarationProblem(input.data.trigger, input.data.actions);
+  if (declaredProblem !== null) return NextResponse.json({ error: declaredProblem }, { status: 400 });
+
   const rule = await prisma.enrichmentRule.create({
     data: {
       workspaceId,
       ...input.data,
       conditions: asInputJson(normalizeConditions(input.data.conditions)),
+      actions: asInputJson(normalizeActions(input.data.actions)),
       providers: asInputJson(normalizeProviders(input.data.providers)),
     },
   });
