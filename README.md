@@ -676,6 +676,8 @@ what a starvation costs is visible as the absence of a job and of a `creditsUsed
 sentence explaining it is in the server's log, not in `EnrichmentLog`. What is on the record is
 who won, which is #33's pair beside the winner's name.
 stored as `"30 9 * * 1"`.
+stored as `"30 9 * * 1"` — 22 checks in this step, and the whole run against this build is
+**119 ✓ / 0 ✗**, exit 0.
 
 ## Score: one arithmetic, and who may change it
 
