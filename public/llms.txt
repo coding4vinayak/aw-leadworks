@@ -19,8 +19,15 @@ Key pages (base: https://leadworks.abetworks.in):
 
 What it does:
 - Intake for single and bulk leads; a duplicate is refused with HTTP 409
+- CSV import of a list you already have: header aliases, semicolon or tab
+  files, quoted and multi-line fields, and a downloadable report of every row
+  it refused and why
 - A validation trail (PASS/FLAG per check) records what was inspected
 - A dedupe sweep job keeps the workspace clean
+- Enrichment visits write only the fields a rule's conditions allow, and leave
+  the rest of the row alone
+- Every lead carries one 0-100 quality score, from one arithmetic, with a log
+  of what was inspected
 - CSV export for the CRM or ESP you already use
 - Signed webhooks: lead.created per lead and export.completed per export
   (x-webhook-signature, HMAC-SHA256)
