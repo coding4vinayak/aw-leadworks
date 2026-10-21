@@ -95,13 +95,18 @@ export async function runScheduledJobs(): Promise<void> {
         take: 100,
       });
 
+      // The 100 it just counted are the crowd. Carrying only `conditions` meant the
+      // worker re-derived the list itself with `take: 1000`, so a rule over a big
+      // workspace swept ten times the leads this tick decided to visit — and the row
+      // said nothing about either number.
       if (leads.length > 0) {
         const job = await prisma.job.create({
           data: {
             workspaceId: rule.workspaceId,
             type: "ENRICH",
             status: "PENDING",
-            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions), ruleId: rule.id },
+            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions), ruleId: rule.id, leadIds: leads.map((lead) => lead.id) },
+            totalItems: leads.length,
           },
         });
         await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });

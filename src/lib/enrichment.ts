@@ -3,8 +3,11 @@ import { queues, enqueue } from "./queue";
 import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
 import { normalizeProviders } from "./enrichment-providers";
+import { crowdWhere, namedLeads } from "./lead-crowd";
+import { asInputJson } from "./json";
 import { seniorityFromTitle } from "./seniority";
 import { planEnrichmentWrite, type EnrichableLead } from "./enrich-plan";
+import { PROVIDER_IMPLEMENTATIONS } from "./enrichment-providers-impl";
 
 export interface EnrichmentConfig {
   providers: string[];
@@ -18,6 +21,16 @@ export interface EnrichmentConfig {
    * JSON column like any other: this function decides what a bad one means.
    */
   conditions?: unknown;
+  /**
+   * The leads this job may visit, named by the door that queued it.
+   * `POST /api/leads/{id}?action=enrich` names the one person its URL carries, and
+   * the scheduler names the leads it counted into `totalItems`. Intersected with
+   * `conditions` rather than replacing it, so naming a lead can only ever narrow
+   * the crowd a rule declared. Read by `lib/lead-crowd.ts`, which is the same
+   * discipline the validator's `VALIDATE` job uses — a job config is a JSON column
+   * its caller wrote, and the workspace scope survives whatever the list holds.
+   */
+  leadIds?: unknown;
   /**
    * The rule that queued this job, carried in by `?action=run` and the scheduler.
    * It decides which workspace's rule page the visit shows up on, so it is checked
@@ -104,12 +117,16 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
 }
 
 async function getLeadsToEnrich(workspaceId: string, config: EnrichmentConfig): Promise<any[]> {
+  const crowd = namedLeads(config.leadIds);
   const stored = readStoredConditions(config.conditions);
   if (stored.problem !== null) {
     console.warn(`Enrichment job skipped: the conditions it carries cannot be read — ${stored.problem}`);
     return [];
   }
-  const leads = await prisma.lead.findMany({ where: leadWhere(workspaceId, stored.conditions), take: 1000 });
+  const leads = await prisma.lead.findMany({
+    where: crowdWhere(leadWhere(workspaceId, stored.conditions), crowd),
+    take: 1000,
+  });
   // The `where` and this predicate are two readings of one declaration, and what
   // comes back from here is a row the app is about to write to. Where a stored row
   // defeats the SQL translation — a `tags` column holding something other than the
@@ -140,37 +157,12 @@ async function enrichLead(lead: any, config: EnrichmentConfig): Promise<Enrichme
 }
 
 async function enrichWithProvider(lead: any, provider: string, fields: string[]): Promise<Partial<EnrichmentResult> | null> {
-  switch (provider) {
-    case "derive":
-      return deriveFromRow(lead, fields);
-    // The call sites a key belongs in. Each is dispatched; none of them returns a
-    // value, because an unconfigured provider that answers with an invented
-    // `industry: "SaaS"` writes fiction into a customer's row, which is worse than
-    // the silence these now keep. See `src/lib/enrichment-providers.ts`.
-    case "apollo":
-    case "clearbit":
-    case "hunter":
-    case "linkedin":
-    case "clearbit_company":
-    case "apollo_company":
-      return null;
-    default:
-      return null;
+  const impl = PROVIDER_IMPLEMENTATIONS[provider];
+  if (!impl) {
+    console.warn(`Unknown enrichment provider: ${provider}`);
+    return null;
   }
-}
-
-/**
- * The one provider that works without credentials: it reads the row the workspace
- * already has and answers with what that row states. A title naming a
- * `Director of Engineering` says a rung of `Lead.seniority` that nobody typed, and
- * `seniority.ts` abstains rather than guessing when the title is not in its table.
- * `fields` is the list the rule asked for; a derivation that is not on it is still
- * something the row already told us, so it is offered either way and the write plan
- * decides whether the column has a gap for it.
- */
-async function deriveFromRow(lead: any, _fields: string[]): Promise<Partial<EnrichmentResult>> {
-  const seniority = seniorityFromTitle(lead.title);
-  return seniority === null ? {} : { seniority };
+  return impl(lead, fields);
 }
 
 /** The rule a job may be logged against, or `null` when no rule of this workspace queued it. */
@@ -224,9 +216,14 @@ export async function runBulkEnrichment(workspaceId: string, leadIds: string[], 
   const job = await prisma.job.create({
     data: {
       workspaceId,
+      // The ids travel with the count. This function used to write
+      // `totalItems: leadIds.length` and pass the crowd only as an argument the
+      // worker never saw, so a job whose row promised 100 leads went and re-derived
+      // its own crowd from the rule's conditions — two answers to "how many did you
+      // visit" for one job.
       type: "ENRICH",
       status: "PENDING",
-      config,
+      config: asInputJson({ ...config, leadIds }),
       totalItems: leadIds.length,
     },
   });

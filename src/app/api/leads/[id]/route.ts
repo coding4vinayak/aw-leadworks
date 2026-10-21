@@ -70,12 +70,19 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     const _owned = await prisma.lead.findUnique({ where: { id }, select: { workspaceId: true } });
     if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
     await assertOwns(request, _owned.workspaceId);
+    // The id in the URL is the crowd. This door used to queue `where: { workspaceId }`
+    // with no lead at all, so one click on one row walked every lead in the workspace
+    // (measured: `processed=20` for a request naming 1 of 20), and it listed three
+    // providers that answer nothing without a key, so the sweep filled no column and
+    // left no stamp either. `derive` is the provider this build can actually run; the
+    // keyed names stay on the rule door, where an operator with a credential asks.
     const job = await prisma.job.create({
       data: {
         workspaceId: _owned.workspaceId,
         type: "ENRICH",
         status: "PENDING",
-        config: { providers: ["apollo", "clearbit", "hunter"], fields: [], confidenceThreshold: 0.5 },
+        config: { providers: ["derive"], fields: [], confidenceThreshold: 0.5, leadIds: [id] },
+        totalItems: 1,
       },
     });
     try {

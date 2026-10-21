@@ -50,3 +50,9 @@ services:
         sync: false       # optional; default gpt-4o-mini
       - key: LLM_TIMEOUT_MS
         sync: false       # optional; default 12000
+      - key: APOLLO_API_KEY
+        sync: false       # optional; Apollo.io API for enrichment
+      - key: CLEARBIT_API_KEY
+        sync: false       # optional; Clearbit API for enrichment
+      - key: HUNTER_API_KEY
+        sync: false       # optional; Hunter.io API for email verification

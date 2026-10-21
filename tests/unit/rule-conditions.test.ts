@@ -439,8 +439,11 @@ describe("the doors are wired, and the hardcoded set is gone", () => {
 
   it("selects in the worker from the job's config, and re-checks the row it will write", () => {
     const body = functionBody(enrichment, "getLeadsToEnrich")!;
+    assert.match(body, /namedLeads\(config\.leadIds\)/);
     assert.match(body, /readStoredConditions\(config\.conditions\)/);
-    assert.match(body, /where: leadWhere\(workspaceId, stored\.conditions\)/);
+    // The declaration decides the crowd and the named ids narrow it; neither replaces
+    // the other, and the workspace scope is in the base that gets narrowed.
+    assert.match(body, /where: crowdWhere\(leadWhere\(workspaceId, stored\.conditions\), crowd\)/);
     assert.match(body, /leads\.filter\(\(lead\) => leadMatches\(stored\.conditions, lead\)\)/);
     assert.ok(first(body, "return []") < first(body, "leadWhere"), "an unreadable blob never reaches the query");
   });
@@ -459,7 +462,9 @@ describe("the doors are wired, and the hardcoded set is gone", () => {
     // worker reads `config.conditions`. If either door stopped carrying it, every rule
     // would go back to enriching `NEW | ENRICHED` and the tests above would still pass.
     for (const [where, text] of [["scheduler.ts", scheduler], ["?action=run", ruleIdRoute]] as const) {
-      assert.match(around(text, 'type: "ENRICH"', 400), /conditions: asInputJson\(stored\.conditions\)/, where);
+      // Widened for #31: the scheduler's job config now carries the ids it counted
+      // beside the declaration, and the anchor lines sit further from it.
+      assert.match(around(text, 'type: "ENRICH"', 700), /conditions: asInputJson\(stored\.conditions\)/, where);
     }
   });
 
