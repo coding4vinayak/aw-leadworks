@@ -8,7 +8,8 @@ $49/month.
 
 Sources (web scrapers, APIs, CSV uploads, manual entry) feed jobs; jobs
 scrape, enrich, validate, dedupe and export. Every lead carries a 0–100
-quality score, enrichment provenance, and a validation trail.
+quality score, enrichment provenance, and a validation trail. The score is
+computed from the row's own signals by one module, which stores its work with it.
 
 ## Quick start
 
@@ -169,6 +170,7 @@ GET    /api/leads?workspaceId=             # list, filter status/minScore
 POST   /api/leads                          # create
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
 GET    /api/leads/{id}                     # detail + enrichment log
+PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below)
 POST   /api/leads/{id}?action=enrich       # enrich on demand
 GET    /api/lead-lists?workspaceId=        # lists
 POST   /api/lead-lists/{id}?action=add-leads|remove-leads
@@ -288,14 +290,19 @@ than from the row. And `EnrichmentLog.workspaceId` was the literal `""`.
 `src/lib/enrich-plan.ts` owns the write now, and `src/lib/enrichment.ts` uses it:
 
 - **A real column, into a gap, or nothing.** `ENRICH_WRITABLE` is the set of `Lead`
-  columns an enrichment may fill — `score`, `status`, `tags`, `validationResults`
-  and the row's identity are not in it. A field the row already holds is left
+  columns an enrichment may fill — `score`, `scoreOverride`, `scoreBreakdown`,
+  `scoredAt`, `status`, `tags`, `validationResults` and the row's identity are not in
+  it. A field the row already holds is left
   alone, so enrichment is additive and running it twice changes nothing. A value
   whose shape the column cannot hold (a bare string where `technologies` is a list
   of words) is dropped, not coerced; the log row still carries what the provider
   said.
-- **`score` is not the enrichment's to invent.** The number a buyer sorts the list
-  by stays whatever the workspace set it to.
+- **No score arrives, none is invented.** The plan rejects a provider that tried to
+  answer with `score`, because a vendor's return value is not a person's worth. What
+  the visit *does* move is the row's own number: the write goes through
+  `scoredWriteData`, so filling `seniority` from a title re-prices the lead by the
+  table in the section below — 57 for the `Managing Director` the demo runs, beside
+  the 82 someone typed.
 - **One status, earned.** A lead that was `NEW` and gained a field becomes
   `ENRICHED` — the schema's own word for it, and the only code in the product that
   moves a row into it. A qualified, contacted, converted or rejected lead is never
@@ -336,10 +343,75 @@ seniority, each carrying a score of 82 a person set. After one run of a rule lis
 `derive`, the `Managing Director` reads `C_LEVEL` and `ENRICHED` (not `DIRECTOR`,
 the word inside the title), the `Product Manager` whose seniority a rep typed as
 `VP` is untouched, and `Head of Growth` gained nothing and is not filed as
-`UNKNOWN`; all three carry the visit's stamp, all three scores are still 82, and the
+`UNKNOWN`; all three carry the visit's stamp, all three still read the 82 a person
+typed — held as an override, with the 57 the `Managing Director`'s own signals earned
+written beside it — and the
 rule's own log reads one `SUCCESS` with `fieldsEnriched: ["seniority"]` beside two
 `PARTIAL` with an empty list. A second run reaches the same three leads and fills
 nothing.
+
+## Score: one arithmetic, and who may change it
+
+`Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
+and a sentence in this README since the first migration, and no producer. Intake
+left it at the column default of 0; the CSV importer left it at 0; the only
+automatic write was the validator subtracting 10 per failed check from whatever
+number happened to be there, which for every lead meant from 0 — so the same three
+failed checks lowered it again on every run and it could never be anything else.
+Measured on this workspace: the three best-imported contacts sat at `score=0`
+holding an email, a company, a title, a location, a country and an industry.
+
+`src/lib/lead-score.ts` owns it now, and four rules decide it.
+
+- **The row's own signals, only.** `SCORE_TERMS` is 17 terms over 5 groups —
+  contact 30, identity 16, company 36, signals 14, provenance 4 — and the points
+  sum to exactly 100, so "0–100" is arithmetic rather than a clamp. Presence
+  earns; format does not. A `+4798abc` phone is a real phone signal worth 8 and a
+  failed `phone_format` worth −10, and both facts are on the row.
+- **A number a person typed is an input, not a write.** `PATCH /api/leads/{id}`
+  with `{score: 82}` stores 82 in `scoreOverride` and keeps the row's own total
+  beside it; `{score: null}` hands the number back to the arithmetic. `0` is a
+  real override, so it is read with `typeof … === "number"`, never `||`.
+  `POST /api/leads` declares no `score` at all: nobody can put a number in at
+  intake, and the door that does bound it to 0–100 and refuses a string.
+- **A failed check is a priced rule, not a side effect.** The validator records
+  `validationResults` and asks this module what the row is now worth. The record
+  is overwritten, not appended, which is the only reason re-running the same job
+  cannot lower the same failure twice.
+- **The work travels with the number.** Every write stores `scoreBreakdown` —
+  `basis`, `computed`, `override`, each earned term with its points and a
+  one-line `why`, each column that earned nothing — and `scoredAt`, in three
+  columns added by `20261021120000_lead_score_owner`. A ledger kept in
+  `customFields` would be caller-writable; these are not, and no door in
+  `src/lib/fields.ts` takes them.
+
+What the number measures gets said once, because the table invites the wrong
+reading: it is **how much this workspace knows about the person and the company**.
+Not rank — `UNKNOWN` earns 0 while `IC` and `C_LEVEL` both earn 6. Not outcome —
+`status` earns nothing. Not effort — tags earn nothing. Seven writers route
+through `scoredWriteData` (both lead doors, the CSV importer, the scraper's two
+branches, the validator, the dedupe merge, the enrichment plan), so a signal
+written anywhere moves the number, and the test that scans `src/**` for any other
+place that adds to or subtracts from a `score` expects to find none.
+
+Read path: `GET /api/ai/explain-lead` returns the number that sorts the list with
+the stored ledger and `stale: lead.score !== live.score`, model or no model; the
+dashboard's top-leads table prints the earned terms under the number, and for an
+override, `typed 82 · the row earns 96`.
+
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 477 in the suite: the
+table against the schema's own columns and its migration, the group totals, known
+answers for four hand-added rows, the override and its `0`, the `-0` a Json column
+would swallow, the ledger's round-trip, the seven writers scanned from source, the
+crowd a validation job may name, and the buyer's read path). The live proof is
+`demo/run-demo.sh leadworks` STEP 11, 37 assertions: four rows arrive at intake and
+come out priced 20 / 90 / 96 / 49 by the arithmetic in the insert — one of them
+having sent `score: 99` to a door that takes none; every ledger adds up to the
+number on its row; an imported CSV row arrives at 41; a typed 82 becomes an
+override that still shows the 96 the row earns, with 150 and `"82"` both 400; a
+company and title written later lift the thin row from 20 to 36; and one `VALIDATE
+… score_down` job named at those five rows prices two failed checks at −20 —
+16, 90, 96, 29, 21 — and the same job again returns the same five numbers.
 
 ## Webhooks (outbound)
 
@@ -376,7 +448,12 @@ call site, fails the suite.
 LeadWorks already computed alongside a plain-English explanation of *why*:
 strongest signals first, gaps that would raise the score, and the model's own
 confidence. Read-only — the score is never modified. Without `LLM_API_KEY`
-the score is still returned with `configured: false`.
+the score is still returned with `configured: false`, and with or without a model the
+answer carries the arithmetic too: `score`, `scoredAt`, `breakdown` (the stored ledger,
+or this module's live recomputation for a row predating it) and `stale`, which is
+`lead.score !== computeLeadScore(lead).score` — the honest way to admit a number nobody
+has re-priced. The demo run has no key and gets `score: 90`, `stale: false` and 15
+earned terms for the row STEP 11 created.
 
 Same key setup as LeadGenius (`LLM_API_KEY`, optional `LLM_BASE_URL`,
 `LLM_MODEL`, `LLM_TIMEOUT_MS`). Offline contract unit-tested in

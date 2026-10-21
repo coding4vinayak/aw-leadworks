@@ -244,16 +244,25 @@ function selectMasterRecord(group: any[], config: any): any {
   });
 }
 
+/**
+ * Which of two duplicates is the survivor: the one whose *contact* fields a rep
+ * could actually use. This is a tie-break between two rows, not `Lead.score`, and it
+ * is deliberately weighted differently from `lib/lead-score.ts` — reaching a person
+ * outranks knowing their industry there, and outranks it by more here, because a
+ * duplicate nobody can email is the worse survivor. Renamed out of `score` so the one
+ * arithmetic that prices a lead lives in one module; the test that pins that claim
+ * reads this file.
+ */
 function calculateCompleteness(lead: any): number {
-  let score = 0;
-  if (lead.email) score += 20;
-  if (lead.phone) score += 15;
-  if (lead.linkedinUrl) score += 15;
-  if (lead.firstName) score += 10;
-  if (lead.lastName) score += 10;
-  if (lead.company) score += 10;
-  if (lead.title) score += 10;
-  return score;
+  let reachable = 0;
+  if (lead.email) reachable += 20;
+  if (lead.phone) reachable += 15;
+  if (lead.linkedinUrl) reachable += 15;
+  if (lead.firstName) reachable += 10;
+  if (lead.lastName) reachable += 10;
+  if (lead.company) reachable += 10;
+  if (lead.title) reachable += 10;
+  return reachable;
 }
 
 /**
