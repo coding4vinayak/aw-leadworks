@@ -4,8 +4,15 @@ import { asInputJson, asRecord } from "./json";
 import { leadWhere, readStoredConditions } from "./rule-conditions";
 import { actionsProblem, readRuleActions } from "./rule-actions";
 import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
-import { planPurge, purgedExportLog } from "./export-retention";
-import { unlink } from "fs/promises";
+import {
+  censusLog,
+  planPurge,
+  purgedExportLog,
+  unclaimedExportFiles,
+  type DiskFile,
+  type UnclaimedCensus,
+} from "./export-retention";
+import { readdir, stat, unlink } from "fs/promises";
 
 /**
  * One minute's worth of the schedule: every active source, export profile and SCHEDULED
@@ -32,9 +39,13 @@ import { unlink } from "fs/promises";
  * One leg of the sweep queues nothing: it reclaims the bytes of exports whose `expiresAt`
  * has passed, `purgeRetiredExports()` below. It rides the same minute because retention is a
  * thing that has to happen even when nothing is due, it runs before the calendar so a disk
- * that misbehaves cannot cost the minute's work, and it is the only `unlink` in `src/` — the
- * decision over which paths qualify is `lib/export-retention.ts`'s `planPurge`, and this file
- * only ever acts on what that returns.
+ * that misbehaves cannot cost the minute's work, and the decision over which paths qualify is
+ * `lib/export-retention.ts`'s `planPurge` — this file only ever acts on what that returns.
+ *
+ * A second leg reads the disk and the table and deletes nothing: `logExportFileCensus()`
+ * counts the export-shaped files no row names and prints the number when it moves. `#36` left
+ * 24 of them uncounted and unmentioned, which is how a round gets to attribute a number it had
+ * never looked at.
  */
 export async function runScheduledJobs(): Promise<void> {
   const now = new Date();
@@ -48,6 +59,16 @@ export async function runScheduledJobs(): Promise<void> {
     await purgeRetiredExports(now);
   } catch (error) {
     console.warn(`Retired export purge did not run this minute: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  // Its own error, its own line, for the same reason: this one reads a directory and a table to
+  // produce a number, and a minute in which it cannot do either is still a minute the sources,
+  // profiles and rules are due for. It is the round's honesty leg — the count that #36 guessed at
+  // is now one the server prints.
+  try {
+    await logExportFileCensus(now);
+  } catch (error) {
+    console.warn(`Export file census did not run this minute: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // Find all active sources with schedules
@@ -194,7 +215,12 @@ export async function runScheduledJobs(): Promise<void> {
 export type PurgeReport = { removed: number; alreadyGone: number; refused: number; failed: number; considered: number };
 
 /**
- * The one `unlink` in this application. It reads the rows a retention could judge —
+ * One of this application's two `unlink` sites, and the only one that acts on a date. (The other
+ * is `DELETE /api/exports/{id}`, which takes a file with the row that named it, on request rather
+ * than on a schedule.) Both consult the same guard in `lib/export-retention.ts`, so "we only
+ * delete files this app wrote at a path of its own shape" is one rule with two callers.
+ *
+ * It reads the rows a retention could judge —
  * finished, stamped, dated — hands them to `planPurge` and deletes only what that returns,
  * so the path it removes has passed the date check and the `/tmp/export_<digits>.<ext>`
  * shape check in the pure module first. `filePath`, `fileSize` and the `COMPLETED` status all
@@ -230,6 +256,70 @@ export async function purgeRetiredExports(now: Date = new Date()): Promise<Purge
   }
 
   return report;
+}
+
+/**
+ * An export file, seen by name only. `unclaimedExportFiles` re-checks this shape against the
+ * absolute path it is handed; this filter exists so `/tmp`'s other 300-odd entries are never
+ * stat'ed for a count that is about exports.
+ */
+const EXPORT_FILE_NAME = /^export_\d+\.(csv|json|xlsx|pdf)$/;
+
+/**
+ * What is on the disk and not in the table: every `/tmp/export_<digits>.<ext>` no `Export` row
+ * names, plus the ones too young to judge. Read-only — this function cannot ask a question that
+ * deletes anything, and `unclaimedExportFiles` cannot answer one.
+ *
+ * A file with no row has no `expiresAt`, no `status` and no `workspaceId`. That is the reason the
+ * census is a log line and not a door: there is no retention to apply to it and no tenant whose
+ * authorization could be checked for it, and the in-flight window (a path exists 2.3-16.1 ms
+ * before the row that names it) means the set is not even stable to act on. So the app counts it,
+ * says the number out loud once a minute when it moves, and leaves the bytes to whoever owns them.
+ */
+export async function exportFileCensus(now: Date = new Date()): Promise<UnclaimedCensus> {
+  const [entries, rows] = await Promise.all([
+    readdir("/tmp", { withFileTypes: true }),
+    prisma.export.findMany({ select: { filePath: true } }),
+  ]);
+  const listed = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && EXPORT_FILE_NAME.test(entry.name))
+      .map(async (entry): Promise<DiskFile | null> => {
+        const path = `/tmp/${entry.name}`;
+        try {
+          return { path, bytes: (await stat(path)).size };
+        } catch {
+          // Reclaimed between the listing and the stat: there are no bytes here to count.
+          return null;
+        }
+      }),
+  );
+  const named = rows
+    .map((row) => row.filePath)
+    .filter((filePath): filePath is string => Boolean(filePath));
+  return unclaimedExportFiles(
+    listed.filter((file): file is DiskFile => file !== null),
+    named,
+    now,
+  );
+}
+
+let lastCensusLine: string | null = null;
+
+/**
+ * The sweep's visibility leg. The census runs every minute and prints when the sentence changes,
+ * because a number that has not moved is not news and 1,440 identical lines a day would bury the
+ * removals the same sweep logs. The first minute of any instance always prints: that is the point
+ * of the round — an operator who never saw this count now sees it without asking.
+ */
+export async function logExportFileCensus(now: Date = new Date()): Promise<UnclaimedCensus> {
+  const census = await exportFileCensus(now);
+  const line = censusLog(census);
+  if (line !== lastCensusLine) {
+    lastCensusLine = line;
+    console.info(line);
+  }
+  return census;
 }
 
 function shouldRunNow(cronExpression: string, now: Date): boolean {

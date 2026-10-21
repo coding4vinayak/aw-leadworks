@@ -79,9 +79,10 @@
  *      `/tmp/export_1792571592233.csv` at 4,195 bytes and `/tmp/export_1792571761063.csv`
  *      at 957, the rows still `COMPLETED`, still naming them, still answering 410;
  *   2. **51 files matching `/tmp/export_*` in total against 27 rows, so 24 of them are
- *      named by no row at all.** The source is `DELETE /api/exports/{id}`, which has always
- *   deleted the `Export` row and nothing else — the file is orphaned the moment the row that
- *      is the only index to it is gone;
+ *      named by no row at all.** This round blamed `DELETE /api/exports/{id}`; the section
+ *      below measures that claim and replaces it — the residue is a table emptied inside one
+ *      hour, and the door that deletes a row had never been walked here. Either way the file
+ *      is orphaned the moment the row that is the only index to it goes;
  *   3. **0 rows whose file was missing**, i.e. the missing-file 410 had never actually fired
  *      in this database; and
  *   4. `grep` over `src/`: four sites write a `/tmp/export_<millis>.<ext>`, and **zero
@@ -125,6 +126,42 @@
  * also does not clear `filePath`, shrink the row, or add a column: the row is the audit
  * record of an export that happened, and "the file it wrote is no longer here" is a fact the
  * date already tells.
+ *
+ * ## #37 — a deleted row takes its file, and the files with no row stop being invisible
+ *
+ * The two non-goals above are the same object seen from both doors, and measuring them corrected
+ * a sentence this file shipped with. It named `DELETE /api/exports/{id}` as the source of the 24
+ * orphans. The table says otherwise: `Job` rows of type `EXPORT` number **60 against 29 `Export`
+ * rows**, and **all 31** of the jobs naming an `exportId` that has no row were created inside the
+ * single hour **2026-10-17 07:00**, **24** of them `COMPLETED` — that 24, in the same five
+ * minutes (07:40–07:45) the orphan mtimes occupy. The demo never calls `DELETE` on an export and
+ * its first export code was committed roughly three hours after that window, no test calls the
+ * four writers, and three sampled orphans have `atime == mtime`, so nobody ever downloaded them
+ * either. The residue is therefore **job history from a window in which the table was emptied**,
+ * and `DELETE`'s measured contribution to it is *zero rows in this database* — the honest version
+ * of "the door that deletes a row leaves its file behind" being that the door had never been
+ * walked here. That is a statement about the data, not a proof about the code: the door would
+ * have left the file, and it still would have until this round.
+ *
+ * So `planRowDelete(filePath)` is the same shape question `planPurge` asks, with the same two
+ * reasons for saying no, asked by `DELETE /api/exports/{id}` after it has removed the row and
+ * before it touches the disk. The order is the round's only new mechanism and it is chosen out
+ * of the two failures available: a row that outlives its file is a download door pointing at
+ * nothing — the state the operating system used to produce by reclaiming `/tmp`, and the reason
+ * `#35` had to write a second 410 sentence for it — while a file that outlives its row is the
+ * state this directory is already full of. One is a broken promise to a caller and the other is
+ * 65,996 bytes answering to nobody, so the row goes first and a failed `unlink` is reported in
+ * the response rather than retried, rolled back, or hidden behind `{ ok: true }`.
+ *
+ * `unclaimedExportFiles(files, namedPaths, now)` makes the other half visible: it counts, and it
+ * is the only function in this file that returns no instruction to delete anything. A file with
+ * no row has no `expiresAt`, no `status` and — decisively — no `workspaceId`, so there is no
+ * policy to apply to it and no tenant for a door to answer it to; the number goes to the
+ * server's stdout, not to an API. It also sets aside the files whose own name is younger than
+ * `IN_FLIGHT_GRACE_MS`, because the path is built before the row that names it is written: the
+ * gap between the millisecond in a filename and its row's `completedAt`, measured across the 25
+ * live rows, is **2.3–16.1 ms**. A "delete what no row names" sweep would be deleting exports
+ * being born, which is why that idea stays out of the code and the count stays in the log.
  */
 
 /** The promise the product makes when the operator says nothing: a week. */
@@ -270,4 +307,95 @@ export function planPurge(
  */
 export function purgedExportLog(target: PurgeTarget): string {
   return `Export ${target.id}: retired file removed at ${target.filePath} (retired on ${target.expiresAt.toISOString()})`;
+}
+/**
+ * #37 — the two answers `DELETE /api/exports/{id}` may give about the bytes its row named,
+ * spelled with the words `planPurge` already uses so "a path this application wrote" stays one
+ * rule in one file. `"served"` and `"unstamped"` are absent because deleting a row is not a
+ * retention decision: an export one minute from its date is still deleted when its caller asks,
+ * and the date governs serving, not recordkeeping.
+ */
+export type RowDeleteSkip = Extract<PurgeReason, "no file" | "path is not an export artifact">;
+
+export type RowDeletePlan =
+  | { action: "unlink"; filePath: string }
+  | { action: "none"; reason: RowDeleteSkip };
+
+/**
+ * What the door may do with the path a deleted row carried. `none` is not a refusal of the
+ * delete — by the time this is acted on the row is gone — it is a file deliberately left where it
+ * is, reported to the caller as such.
+ */
+export function planRowDelete(filePath: string | null | undefined): RowDeletePlan {
+  if (!filePath) return { action: "none", reason: "no file" };
+  if (!isExportArtifact(filePath)) return { action: "none", reason: "path is not an export artifact" };
+  return { action: "unlink", filePath };
+}
+
+/** A file a directory listing can offer, with the one fact a `stat` adds. */
+export type DiskFile = { path: string; bytes: number };
+
+/**
+ * How young an unclaimed artifact has to be before this counts it as possibly still being written
+ * rather than as residue. Generous by a factor of ~4,000 over the largest measured gap (16.1 ms)
+ * because the cost of being wrong is deleting someone's export mid-flight, and the cost of
+ * waiting a minute is a census that says one fewer, once.
+ */
+export const IN_FLIGHT_GRACE_MS = 60_000;
+
+/**
+ * The instant an artifact path names — the `Date.now()` its writer interpolated — or null for a
+ * path the four writers cannot produce. Reading the stamp out of the name is what lets the census
+ * judge age without trusting, or needing, a `stat`'s timestamps.
+ */
+export function artifactStamp(filePath: string): number | null {
+  if (!isExportArtifact(filePath)) return null;
+  const stamped = /^\/tmp\/export_(\d+)\./.exec(filePath);
+  if (!stamped) return null;
+  const ms = Number(stamped[1]);
+  return Number.isSafeInteger(ms) ? ms : null;
+}
+
+export type UnclaimedCensus = {
+  /** files shaped like exports, named by no row, old enough to have been named by one */
+  files: DiskFile[];
+  bytes: number;
+  /** unclaimed files inside `IN_FLIGHT_GRACE_MS`: an export being born, not an orphan */
+  inFlight: number;
+};
+
+/**
+ * Count them. Nothing here deletes: `planPurge` and `planRowDelete` act on a row's own date and a
+ * row's own path, and a file with no row has neither, so there is no decision to make about it —
+ * only a number worth seeing, which is what the minute sweep logs.
+ */
+export function unclaimedExportFiles(
+  files: readonly DiskFile[],
+  namedPaths: Iterable<string>,
+  now: Date = new Date(),
+  graceMs: number = IN_FLIGHT_GRACE_MS,
+): UnclaimedCensus {
+  const named = new Set(namedPaths);
+  const unclaimed: DiskFile[] = [];
+  let bytes = 0;
+  let inFlight = 0;
+  for (const file of files) {
+    if (named.has(file.path)) continue;
+    const stamp = artifactStamp(file.path);
+    if (stamp === null) continue;
+    if (now.getTime() - stamp < graceMs) {
+      inFlight += 1;
+      continue;
+    }
+    unclaimed.push(file);
+    bytes += file.bytes;
+  }
+  return { files: unclaimed, bytes, inFlight };
+}
+
+/** The sweep's one sentence about the files it is leaving alone, and the reason it leaves them. */
+export function censusLog(census: UnclaimedCensus): string {
+  const young = census.inFlight > 0 ? `, ${census.inFlight} named by a timestamp too new to judge` : "";
+  return `Export file census: ${census.files.length} files shaped like exports in /tmp are named by no row `
+    + `(${census.bytes} bytes${young}) — left alone: no row, so no expiry, no status and no workspace to decide from`;
 }
