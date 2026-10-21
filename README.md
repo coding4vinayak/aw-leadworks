@@ -268,9 +268,78 @@ refused 400 by name, then four accepted rules visiting 2, 2, 0 and 0 leads out o
 the 24 NEW leads the workspace holds: a tag, that tag AND a seniority that fits,
 that tag AND a seniority that cannot, and the same tag written in capitals — is
 `demo/run-demo.sh leadworks` STEP 9. What that step measures is *reach*: which
-leads a rule puts in front of the worker. The provider stubs do not write a row
-yet, so a visited lead lands in the job's `failedItems` and the step prints
-`processed=0, failed=2` rather than dressing it up.
+leads a rule puts in front of the worker, read off the job's own per-lead
+counters. What a visit then writes is the next section, and STEP 10.
+
+## Enrichment: what a visit may write
+
+The rule decides the crowd; the provider decides the value; and until this round
+the write itself was broken in a way no counter showed. `enrichLead` returned the
+providers' answers plus a `confidence` number, `updateLeadEnrichment` spread that
+straight into `prisma.lead.update`, and `Lead` has no `confidence` column — so
+Prisma refused the whole update, every lead a rule named landed in
+`Job.failedItems`, and the row kept `lastEnrichedAt: null`. Measured against the
+running app: `processed=0, failed=2` for a rule aimed at two leads, enrichment
+writing nothing for anybody while reporting itself as failing. Had the spread not
+thrown, the same line would have written `score: 5` over a lead whose real signals
+earned 82, because the score was computed from the provider's return value rather
+than from the row. And `EnrichmentLog.workspaceId` was the literal `""`.
+
+`src/lib/enrich-plan.ts` owns the write now, and `src/lib/enrichment.ts` uses it:
+
+- **A real column, into a gap, or nothing.** `ENRICH_WRITABLE` is the set of `Lead`
+  columns an enrichment may fill — `score`, `status`, `tags`, `validationResults`
+  and the row's identity are not in it. A field the row already holds is left
+  alone, so enrichment is additive and running it twice changes nothing. A value
+  whose shape the column cannot hold (a bare string where `technologies` is a list
+  of words) is dropped, not coerced; the log row still carries what the provider
+  said.
+- **`score` is not the enrichment's to invent.** The number a buyer sorts the list
+  by stays whatever the workspace set it to.
+- **One status, earned.** A lead that was `NEW` and gained a field becomes
+  `ENRICHED` — the schema's own word for it, and the only code in the product that
+  moves a row into it. A qualified, contacted, converted or rejected lead is never
+  pulled back by a background job.
+- **A visit that learned nothing says so.** `lastEnrichedAt` is the honest stamp of
+  "the worker looked at this row", so it is written either way, and the log's
+  status is `PARTIAL` when no column was filled. That is the true state of every
+  provider in this build except `derive`, and a log line claiming `SUCCESS` would
+  be the second way this job lied.
+
+`derive` is the one provider that works without a key: `src/lib/seniority.ts` reads
+the `seniority` a person's own title states. It fills a gap and never argues with a
+typed value; it **abstains** — a title outside the table returns `null`, not
+`UNKNOWN`, because that word is a judgment someone makes about a person; and the
+phrases are matched before the single words, because `Vice President` contains
+`President`, `Managing Director` contains `Director` and `General Manager` contains
+`Manager`, each at a different rung than the title means. `Head of Growth`,
+`Team Lead`, `Principal`, `Architect`, `EVP` and `Chief of Staff` have no entry on
+purpose: they mean different rungs at different companies.
+
+The other six names — `apollo`, `clearbit`, `hunter`, `linkedin`,
+`clearbit_company`, `apollo_company` — are the call sites a key belongs in. They are
+dispatched and they return nothing until they are configured. They used to return
+invented data (`industry: "SaaS"`, `companySize: "51-200"`, `revenue: "$10M-$50M"`),
+which is worse than silence: the fiction lands in a customer's row and reads like
+research. A rule that listed a name nothing implements used to be stored, read by
+the worker and answered with silence, so the operator who typed `"hubspot"` watched
+a workspace fill with leads that never got the fields they asked for; the rules API
+now refuses it with the list of names the worker dispatches on, and folds `Apollo`
+onto the spelling the `switch` compares (`enrichment-providers.ts`).
+
+Pinned offline by `tests/unit/enrich-write.test.ts` (42: the schema's own words, the
+title table answer for answer, the provider list checked against the worker's
+`switch` in both directions from the source, the write plan's every refusal, and a
+scan of the worker and both rule doors). The live proof is
+`demo/run-demo.sh leadworks` STEP 10: three leads arrive with a title and no
+seniority, each carrying a score of 82 a person set. After one run of a rule listing
+`derive`, the `Managing Director` reads `C_LEVEL` and `ENRICHED` (not `DIRECTOR`,
+the word inside the title), the `Product Manager` whose seniority a rep typed as
+`VP` is untouched, and `Head of Growth` gained nothing and is not filed as
+`UNKNOWN`; all three carry the visit's stamp, all three scores are still 82, and the
+rule's own log reads one `SUCCESS` with `fieldsEnriched: ["seniority"]` beside two
+`PARTIAL` with an empty list. A second run reaches the same three leads and fills
+nothing.
 
 ## Webhooks (outbound)
 
