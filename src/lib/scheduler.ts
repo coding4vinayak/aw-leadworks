@@ -231,10 +231,12 @@ export async function runScheduledJobs(): Promise<void> {
 export type PurgeReport = { removed: number; alreadyGone: number; refused: number; failed: number; considered: number };
 
 /**
- * One of this application's two `unlink` sites, and the only one that acts on a date. (The other
- * is `DELETE /api/exports/{id}`, which takes a file with the row that named it, on request rather
- * than on a schedule.) Both consult the same guard in `lib/export-retention.ts`, so "we only
- * delete files this app wrote at a path of its own shape" is one rule with two callers.
+ * One of this application's three `unlink` sites, and the only one that acts on a date. (The other
+ * two take their authority from somewhere else: `DELETE /api/exports/{id}` removes a file with the
+ * row that named it, because its caller owns that row, and `lib/exporter.ts` removes the bytes a
+ * run it stopped wrote in the same breath.) All three consult the same guard in
+ * `lib/export-retention.ts`, so "we only delete files this app wrote at a path of its own shape" is
+ * one rule with three callers.
  *
  * It reads the rows a retention could judge —
  * finished, stamped, dated — hands them to `planPurge` and deletes only what that returns,
