@@ -16,10 +16,11 @@ import { ENRICH_WRITABLE, holds } from "./enrich-plan";
  * `JobResult`, the table `GET /api/jobs/{id}` includes as `results`, held zero
  * rows across all 475 jobs, because nothing in `src/` has ever written one.
  *
- * So this file owns four things and nothing else: the arithmetic behind a
+ * So this file owns five things and nothing else: the arithmetic behind a
  * percentage, the words for the case where arithmetic has nothing to work on, the
- * reading of a visit that reached a row and wrote nothing to it, and the shape of a
- * per-item record a worker may write down while it still holds the item.
+ * reading of a visit that reached a row and wrote nothing to it, the shape of a
+ * per-item record a worker may write down while it still holds the item, and the
+ * split a stop leaves behind — the rows it reached against the rows it never saw.
  */
 
 /** The counters a worker holds at the moment it finishes. */
@@ -47,8 +48,8 @@ export type Progress =
 export const NO_DENOMINATOR =
   "not measured: this job stamped no denominator, so there is no share of a whole to report";
 
-/** One counter, coerced to what a row can actually hold. */
-function counter(value: number): number {
+/** One counter, coerced to what a row can actually hold — the only clamp a write may use. */
+export function counter(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
@@ -75,17 +76,55 @@ export function progressValue(counters: JobCounters): number {
  * This is a reading, not a repair: the 386 historical rows that say "out of 0, I
  * did 16" stay exactly as they are, and the fix is that no *new* row can be
  * written that way.
+ *
+ * `marked` is the one shape that is not a contradiction: a job the operator
+ * stopped. A denominator with nothing accounted for under it is exactly what a
+ * mark read before the first row looks like, and calling it "finished without
+ * saying it visited any row" would accuse a stopped job of the one thing the stop
+ * guarantees it did not do.
  */
-export function countersProblem(counters: JobCounters): string | null {
+export function countersProblem(counters: JobCounters, marked = false): string | null {
   const total = counter(counters.total);
   const done = handled(counters);
   if (done > total) {
     return `${done} row(s) accounted for against a denominator of ${total} — the job reported work on rows it never counted into its total`;
   }
-  if (total > 0 && done === 0) {
+  if (total > 0 && done === 0 && !marked) {
     return `a denominator of ${total} and nothing accounted for — this job finished without saying it visited any row`;
   }
   return null;
+}
+
+/** What a stop leaves behind: the rows it reached, and the rows it never saw. */
+export interface StopReading {
+  total: number;
+  reached: number;
+  left: number;
+}
+
+/**
+ * Split at the mark.
+ *
+ * `reached` and `left` are not the same fact as `failed`: a job that visited 4 of 16 and a
+ * job that failed 12 of 16 both say `processedItems: 4, failedItems: 12` vs `4` — the
+ * counters cannot tell "never tried" from "tried and could not", so the reading does.
+ */
+export function stopAt(counters: JobCounters): StopReading {
+  const total = counter(counters.total);
+  const reached = Math.min(total, handled(counters));
+  return { total, reached, left: total - reached };
+}
+
+/** The words for a row whose worker obeyed the mark, or for one that was marked and never started. */
+export function stopNote(counters: JobCounters): string {
+  const { total, reached, left } = stopAt(counters);
+  if (total === 0) {
+    return "marked, and it stamped no denominator — there is no share of a whole to report, and no row it says it reached";
+  }
+  if (reached === 0) {
+    return `the mark was read before the worker reached a row — ${total} row(s) in its denominator, none visited, no record on any of them`;
+  }
+  return `stopped at the mark with ${reached} of ${total} row(s) accounted for; ${left} row(s) after it were never reached — a row already in flight is finished, the next one is not started`;
 }
 
 /** The set `JobResult.status` is documented as holding. */
@@ -243,13 +282,7 @@ export function verdictFor(status: string, counters: JobCounters): Verdict {
     };
   }
   if (status === "CANCELLED") {
-    return {
-      verdict: "CANCELLED",
-      note:
-        counter(counters.processed) > 0
-          ? `${counter(counters.processed)} row(s) were already written before the cancel — nothing in this application stops a worker that is running`
-          : null,
-    };
+    return { verdict: "CANCELLED", note: stopNote(counters) };
   }
   return { verdict: status, note: null };
 }
@@ -289,7 +322,7 @@ export function jobReport(
     reason: progress.reason,
     verdict: verdict.verdict,
     verdictNote: verdict.note,
-    problem: countersProblem(counters),
+    problem: countersProblem(counters, row.status === "CANCELLED"),
     results: { recorded, returned, truncated: recorded > returned },
   };
 }

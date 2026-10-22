@@ -177,8 +177,10 @@ GET    /api/jobs?workspaceId=              # list, filter by type/status
 GET    /api/jobs/{id}                      # detail + up to 50 per-item results, beside a
                                            # `report` that says whether this row's
                                            # percentage has a denominator to be taken over
-POST   /api/jobs/{id}?action=retry|cancel  # re-run, or mark the row cancelled — marking it
-                                           # does not stop a worker that is already running
+POST   /api/jobs/{id}?action=retry|cancel  # re-run, or stop it: a worker that is running
+                                           # reads the mark before its next row, finishes the
+                                           # row already in flight, and stamps CANCELLED with
+                                           # the arithmetic of the rows it actually did
 GET    /api/leads?workspaceId=             # list, filter status/minScore
 POST   /api/leads                          # create
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
@@ -1493,12 +1495,13 @@ What this does not claim, in the words the surfaces use:
   could not be done" is *derived* at read time (`verdictNote: "partial: 2 of 16 …"`) and
   the stored status is left alone. Adding a sixth status is a schema decision, not a
   reporting one.
-- **`?action=cancel` marks the row and nothing obeys the mark.** No worker re-reads the
-  status, so a cancelled job can still run to COMPLETED. 0 rows had ever been CANCELLED,
-  which is what a door that is never reached looks like. The `report` for a cancelled row
-  now says the second half out loud — `4 row(s) were already written … nothing in this
-  application stops a worker that is running` — and the API list no longer calls the action
-  a "stop".
+- **`?action=cancel` marked the row and nothing obeyed the mark.** No worker re-read the
+  status, so a cancelled job could still run to COMPLETED, and 0 rows had ever been
+  CANCELLED — which is what a door that is never reached looks like. The reading above
+  printed that limit as the verdict note of a cancelled row, in the present tense, because
+  that was the truth about the code at the time. The next section is the round that made
+  the mark obeyed; the API list's comment on this action and that note are the two places it
+  had to rewrite.
 - **SCRAPE still types its 100, and this round left it alone on purpose.** Its terminal
   write is unreachable on an instance with no browser (STEP 20 is that fact), so no change
   to it could be checked here; and its counters mix units — the denominator it would divide
@@ -1534,16 +1537,21 @@ it wrote instead of a count of them, the validator's record is proven to sit bef
 caller can write a counter, and the migration's own DDL is matched for
 `ON DELETE SET NULL`.
 
-Live, in STEP 21 of the LeadWorks demo — **22 checks**, each one answered by a row the
+Live, in STEP 21 of the LeadWorks demo — **25 checks**, each one answered by a row the
 running application wrote itself:
 
 - **An old row is re-read, not smoothed.** A job written before this round still stores
   `progress=100, totalItems=0, processedItems=1`; the door answers `measured=false, percent=0`
   beside `problem=1 row(s) accounted for against a denominator of 0 — the job reported work on
   rows it never counted into its total`, and its `results.recorded` is 0. Counted, not backfilled.
-- **The first CANCELLED row this instance has ever had** reads `verdict=CANCELLED` with
-  `note=4 row(s) were already written before the cancel — nothing in this application stops a
-  worker that is running`.
+- **The CANCELLED rows are still hand-written** — this step was built before any worker obeyed
+  the mark — and #41 rewrote what the door answers for them. A row carrying 4 of 10 reads
+  `verdict=CANCELLED` beside *"stopped at the mark with 4 of 10 row(s) accounted for; 6 row(s)
+  after it were never reached — a row already in flight is finished, the next one is not
+  started"*; a row carrying 0 of 10 reads *"the mark was read before the worker reached a row —
+  10 row(s) in its denominator, none visited, no record on any of them"*. Neither shape is
+  reported as a contradiction, because a stop is the one shape those numbers are honest in.
+  The next section is about the runs that earn those rows instead of hand-writing them.
 - **A new row's 100 is arithmetic.** VALIDATE over three named leads finishes
   `progress=100` over the `totalItems=3` the worker stamped, and
   `results={"recorded":3,"returned":3,"truncated":false}` — `detail + results` with results in
@@ -1563,13 +1571,14 @@ running application wrote itself:
   measured=false`, reason *“not measured: this job stamped no denominator, so there is no share
   of a whole to report”*.
 - **The residue counted out loud**: `terminal jobs still holding no per-item record, by type:
-  DEDUPE=52 ENRICH=374 EXPORT=113 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
+  DEDUPE=55 ENRICH=380 EXPORT=125 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
   reason they are not gaps, and 353 COMPLETED rows on this database whose own counters disagree
   named at the top of the step.
 - **The cascade, checked rather than assumed**: after the step's cleanup,
   `0 per-item records left on this step's 4 jobs`.
 
-The whole run came out **267 ✓ / 0 ✗, exit 0**. It was performed on resources this round owns
+The whole run came out **290 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 19
+(the #41 round, below) among them. It was performed on resources this round owns
 rather than on the shared `demo/run-demo.sh leadworks` boot, and the reason is a collision, not
 a preference: another session's runner on this box begins with `fuser -k 3300/tcp` and re-seeds
 the shared database, so a run against 3300 can be answered by the other build and lose its API
@@ -1583,8 +1592,144 @@ shared table (`leadworks_r40`), with a private Redis on **6380** and the webhook
 earlier traffic, which is why the census above reads 353 rather than the 386 rows the shared
 production table held when the module was written.
 
-Verification: `npm test` **755/755** (54 new), `npx tsc --noEmit` clean, `npm run lint`
-**0 errors / 12 warnings** (13 → 12), `npm run build` exit 0.
+Verification: `npm test` **799/799** (54 new here, 44 more in #41), `npx tsc --noEmit` clean,
+`npm run lint` **0 errors / 12 warnings** (13 → 12), `npm run build` exit 0.
+
+### The mark is obeyed: what a cancelled job stops doing, and what it says it stopped at
+
+The API list above has carried `?action=cancel` since the first commit, and the table answered
+what it had ever done: **475 `Job` rows, 466 COMPLETED, 0 CANCELLED**. The door wrote the status
+and `completedAt`, answered `{ ok: true }`, and **nothing in `src/` read the mark back** — not one
+of the three workers that loop over rows. A cancelled job ran to COMPLETED over the operator's
+word. The reading the previous section shipped had to print that as the verdict note of a
+cancelled row, in the present tense, because it was the truth about the code. This section is the
+round that makes it false, which is why the sentence is gone from the tree and the API list now
+says the opposite.
+
+`src/lib/job-stop.ts` owns the mark: `MARK` is the one status that is a mark, `isMarked` reads it
+off a row (a row that is *gone* is not a mark — absence is not permission to stop, because the
+worker would then write a terminal status to a row that is not there), `startWrite` is the word a
+worker uses when it takes a row over, and `stoppedWrite` is the terminal write of one that obeyed.
+The *reading* — what the row's counters say and what the door hands back about them — stayed in
+`lib/job-report.ts`, one owner for the words.
+
+- **The boundary is between rows.** Each of ENRICH, VALIDATE and DEDUPE re-reads the row's status
+  before the next lead, and stops there. A row already in flight is finished: abandoning one
+  would leave a lead half-written and a `JobResult` claiming nothing about it. That is the whole
+  of what a stop cannot promise, and it is why the check sits at a boundary rather than at an
+  `await`.
+- **The stop's arithmetic is the finish's arithmetic.** `stoppedWrite` stamps `CANCELLED` — the
+  door's own word, never a worker's — beside the denominator the worker walked, the counters it
+  holds, and the percentage between them. A job stopped at 4 of 16 says 25, and cannot say 100
+  about a run it stopped.
+- **A stop is not a contradiction.** `countersProblem` forgives exactly one shape: a denominator
+  with nothing accounted for under a row that says `CANCELLED` is what a mark read before the
+  first row looks like, and calling it "finished without saying it visited any row" would accuse
+  a stopped job of the one thing the stop guarantees it did not do. The same numbers on a
+  COMPLETED row are still an accusation, and a mark is not a licence to smooth over-reporting.
+- **`reached` is not `failed`.** `stopAt` splits a stopped row into the rows it accounted for and
+  the rows after the mark it never saw — the counters alone cannot tell "never tried" from "tried
+  and could not", so the reading does, and `stopNote` says all three numbers plus the one caveat.
+- **A stopped job tells nobody a finish it did not have.** `enrichment.completed` is dispatched
+  only when the walk was not stopped; there is no fourth event name to invent, because an event
+  that fires for a job the operator stopped is the wire version of the typed 100.
+
+The mark outranks every word a worker writes, at all four places a status is stamped:
+
+| where | what it used to do | what it does now |
+|---|---|---|
+| the claim, before the crowd is read | `update` writing `RUNNING` over anything | one `updateMany` with `status: { not: MARK }` in its WHERE: a cancel that lands between the snapshot read at the top of the worker and this statement is not answered by a `RUNNING` the worker made up, and `count: 0` means the row says the mark — so the worker never begins |
+| the per-lead stamp (enrichment's, once a row is counted) | `update` of `progress`/counters, which could walk a fresh mark back to `RUNNING` | `updateMany` guarded the same way, and it now carries `totalItems` too, so a row read *between two leads* is a measurable share rather than a bare status |
+| the finish | `update` of COMPLETED, win or lose | `where: { status: stopped ? MARK : { not: MARK } }` — a stop writes under the mark, a finish writes around it; a finish that matched nothing is the row saying the mark, and the repair writes the stop's counters under it |
+| the error path | `update` of FAILED over anything | `updateMany` with the mark in its WHERE: a throw is this worker's own word and does not outrank the operator's |
+
+| who asks | where | what it gets |
+|---|---|---|
+| an operator mid-run | `GET /api/jobs/{id}` | a measurable `progress` over a `totalItems` the worker stamped as it counted, and `results.recorded` — one per row reached, none for rows never started |
+| the same operator after a cancel | the same door | `verdict=CANCELLED`, `verdictNote` naming reached/left/in-flight, `problem=null` |
+| a caller of `?action=cancel` | `{ ok: true }` | the word the row ends on, unless it had already finished — the door still refuses to cancel a terminal row |
+| a caller of `?action=retry` | a new row | unchanged: retry has always made a *new* job, so an operator who stops a job at row 4 of 200 restarts it over the rows still standing |
+| a webhook subscriber | the wire | nothing for a stopped job; one `enrichment.completed` for a finished one |
+
+What this does not claim, in the words the surfaces use:
+
+- **Two workers still do not consult the mark, by name and for stated reasons.** `lib/exporter.ts`
+  has no per-row loop — its work is one file written over the whole crowd — and `Export.status`
+  has no word for a cancelled file, which is a schema decision rather than a reporting one.
+  `lib/scraper.ts` is unreachable on an instance with no browser (STEP 20 is that fact) and is
+  still the one file typing `progress: 100`. A test pins that exactly these two files are the
+  ones left out, so a future round has to change the test rather than drift past it.
+- **A cancel that lands after a worker's last boundary check still loses** — the door refuses to
+  mark a row that has already finished, which is the right answer: the work is done, and a status
+  that says otherwise would be the same lie in a different font. What #41 removed is the window
+  *inside* the run: the finish is now a guarded write, so a mark landing during the last row's
+  work is honoured with the counters that row produced.
+- **A stop lands in two writes, and the window between them is the row that was in flight.**
+  `?action=cancel` marks the row at once; the worker's own terminal write — the one carrying the
+  counters, the denominator and the percentage — comes only after the lead it had already started
+  finishes, and each row's record is written before its counter is counted. A reader that polls the
+  *status* alone can therefore catch a row saying 3 accounted for beside 4 records, short by the
+  one row it is still working, for as long as that row takes. STEP 22 used to poll that way and the run before this one is how it was found: the step
+  now reads the mark's snapshot and the worker's snapshot separately, waits for the row to agree
+  with the records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
+  abandoning a row mid-visit — the one thing a stop must not do — or writing each record and its
+  counters in one transaction, which is a decision about every row rather than about the stop.
+- **`Job.status` still has no value between COMPLETED and FAILED**, so a stop that reached some
+  rows and failed others is read at the door rather than stored as a sixth word.
+- **The 466 historical rows are counted, not repaired.** A stop's shape is now written by the
+  worker that stopped; nothing in this round rewrote a row that ran before it.
+
+Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated boot as STEP 21:
+
+- **A stop read between two leads is a measurable share.** 300 leads imported, an ENRICH job
+  over those named ids, found `RUNNING` with 1 of 300 already counted and `progress=0` — the
+  percentage is stamped while the job is still walking, not only at its finish line, and one row
+  out of three hundred is a third of a percent, which is what the arithmetic says rather than
+  what a typed number would. `?action=cancel` answers 200, and the row settles **`CANCELLED` at
+  3 processed + 0 failed of 300 with `progress: 1`**: 3 reached, 297 never started,
+  `results.recorded` 3 — one per row it did and none for the crowd it did not — the leads
+  themselves agreeing (3 rows carrying a fresh `lastEnrichedAt`, 297 not), and `report.problem`
+  null beside a note that names reached, left, and the row that was already in flight.
+- **A stop is two writes, and the demo reads both.** The door marks the row at once; the
+  worker's terminal stamp — the one carrying the counters — follows when the lead it had already
+  started finishes. STEP 22 snapshots the row as the mark arrives and again once the row agrees
+  with the records it holds, and asserts the gap between the two is never more than the one row in
+  flight; this run's gap was **0**, because the mark landed at a boundary with nothing in flight.
+  The run before it polled the status alone and read 3 accounted for beside 4 records — that is
+  the window, and the check is now the proof of its size rather than an accident of timing.
+- **A stopped job tells nobody a finish it did not have — proved against a job that did.** A
+  webhook subscribed to `enrichment.completed` receives **nothing** for the stopped job and
+  **exactly one** delivery for a 3-lead control that finished, so the silence above means the
+  stop rather than a dead subscription.
+- **A mark that lands before the worker begins is obeyed by never beginning**, and this half is
+  made deterministic instead of raced: the dedupe worker holds **one** slot, so a sweep over
+  200 imported phone-pairs (400 leads) keeps it `RUNNING` while a second job waits `PENDING`.
+  That waiting job is cancelled, and when the worker frees up it reads the row and does not
+  start it: `CANCELLED`, `startedAt` null, 0 processed, 0 records — read as a stop that claimed
+  no denominator, while the sweep that refused to begin it finishes its own crowd.
+- **The step prints what it left alone** — the two workers that still do not consult the mark,
+  by name and with their reasons — and its cleanup takes 703 leads and 4 jobs back out through
+  the doors, leaving 0 rows and 0 records from the step.
+
+STEP 22's 19 checks are among the **290 ✓ / 0 ✗, exit 0** that STEP 21's note above reports
+for the whole run.
+
+The 44 new offline tests are the same claims without a server: `stopAt`, `stopNote` and
+`stoppedWrite` answered by hand (including the NaN and negative shapes, which is why every
+field of the terminal write goes through the one clamp `job-report` owns rather than a second
+`Math.max`), the one forgiveness and the two it still refuses, each worker's boundary read
+proved by index arithmetic against the row that worker is about to work on, all four guarded
+writes proved in the source of each worker, the repair proved to come *after* the write it
+repairs, the dispatch proved to sit inside `if (!stopped)`, `WEBHOOK_EVENTS` still exactly
+three names, a census over `src/` proving that the literal `status: "CANCELLED"` is written in
+exactly one place — the door — that the mark-payload form is written in exactly one module, and
+that **exactly two** files still do not consult the mark (`lib/exporter.ts`, `lib/scraper.ts`,
+for the two stated reasons), plus the sentence #40 had to print proven gone from the tree and
+the API list proven to say the opposite now.
+
+Verification: `npm test` **799/799** (44 new in `tests/unit/job-stop.test.ts`, 38 `it(` blocks
+over 9 describes — no browser, no database, no network), `npx tsc --noEmit` clean,
+`npm run lint` **0 errors / 12 warnings** (unchanged), `npm run build` exit 0.
 
 ## Score: one arithmetic, and who may change it
 
