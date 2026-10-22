@@ -104,6 +104,26 @@ export default async function Page() {
             <a href="mailto:support@abetworks.in?subject=LeadWorks%20enterprise" className="mt-6 block rounded-lg border border-blue-600 px-4 py-2 text-center text-sm font-semibold text-blue-600 hover:bg-blue-50 transition">Talk to us</a>
           </div>
         </div>
+        <h2 className="mt-12 text-xl font-bold">Also in the Abetworks suite</h2>
+        <p className="mt-2 text-gray-600">
+          LeadWorks is one of the products in the Abetworks suite, and every one of them is sold on its own.
+          These are the products that turn the captured leads into conversations and numbers — each has its own sign-up, and 
+          <a href="mailto:support@abetworks.in?subject=One%20workspace%20across%20the%20Abetworks%20suite" className="underline">
+            one contract can set up a workspace across all of them
+          </a>
+          .
+        </p>
+        <div className="mt-6 space-y-3">
+          <a href="https://leadgenius.abetworks.in" className="block rounded-2xl border border-gray-200 bg-white p-4 shadow-sm hover:bg-gray-50 transition">
+            <span className="font-semibold text-gray-900">LeadGenius</span> <span className="text-gray-600">— multichannel outreach with warmup and deliverability guardrails, so cold email lands where it should. $29 per user per month.</span>
+          </a>
+          <a href="https://connect.abetworks.in" className="block rounded-2xl border border-gray-200 bg-white p-4 shadow-sm hover:bg-gray-50 transition">
+            <span className="font-semibold text-gray-900">AbetConnect</span> <span className="text-gray-600">— one ranked omnichannel inbox; every message scored 0–100, so churn risks and high-value enquiries rise to the top. $24 per agent per month.</span>
+          </a>
+          <a href="https://analytics.abetworks.in" className="block rounded-2xl border border-gray-200 bg-white p-4 shadow-sm hover:bg-gray-50 transition">
+            <span className="font-semibold text-gray-900">AbetAnalytics</span> <span className="text-gray-600">— scheduled metric snapshots, alert rules that stay silent when healthy, alerts by email and by signed webhooks. $19 per month.</span>
+          </a>
+        </div>
         <h2 className="mt-12 text-xl font-bold">Questions</h2>
         <div className="mt-4 space-y-4">
           <div><p className="font-semibold text-gray-900">Is there a trial?</p><p className="mt-1 text-gray-600">Yes, two. The live demo workspace is open to anyone, no card. And every paid plan starts with a 14-day free trial — cancel from the billing portal any time before day 14 and you are not charged.</p></div>
