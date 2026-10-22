@@ -430,8 +430,12 @@ describe("the doors are wired, and the hardcoded set is gone", () => {
   it("queues the schedule with the rule's own conditions in the job", () => {
     const body = functionBody(scheduler, "runScheduledJobs")!;
     assert.match(body, /readStoredConditions\(rule\.conditions\)/);
-    assert.match(body, /where: leadWhere\(rule\.workspaceId, stored\.conditions\)/);
-    assert.match(body, /conditions: asInputJson\(stored\.conditions\)/);
+    assert.match(body, /where: leadWhere\(rule\.workspaceId, rule\.conditions\)/);
+    assert.match(body, /conditions: asInputJson\(rule\.conditions\)/);
+    // #34: the declaration is read once, before the ranking walks it, and a rule whose
+    // conditions cannot be read is not in `due` at all — so it never claims a column.
+    assert.match(body, /conditions: stored\.conditions,/);
+    assert.ok(body.indexOf("due.push(") > body.indexOf("stored.problem !== null"), "unreadable conditions never reach the running");
     // Skip and log, before anything is written: no job row, no queue entry, no lead.
     const warn = first(body, 'console.warn(`Enrichment rule');
     assert.ok(next(body, "continue;", warn) < first(body, "prisma.lead.findMany"));
@@ -451,8 +455,9 @@ describe("the doors are wired, and the hardcoded set is gone", () => {
   it("wires the third door too, so the rule holds repository-wide", () => {
     const body = functionBody(enrichment, "runScheduledEnrichment")!;
     assert.match(body, /readStoredConditions\(rule\.conditions\)/);
-    assert.match(body, /where: leadWhere\(rule\.workspaceId, stored\.conditions\)/);
-    assert.match(body, /conditions: stored\.conditions/);
+    assert.match(body, /where: leadWhere\(rule\.workspaceId, rule\.conditions\)/);
+    assert.match(body, /conditions: rule\.conditions,/);
+    assert.match(body, /const plan = planTick\(due\)/, "the same tick walk the minute runs");
     const warn = first(body, 'console.warn(`Enrichment rule');
     assert.ok(next(body, "continue;", warn) < first(body, "prisma.lead.findMany"));
   });
@@ -464,7 +469,9 @@ describe("the doors are wired, and the hardcoded set is gone", () => {
     for (const [where, text] of [["scheduler.ts", scheduler], ["?action=run", ruleIdRoute]] as const) {
       // Widened for #31: the scheduler's job config now carries the ids it counted
       // beside the declaration, and the anchor lines sit further from it.
-      assert.match(around(text, 'type: "ENRICH"', 700), /conditions: asInputJson\(stored\.conditions\)/, where);
+      // The scheduler's copy reads the declaration before ranking and travels with the
+      // rule; the run door still holds it in a local. One spelling each, same promise.
+      assert.match(around(text, 'type: "ENRICH"', 700), /conditions: asInputJson\((?:stored|rule)\.conditions\)/, where);
     }
   });
 

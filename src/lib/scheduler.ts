@@ -3,6 +3,7 @@ import { queues, enqueue } from "./queue";
 import { asInputJson, asRecord } from "./json";
 import { leadWhere, readStoredConditions } from "./rule-conditions";
 import { actionsProblem, readRuleActions } from "./rule-actions";
+import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
 
 /**
  * One minute's worth of the schedule: every active source, export profile and SCHEDULED
@@ -18,6 +19,13 @@ import { actionsProblem, readRuleActions } from "./rule-actions";
  * Its `actions` decide the other two things about that job — the cadence this minute is
  * matched against, and the columns the visit may fill — read by `lib/rule-actions.ts`,
  * which refuses a schedule this matcher could never match at the door that stored it.
+ *
+ * And when two rules are due for the same lead in the same minute, `priority` says which
+ * one visits it: the due set goes through `lib/rule-priority.ts`, which walks the ranking
+ * and lets each rule claim the columns it asked for before the next one is considered.
+ * Without that walk the ranking decided nothing at all, whatever the query's `orderBy`
+ * said, because the `enrich` worker runs five jobs at once and the column went to whichever
+ * write landed first.
  */
 export async function runScheduledJobs(): Promise<void> {
   const now = new Date();
@@ -80,56 +88,87 @@ export async function runScheduledJobs(): Promise<void> {
     }
   }
 
-  // Run scheduled enrichment rules
   const rules = await prisma.enrichmentRule.findMany({
     where: { isActive: true, trigger: "SCHEDULED" },
+    orderBy: RULE_PRIORITY_ORDER,
   });
 
+  // What this minute is actually due for, before any ranking. A rule whose declaration
+  // cannot be performed, whose cadence does not match this minute, or whose conditions
+  // cannot be read contributes a log line and is not in the running — and does not get to
+  // claim columns it will never visit.
+  //
+  // The `actions` half used to hand the whole JSON column to `shouldRunNow` as a cron
+  // string, and the object the API requires coerced to `""`: measured, a `SCHEDULED` rule
+  // holding `{ fields: ["seniority"] }` queued nothing across three sweep minutes while the
+  // same rule with a bare `"* * * * *"` in that column queued one job a minute. Junk in the
+  // column now contributes a log line and nothing else, the way junk in `conditions` does.
+  const due: DueRule[] = [];
   for (const rule of rules) {
-    // The rule's `actions` — "what enrichment to perform", and the cadence it is
-    // performed on. This used to hand the whole JSON column to `shouldRunNow` as a
-    // cron string, and the object the API requires coerced to `""`: measured, a
-    // `SCHEDULED` rule holding `{ fields: ["seniority"] }` queued nothing across
-    // three sweep minutes while the same rule with a bare `"* * * * *"` in that
-    // column queued one job a minute. Junk in the column now contributes a log line
-    // and nothing else, the way junk in `conditions` already does.
     const performed = actionsProblem(rule.actions);
     if (performed !== null) {
       console.warn(`Enrichment rule ${rule.id} skipped: its actions cannot be performed — ${performed}`);
       continue;
     }
     const declared = readRuleActions(rule.actions);
-    if (shouldRunNow(declared.schedule ?? "", now)) {
-      const stored = readStoredConditions(rule.conditions);
-      if (stored.problem !== null) {
-        // Nothing was queued and no lead was touched: a blob that cannot be read
-        // is not a licence to fall back to the whole workspace.
-        console.warn(`Enrichment rule ${rule.id} skipped: conditions cannot be read — ${stored.problem}`);
-        continue;
-      }
-      const leads = await prisma.lead.findMany({
-        where: leadWhere(rule.workspaceId, stored.conditions),
-        take: 100,
-      });
+    if (!shouldRunNow(declared.schedule ?? "", now)) continue;
+    const stored = readStoredConditions(rule.conditions);
+    if (stored.problem !== null) {
+      // Nothing was queued and no lead was touched: a blob that cannot be read
+      // is not a licence to fall back to the whole workspace.
+      console.warn(`Enrichment rule ${rule.id} skipped: conditions cannot be read — ${stored.problem}`);
+      continue;
+    }
+    due.push({
+      id: rule.id,
+      workspaceId: rule.workspaceId,
+      createdAt: rule.createdAt,
+      priority: rule.priority,
+      actions: rule.actions,
+      providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [],
+      conditions: stored.conditions,
+    });
+  }
 
-      // The 100 it just counted are the crowd. Carrying only `conditions` meant the
-      // worker re-derived the list itself with `take: 1000`, so a rule over a big
-      // workspace swept ten times the leads this tick decided to visit — and the row
-      // said nothing about either number. The declared field list goes with it: the
-      // rule's `actions` say which columns its visits may fill, and an empty list is
-      // the rule saying nothing about that, not a rule asking for no columns.
-      if (leads.length > 0) {
-        const job = await prisma.job.create({
-          data: {
-            workspaceId: rule.workspaceId,
-            type: "ENRICH",
-            status: "PENDING",
-            config: { providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [], fields: declared.fields ?? [], confidenceThreshold: 0.5, conditions: asInputJson(stored.conditions), ruleId: rule.id, leadIds: leads.map((lead) => lead.id) },
-            totalItems: leads.length,
-          },
-        });
-        await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });
-      }
+  // The ranking, walked. Every rule here is due; the order they are queued in decides
+  // nothing on its own — the `enrich` worker takes five jobs at once — so what `priority`
+  // settles is who owns which column this minute, and a rule left with nothing queues
+  // nothing at all.
+  const plan = planTick(due);
+  for (const starved of plan.starved) {
+    // No job, no log row — so nothing recorded against `creditsUsed` — and no stamp: this
+    // rule visited nobody. The ranking is what said so, and the sentence belongs in the log
+    // rather than in a record of a visit that did not happen.
+    console.info(
+      `Enrichment rule ${starved.rule.id} queued nothing this minute: every column ${
+        starved.asked === null ? "it could write" : `it asked for (${starved.asked.join(", ")})`
+      } is owned this minute by a higher-ranked rule`,
+    );
+  }
+
+  for (const { rule, fields } of plan.visits) {
+    const leads = await prisma.lead.findMany({
+      where: leadWhere(rule.workspaceId, rule.conditions),
+      take: 100,
+    });
+
+    // The 100 it just counted are the crowd. Carrying only `conditions` meant the
+    // worker re-derived the list itself with `take: 1000`, so a rule over a big
+    // workspace swept ten times the leads this tick decided to visit — and the row
+    // said nothing about either number. The field list on the job is what this rule
+    // owns after the ranking, never the whole set it merely asked for: the columns a
+    // higher-ranked rule claimed are not written twice in one minute.
+    if (leads.length > 0) {
+      const job = await prisma.job.create({
+        data: {
+          workspaceId: rule.workspaceId,
+          type: "ENRICH",
+          status: "PENDING",
+          config: { providers: rule.providers, fields, confidenceThreshold: 0.5, conditions: asInputJson(rule.conditions), ruleId: rule.id, leadIds: leads.map((lead) => lead.id) },
+          totalItems: leads.length,
+        },
+      });
+      await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });
     }
   }
 }

@@ -4,7 +4,8 @@ import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
 import { normalizeProviders } from "./enrichment-providers";
 import { crowdWhere, namedLeads } from "./lead-crowd";
-import { actionsProblem, readRuleActions, restrictToDeclared } from "./rule-actions";
+import { actionsProblem, restrictToDeclared } from "./rule-actions";
+import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
 import { asInputJson } from "./json";
 import { seniorityFromTitle } from "./seniority";
 import { planEnrichmentWrite, type EnrichableLead } from "./enrich-plan";
@@ -251,35 +252,59 @@ export async function runScheduledEnrichment(): Promise<void> {
   const rules = await prisma.enrichmentRule.findMany({
     where: { isActive: true, trigger: "SCHEDULED" },
     include: { workspace: true },
+    orderBy: RULE_PRIORITY_ORDER,
   });
 
+  // The same walk `scheduler.ts` does. This copy has no cadence check — that file is the
+  // function the minute actually runs — but it must not decide a different set of owners
+  // for the same columns, because two rules visiting one lead for one column is the thing
+  // `priority` exists to settle.
+  const due: DueRule[] = [];
   for (const rule of rules) {
-    // Check schedule - simplified
     const stored = readStoredConditions(rule.conditions);
     if (stored.problem !== null) {
       console.warn(`Enrichment rule ${rule.id} skipped: conditions cannot be read — ${stored.problem}`);
       continue;
     }
-    // The rule's own words about what to perform, read the way the sweep reads them.
-    // This copy has no cadence check — `scheduler.ts` is the function the minute
-    // actually runs — but it must not queue a visit that ignores the columns the rule
-    // named, nor one whose declaration nothing can honour.
+    // The rule's own words about what to perform, read the way the sweep reads them: this
+    // copy must not queue a visit that ignores the columns the rule named, nor one whose
+    // declaration nothing can honour.
     const performed = actionsProblem(rule.actions);
     if (performed !== null) {
       console.warn(`Enrichment rule ${rule.id} skipped: its actions cannot be performed — ${performed}`);
       continue;
     }
-    const declared = readRuleActions(rule.actions);
+    due.push({
+      id: rule.id,
+      workspaceId: rule.workspaceId,
+      createdAt: rule.createdAt,
+      priority: rule.priority,
+      actions: rule.actions,
+      providers: Array.isArray(rule.providers) ? (rule.providers as unknown as string[]) : [],
+      conditions: stored.conditions,
+    });
+  }
+
+  const plan = planTick(due);
+  for (const starved of plan.starved) {
+    console.info(
+      `Enrichment rule ${starved.rule.id} queued nothing: every column ${
+        starved.asked === null ? "it could write" : `it asked for (${starved.asked.join(", ")})`
+      } is owned by a higher-ranked rule`,
+    );
+  }
+
+  for (const { rule, fields } of plan.visits) {
     const leads = await prisma.lead.findMany({
-      where: leadWhere(rule.workspaceId, stored.conditions),
+      where: leadWhere(rule.workspaceId, rule.conditions),
       take: 100,
     });
 
     if (leads.length > 0) {
       await runBulkEnrichment(rule.workspaceId, leads.map(l => l.id), {
-        providers: (rule.providers as string[]) || [],
-        fields: declared.fields ?? [],
-        conditions: stored.conditions,
+        providers: rule.providers,
+        fields,
+        conditions: rule.conditions,
         ruleId: rule.id,
       });
     }
