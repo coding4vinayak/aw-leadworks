@@ -415,7 +415,7 @@ describe("the worker and the doors are wired", () => {
 
   it("takes the row it read, so a gap is judged against the row", () => {
     const body = blankComments(functionBody(enrichment, "runEnrichmentJob")!);
-    assert.match(body, /updateLeadEnrichment\(job\.workspaceId, lead, result, config\.providers, ruleId\)/);
+    assert.match(body, /updateLeadEnrichment\(job\.workspaceId, lead, answer\.columns, config\.providers, ruleId\)/);
   });
 
   it("logs the visit against the rule that queued it, once that rule is checked", () => {

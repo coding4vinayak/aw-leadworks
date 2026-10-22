@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { jobResultRow, progressValue } from "./job-report";
 import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
 export interface DedupeConfig {
@@ -116,6 +117,21 @@ export async function runDedupeJob(jobId: string): Promise<void> {
       for (const dup of duplicates) {
         await mergeRecords(master, dup, config.action || "merge", job.id);
         duplicatesResolved++;
+        // Written after the merge, because two of the three actions delete the
+        // duplicate: pointing `leadId` at it then would name a row that is gone. The
+        // id is in the payload instead, and it is the only place the folded-away row
+        // is still written down.
+        await prisma.jobResult.create({
+          data: jobResultRow(job.id, {
+            leadId: (config.action || "merge") === "flag" ? dup.id : null,
+            status: "SUCCESS",
+            data: {
+              action: config.action || "merge",
+              duplicateId: dup.id,
+              mergedIntoMasterId: master.id,
+            },
+          }),
+        });
       }
     }
 
@@ -124,7 +140,9 @@ export async function runDedupeJob(jobId: string): Promise<void> {
       data: {
         status: "COMPLETED",
         completedAt: new Date(),
-        progress: 100,
+        // Found and resolved are the same unit — duplicate rows — so the share is
+        // arithmetic rather than a typed 100.
+        progress: progressValue({ total: duplicatesFound, processed: duplicatesResolved, failed: 0 }),
         // What was found and what was done with it. A COMPLETED job that found
         // duplicates and resolved none is visible here instead of implied.
         totalItems: duplicatesFound,

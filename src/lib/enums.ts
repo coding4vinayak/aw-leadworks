@@ -18,6 +18,13 @@
  * something, but nothing in this API lets a caller write them — the workers and
  * the auth layer do — so declaring them here would be a table with no route
  * behind it.
+ *
+ * One of those sentences needed measuring: `JobResult.status` was listed as a set
+ * the workers write, and no worker had ever written the table at all — 0 rows
+ * across 475 jobs, behind a door that documents "detail + results". It is written
+ * now, through `lib/job-report.ts`'s `RESULT_STATUSES`, which
+ * `tests/unit/job-report.test.ts` compares against the schema comment this file is
+ * transcribed from.
  */
 
 /** Source.type */

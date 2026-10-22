@@ -106,8 +106,12 @@ export interface EnrichmentPlan {
   logStatus: "SUCCESS" | "PARTIAL";
 }
 
-/** Whether the row already holds a value in this column. */
-function holds(value: unknown): boolean {
+/**
+ * Whether the row already holds a value in this column. Exported because
+ * `lib/job-report.ts` asks the same question of the same row when it writes down why
+ * a visit landed nothing: two readings of "already held" is one too many.
+ */
+export function holds(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === "string") return value.trim() !== "";
   if (Array.isArray(value)) return value.length > 0;

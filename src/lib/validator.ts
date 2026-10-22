@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { rowAfterWrite, scoredWriteData } from "./lead-score";
 import { crowdWhere, namedLeads } from "./lead-crowd";
+import { jobResultRow, progressValue } from "./job-report";
 
 /**
  * `flag` and `score_down` are one thing now: the validator records what failed on
@@ -46,6 +47,20 @@ export async function runValidateJob(jobId: string): Promise<void> {
         // to the deleted id, Prisma threw P2025, the catch counted the lead in
         // `failedItems` and the job reported COMPLETED having destroyed a lead it
         // claims it could not process.
+        await prisma.jobResult.create({
+          data: jobResultRow(job.id, {
+            leadId: lead.id,
+            status: "SUCCESS",
+            data: {
+              action: "remove",
+              // The row this record describes is about to be deleted, and the
+              // `leadId` column is `ON DELETE SET NULL` — so the identity of what
+              // was removed lives here, in the payload, and outlives the lead.
+              removedLeadId: lead.id,
+              failedChecks: failedChecks.map((r) => r.check),
+            },
+          }),
+        });
         await prisma.lead.delete({ where: { id: lead.id } });
         flagged++;
         validated++;
@@ -69,15 +84,44 @@ export async function runValidateJob(jobId: string): Promise<void> {
       });
       if (failedChecks.length > 0) flagged++;
 
+      await prisma.jobResult.create({
+        data: jobResultRow(job.id, {
+          leadId: lead.id,
+          status: "SUCCESS",
+          data: {
+            action: config.action ?? "flag",
+            checksRun: results.length,
+            failedChecks: failedChecks.map((r) => r.check),
+          },
+        }),
+      });
+
       validated++;
     } catch (error) {
       failed++;
+      await prisma.jobResult.create({
+        data: jobResultRow(job.id, {
+          leadId: lead.id,
+          status: "FAILED",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      });
     }
   }
 
   await prisma.job.update({
     where: { id: job.id },
-    data: { status: "COMPLETED", completedAt: new Date(), progress: 100, processedItems: validated, failedItems: failed },
+    data: {
+      status: "COMPLETED",
+      completedAt: new Date(),
+      // The crowd this job walked is the denominator. Typing `progress: 100` here
+      // — which is what every one of the 466 COMPLETED rows on this instance says —
+      // reports a share of a whole the row never wrote down.
+      totalItems: leads.length,
+      progress: progressValue({ total: leads.length, processed: validated, failed }),
+      processedItems: validated,
+      failedItems: failed,
+    },
   });
 }
 

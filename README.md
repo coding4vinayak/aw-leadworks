@@ -174,8 +174,11 @@ POST   /api/sources/{id}?action=run        # launch a scrape now — 400 for an 
                                            # server will not open, 503 when this instance
                                            # has no browser, and no `Job` row in either case
 GET    /api/jobs?workspaceId=              # list, filter by type/status
-GET    /api/jobs/{id}                      # detail + results
-POST   /api/jobs/{id}?action=retry|cancel  # re-run or stop
+GET    /api/jobs/{id}                      # detail + up to 50 per-item results, beside a
+                                           # `report` that says whether this row's
+                                           # percentage has a denominator to be taken over
+POST   /api/jobs/{id}?action=retry|cancel  # re-run, or mark the row cancelled — marking it
+                                           # does not stop a worker that is already running
 GET    /api/leads?workspaceId=             # list, filter status/minScore
 POST   /api/leads                          # create
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
@@ -1417,6 +1420,171 @@ still refuse the six cadences. The one footprint this round leaves on an earlier
 `tests/unit/export-retention.test.ts`'s write census, retargeted from ten to eight with the
 scheduler named — the same treatment #38 gave STEP 13's refusal list, and for the same reason: a
 pin that agrees with code it no longer describes is quieter than the bug it replaced.
+
+### What a finished job says it did: the percentage, the denominator, and a record per row
+
+`README`'s own API list has read `GET /api/jobs/{id}  # detail + results` since the first
+commit. Measured on the table before any of this shipped: **475 `Job` rows, 466 of them
+COMPLETED, and `JobResult` held 0 rows** — because nothing in `src/` had ever written one. The same query showed every COMPLETED row
+reporting `progress: 100`, and **386 of them reporting it beside `totalItems: 0`** while
+reporting `processedItems: 16`: the workers held the crowd size in a local variable, wrote
+it into no column, and typed the answer at the finish line. Five more reported COMPLETED
+with `failedItems > 0`. And no row had *ever* been CANCELLED.
+
+`src/lib/job-report.ts` owns the reading now, and four things follow from it.
+
+- **The percentage is arithmetic.** `progressValue({ total, processed, failed })` divides,
+  and the four workers that can finish on this instance call it at their terminal write —
+  enrichment calls it inside the loop as well, on the per-lead row update it was already
+  making. A job that was told to visit 200 rows and visited 100 says 50.
+- **A job with no denominator says so.** `total: 0` is not 100% and not 0%: `progressOf`
+  returns `{ measured: false, reason: NO_DENOMINATOR }` and the row is stored with
+  `progress: 0` beside the `totalItems: 0` that explains it. An export whose filter matched
+  nothing finishes COMPLETED and reports *not measured*, which is the truth, rather than
+  100% of nothing, which is a number a dashboard can average into a lie.
+- **A row whose own counters disagree is named, not smoothed.** `countersProblem` reads
+  "16 rows accounted for against a denominator of 0" out of the 386 historical rows and
+  says it in `report.problem`. It is a reading: those rows stay exactly as they are, and
+  the fix is that no new row can be written that way, because the hand that computes the
+  share now writes the denominator it computed it from.
+- **Every row a worker decided has a record.** ENRICH, VALIDATE and DEDUPE decide
+  something per lead and used to throw the decision away, keeping three integers. Each now
+  writes one `JobResult`: the visit that filled a column is `SUCCESS` with the columns it
+  wrote, the visit that reached a row and wrote nothing is `SKIPPED` with a reason read off
+  the row — *which* of `planEnrichmentWrite`'s gates fired (`the row already held
+  \`seniority\``, `\`technologies\` came back in a shape its column does not accept`,
+  `\`confidence\` is not a column a lead row has`) beside the sets it was derived from — the
+  lead that threw is `FAILED` with the message, and the duplicate that was folded into a
+  master names both ids. Telling an answer the rule narrowed away from an answer that named
+  nothing needs both sets, so `enrichLead` hands over what the providers named *and* what
+  `actions.fields` let through; the narrowed one alone cannot make the difference.
+
+Two orders are pinned, and both are about *when* the record is written.
+
+**A record exists before the row says it finished.** Each `JobResult` is created inside the
+loop, next to the lead write it describes, so a `COMPLETED` row cannot name results that
+were never stored — and a job that throws halfway leaves the records for the rows it did
+finish. `GET /api/jobs/{id}` reads `results` with `take: 50`, so `report.results` counts
+them: `{ recorded, returned, truncated }`. 50 of 50 and 50 of 4,000 are different facts and
+the door used to return the same array for both.
+
+**A removal is recorded before the row it names is deleted.** `VALIDATE` with
+`action: "remove"` deletes the lead, and `JobResult.leadId` is `ON DELETE SET NULL` — so the
+insert runs first, with the id copied into the payload as `removedLeadId`, and what survives
+is a record that points at nothing and still says which lead it described. `DEDUPE` with
+`merge` or `delete` does the same to the duplicate, so its record passes `leadId: null`
+deliberately and keeps `duplicateId` in the payload; `flag` keeps the row, so its record
+keeps the FK. Writing either record after the merge would be a foreign-key violation
+masquerading as a log line.
+
+Where each question is answered:
+
+| who asks | where | what it gets |
+|---|---|---|
+| an operator reading one job | `GET /api/jobs/{id}` → `report` | `measured`, `percent`, `reason`, `verdict`, `verdictNote`, `problem`, `results` |
+| the same operator, mid-run | the `Job` row itself | `progress` recomputed on every per-lead write, `totalItems` stamped by the worker |
+| a receiver of `enrichment.completed` | the payload's `processed/enriched/failed` | unchanged — the event is not the record list |
+| whoever deletes a lead | the schema | `SET NULL` on `leadId`, `CASCADE` on `jobId`: a job takes its records with it |
+| a caller trying to forge a denominator | `POST /api/jobs`, `PATCH /api/jobs/{id}` | nothing available: `JOB_CREATE`/`JOB_PATCH` declare no counter column, so `report`'s inputs are the worker's alone |
+
+What this does not claim, in the words the surfaces use:
+
+- **`Job.status` has no value between COMPLETED and FAILED**, so "finished, and 2 of 16
+  could not be done" is *derived* at read time (`verdictNote: "partial: 2 of 16 …"`) and
+  the stored status is left alone. Adding a sixth status is a schema decision, not a
+  reporting one.
+- **`?action=cancel` marks the row and nothing obeys the mark.** No worker re-reads the
+  status, so a cancelled job can still run to COMPLETED. 0 rows had ever been CANCELLED,
+  which is what a door that is never reached looks like. The `report` for a cancelled row
+  now says the second half out loud — `4 row(s) were already written … nothing in this
+  application stops a worker that is running` — and the API list no longer calls the action
+  a "stop".
+- **SCRAPE still types its 100, and this round left it alone on purpose.** Its terminal
+  write is unreachable on an instance with no browser (STEP 20 is that fact), so no change
+  to it could be checked here; and its counters mix units — the denominator it would divide
+  by is pages while `processedItems` holds leads saved — which is a unit decision this
+  reporting module must not make silently. `countersProblem` would call a 16-of-1 row a
+  contradiction, and for a scrape it would be right to.
+- **EXPORT writes no per-item record, by decision.** Every row its filter matched went into
+  the file, so 16 identical `SUCCESS` rows would repeat the file at 16 inserts. DEDUPE,
+  ENRICH and VALIDATE each decide something per row that the job row cannot show; that is
+  the line the records stop at.
+- **The 386 rows are counted, not repaired.** The census in the demo prints them by job
+  type every run. Backfilling them would invent per-item outcomes no worker recorded, and an
+  outcome nobody observed is not a fact.
+
+The whole reading is pinned offline in `tests/unit/job-report.test.ts` — **54 tests**, no
+browser, no database, no network: the arithmetic's known answers (16/16 → 100, 1/3 → 33,
+14+2 of 16 → 100 with a partial verdict, `total: 0` → unmeasured), the 386 row shape read
+back as a contradiction, the two refusals in `jobResultRow` (a FAILED with no message and a
+SKIPPED with no reason are both filled in words, never dropped), a status outside
+`SUCCESS | FAILED | SKIPPED` turned into a FAILED rather than a new word, and the schema
+comment for `JobResult.status` compared to the set the module writes. Then the five shapes
+of a visit that landed nothing, each with its reason spelled out — including the one where a
+column is refused for shape while another is already held and a third has no column in the
+table at all — with the module importing `enrich-plan`'s own `holds` and `ENRICH_WRITABLE`
+rather than deciding the same question a second time. Then the wiring, from
+the source: no `progress: 100` left in any of the four workers, and a census over `src/`
+that finds **exactly one** file still typing it — `lib/scraper.ts` — so a future round that
+fixes it has to change this test rather than drift past it. Every `prisma.jobResult.create`
+in the tree must be shaped by `jobResultRow`, no worker hands out a `SUCCESS` any more,
+`updateLeadEnrichment` hands back the columns
+it wrote instead of a count of them, the validator's record is proven to sit before its
+`lead.delete` by index arithmetic on the body, `JOB_CREATE`/`JOB_PATCH` are read to show no
+caller can write a counter, and the migration's own DDL is matched for
+`ON DELETE SET NULL`.
+
+Live, in STEP 21 of the LeadWorks demo — **22 checks**, each one answered by a row the
+running application wrote itself:
+
+- **An old row is re-read, not smoothed.** A job written before this round still stores
+  `progress=100, totalItems=0, processedItems=1`; the door answers `measured=false, percent=0`
+  beside `problem=1 row(s) accounted for against a denominator of 0 — the job reported work on
+  rows it never counted into its total`, and its `results.recorded` is 0. Counted, not backfilled.
+- **The first CANCELLED row this instance has ever had** reads `verdict=CANCELLED` with
+  `note=4 row(s) were already written before the cancel — nothing in this application stops a
+  worker that is running`.
+- **A new row's 100 is arithmetic.** VALIDATE over three named leads finishes
+  `progress=100` over the `totalItems=3` the worker stamped, and
+  `results={"recorded":3,"returned":3,"truncated":false}` — `detail + results` with results in
+  it for the first time on this instance. The kept lead's own row flags
+  `[linkedin_format, phone_format]` and its record names the same two columns.
+- **A removal leaves its record behind.** VALIDATE `action=remove` ends with 2 records and both
+  leads answering 404; the database agrees that 2 records on that job point at no lead, each
+  naming the id it described in its payload.
+- **A 1-of-1 dedupe says what its 100 is 100% of**, and the duplicate it flagged is one record
+  naming `duplicate=… master=…` with the lead still under it — `flag` keeps the row, so the FK
+  survives.
+- **The enrichment visit, re-read**: `SUCCESS=1 SKIPPED=2`, the two skips printing *“the
+  providers replied, and their answer named no column at all”* and *“the row already held
+  `seniority`”*. Run again over the same three leads it is `SUCCESS=0 SKIPPED=3` — every record
+  a skip the row explains, because the writes are idempotent.
+- **The export whose filter matches nothing**: `COMPLETED progress=0 totalItems=0
+  measured=false`, reason *“not measured: this job stamped no denominator, so there is no share
+  of a whole to report”*.
+- **The residue counted out loud**: `terminal jobs still holding no per-item record, by type:
+  DEDUPE=52 ENRICH=374 EXPORT=113 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
+  reason they are not gaps, and 353 COMPLETED rows on this database whose own counters disagree
+  named at the top of the step.
+- **The cascade, checked rather than assumed**: after the step's cleanup,
+  `0 per-item records left on this step's 4 jobs`.
+
+The whole run came out **267 ✓ / 0 ✗, exit 0**. It was performed on resources this round owns
+rather than on the shared `demo/run-demo.sh leadworks` boot, and the reason is a collision, not
+a preference: another session's runner on this box begins with `fuser -k 3300/tcp` and re-seeds
+the shared database, so a run against 3300 can be answered by the other build and lose its API
+key mid-flight — three attempts here died exactly that way: one partway through on a key the
+other run had just revoked, two with port 3300 taken over from under them.
+So the app was started from this worktree on port **3311**, against a `pg_dump` clone of the
+shared table (`leadworks_r40`), with a private Redis on **6380** and the webhook capture on
+**3901** — the environment `run-demo.sh` itself supplies (`ABET_ALLOW_PRIVATE_TARGETS=1`,
+`EXPORT_RETENTION_MS=25000`, a freshly minted key) with only those four addresses changed
+(`/tmp/opencode/lw40-harness.sh`). The database behind it therefore holds this demo's own
+earlier traffic, which is why the census above reads 353 rather than the 386 rows the shared
+production table held when the module was written.
+
+Verification: `npm test` **755/755** (54 new), `npx tsc --noEmit` clean, `npm run lint`
+**0 errors / 12 warnings** (13 → 12), `npm run build` exit 0.
 
 ## Score: one arithmetic, and who may change it
 
