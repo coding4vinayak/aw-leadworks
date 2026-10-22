@@ -1,6 +1,8 @@
 import { chromium, Browser, Page } from "playwright";
+import { existsSync } from "node:fs";
 import { prisma } from "./db";
-import { queues, enqueue } from "./queue";
+import { assertAllowedTarget } from "./egress";
+import { classifyLaunchFailure, scrapeCapability, type Capability } from "./scrape-capability";
 import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
 export interface ScrapeConfig {
@@ -38,6 +40,17 @@ export interface ScrapedLead {
   source?: string;
 }
 
+/** What this instance would launch, and whether it is there. Kept out of the pure module. */
+export function readBrowserProbe(): Capability {
+  let executablePath: string | null = null;
+  try {
+    executablePath = chromium.executablePath();
+  } catch {
+    executablePath = null;
+  }
+  return scrapeCapability({ executablePath, present: executablePath !== null && existsSync(executablePath) });
+}
+
 export async function runScrapeJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
@@ -52,6 +65,24 @@ export async function runScrapeJob(jobId: string): Promise<void> {
   let errors = 0;
 
   try {
+    // Two questions get answered before this process opens a wire. The policy is asked
+    // first, and not because it costs more: `config.url` is a caller-named address this
+    // server is about to connect to, and a refusal that depends on which box the code is
+    // sitting on must not be allowed to swallow a refusal that does not. #39 measured
+    // `file:///etc/passwd` and `http://169.254.169.254/latest/meta-data/` stored by
+    // `POST /api/sources` with a 201 and run with the identical failure a public URL got,
+    // which is the signature of a check that never ran — and this box has no browser, so
+    // had the capability been asked first every one of those runs would have reported
+    // hardware and the guard's verdict would have been unobservable on the instance that
+    // needed to prove it. The capability second, because on an instance with no browser
+    // nothing else in this function can happen and the launch's own failure is a
+    // five-line banner that would otherwise land in `Source.lastRunError`.
+    // `assertAllowedTarget` is the same call the webhook delivery makes and the source
+    // doors make, so a scrape cannot be pointed somewhere a webhook could not be pointed.
+    await assertAllowedTarget(config.url, "config.url");
+    const capability = readBrowserProbe();
+    if (!capability.runnable) throw new Error(capability.reason);
+
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -71,6 +102,11 @@ export async function runScrapeJob(jobId: string): Promise<void> {
 
     while (currentPage <= maxPages) {
       const pageUrl = buildPageUrl(config.url, config.pagination, currentPage);
+      // Pagination is built out of the caller's own URL, so the page-2 answer is a second
+      // caller-named address and gets the second ask. This is the line the navigation
+      // actually hands to the browser, and the egress census reads a policy call sitting
+      // in the same block above it.
+      await assertAllowedTarget(pageUrl, "config.url");
       await page.goto(pageUrl, { waitUntil: "networkidle" });
 
       if (config.waitFor) {
@@ -109,7 +145,12 @@ export async function runScrapeJob(jobId: string): Promise<void> {
       data: { lastRunAt: new Date(), lastRunStatus: "SUCCESS", totalLeadsFound: { increment: totalSaved } },
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const raw = error instanceof Error ? error.message : "Unknown error";
+    // A missing browser gets one sentence rather than Playwright's banner, because this
+    // string is what `Source.lastRunError` will hold and what an operator reads. Anything
+    // else keeps its own words: a scrape error tidied into a capability sentence would be
+    // a different lie.
+    const errorMessage = classifyLaunchFailure(raw) ?? raw;
     errors++;
     await prisma.job.update({
       where: { id: jobId },
@@ -211,33 +252,4 @@ async function navigateToNextPage(page: Page, pagination?: ScrapeConfig["paginat
     }
   }
   return false;
-}
-
-export async function runScheduledScrapers(): Promise<void> {
-  const now = new Date();
-  const sources = await prisma.source.findMany({
-    where: { isActive: true, schedule: { not: null } },
-    include: { workspace: true },
-  });
-
-  for (const source of sources) {
-    if (!source.schedule) continue;
-    // In production, use a proper cron parser like croner
-    // This is a simplified check - run if schedule contains current hour
-    const cronParts = source.schedule.split(" ");
-    const currentHour = now.getHours();
-    if (cronParts[1] !== "*" && parseInt(cronParts[1]) !== currentHour) continue;
-
-    const job = await prisma.job.create({
-      data: {
-        workspaceId: source.workspaceId,
-        sourceId: source.id,
-        type: "SCRAPE",
-        status: "PENDING",
-        config: { url: source.config as any, selectors: {} },
-      },
-    });
-
-    await enqueue(queues.scrape, "run-scrape", { jobId: job.id });
-  }
 }
