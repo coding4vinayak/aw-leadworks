@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { enrichmentVisit, jobResultRow, progressValue } from "./job-report";
 import { queues, enqueue } from "./queue";
 import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
@@ -93,26 +94,70 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
 
   for (const lead of leads) {
     try {
-      const result = await enrichLead(lead, config);
-      if (result) {
-        const written = await updateLeadEnrichment(job.workspaceId, lead, result, config.providers, ruleId);
-        if (written > 0) enriched++;
+      const answer = await enrichLead(lead, config);
+      if (answer) {
+        const written = await updateLeadEnrichment(job.workspaceId, lead, answer.columns, config.providers, ruleId);
+        if (written.length > 0) enriched++;
+        await prisma.jobResult.create({
+          data: jobResultRow(jobId, enrichmentVisit(lead.id, {
+            lead,
+            written,
+            declaredFields: config.fields ?? [],
+            // What the providers named and what the rule's `fields` allowed through are
+            // two different sets, and only the first is "what came back". Reporting the
+            // narrowed one as the answer is how a visit ended up claiming a provider
+            // named nothing when the rule had simply refused to name it.
+            named: answer.named,
+            answered: Object.keys(answer.columns),
+          })),
+        });
+      } else {
+        await prisma.jobResult.create({
+          data: jobResultRow(jobId, {
+            leadId: lead.id,
+            status: "SKIPPED",
+            data: {
+              reason: "no provider returned an answer",
+              asked: config.providers,
+            },
+          }),
+        });
       }
       processed++;
     } catch (error) {
       failed++;
       await logEnrichmentError(job.workspaceId, lead.id, error, ruleId);
+      await prisma.jobResult.create({
+        data: jobResultRow(jobId, {
+          leadId: lead.id,
+          status: "FAILED",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      });
     }
 
     await prisma.job.update({
       where: { id: jobId },
-      data: { processedItems: processed, failedItems: failed },
+      data: {
+        progress: progressValue({ total: leads.length, processed, failed }),
+        processedItems: processed,
+        failedItems: failed,
+      },
     });
   }
 
   await prisma.job.update({
     where: { id: jobId },
-    data: { status: "COMPLETED", completedAt: new Date(), progress: 100, processedItems: processed, failedItems: failed },
+    data: {
+      status: "COMPLETED", completedAt: new Date(),
+      // The denominator is written by the hand that computed it. `totalItems` used to
+      // exist only when a door stamped one at create time, so a job that visited 16
+      // rows reported `totalItems: 0` next to `progress: 100`.
+      totalItems: leads.length,
+      progress: progressValue({ total: leads.length, processed, failed }),
+      processedItems: processed,
+      failedItems: failed,
+    },
   });
 
   // After the write that makes the event true, and bounded: the dispatcher
@@ -144,7 +189,15 @@ async function getLeadsToEnrich(workspaceId: string, config: EnrichmentConfig): 
   return leads.filter((lead) => leadMatches(stored.conditions, lead));
 }
 
-async function enrichLead(lead: any, config: EnrichmentConfig): Promise<EnrichmentResult | null> {
+/** A provider's answer, in the two sets the record of the visit needs to be honest. */
+export interface EnrichmentAnswer {
+  /** Every column a provider named. */
+  named: string[];
+  /** The named ones this rule's `fields` allowed through — what may be written. */
+  columns: EnrichmentResult;
+}
+
+async function enrichLead(lead: any, config: EnrichmentConfig): Promise<EnrichmentAnswer | null> {
   const results: EnrichmentResult = {};
   let answered = 0;
 
@@ -169,7 +222,8 @@ async function enrichLead(lead: any, config: EnrichmentConfig): Promise<Enrichme
   // `lib/enrich-plan.ts` stamps it and logs `PARTIAL` with nothing in it, which is
   // the honest shape of "a provider answered, the rule wanted something else". An
   // empty list means the rule said nothing about columns, and nothing is removed.
-  return restrictToDeclared(results, config.fields);
+  // Both sets go out, because the record has to say which of the two emptied it.
+  return { named: Object.keys(results), columns: restrictToDeclared(results, config.fields) };
 }
 
 async function enrichWithProvider(lead: any, provider: string, fields: string[]): Promise<Partial<EnrichmentResult> | null> {
@@ -194,7 +248,7 @@ async function updateLeadEnrichment(
   result: EnrichmentResult,
   providers: string[],
   ruleId: string | null,
-): Promise<number> {
+): Promise<string[]> {
   const plan = planEnrichmentWrite(lead, result);
   await prisma.lead.update({ where: { id: lead.id }, data: plan.data });
 
@@ -212,7 +266,7 @@ async function updateLeadEnrichment(
     },
   });
 
-  return plan.written.length;
+  return plan.written;
 }
 
 async function logEnrichmentError(workspaceId: string, leadId: string, error: unknown, ruleId: string | null): Promise<void> {

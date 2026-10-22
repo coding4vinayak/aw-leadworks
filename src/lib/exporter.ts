@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { progressValue } from "./job-report";
 import { dispatchWebhookEvent } from "./webhooks";
 import { stringify } from "csv-stringify/sync";
 import * as XLSX from "xlsx";
@@ -70,7 +71,12 @@ export async function runExportJob(jobId: string): Promise<void> {
 
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "COMPLETED", completedAt: new Date(), progress: 100, processedItems: leads.length },
+      data: {
+        status: "COMPLETED", completedAt: new Date(),
+        totalItems: leads.length,
+        progress: progressValue({ total: leads.length, processed: leads.length, failed: 0 }),
+        processedItems: leads.length,
+      },
     });
 
     // Last, after both rows say COMPLETED — a receiver that fetches the export

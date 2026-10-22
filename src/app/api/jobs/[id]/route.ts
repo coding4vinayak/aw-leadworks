@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { JOB_PATCH } from "@/lib/fields";
+import { jobReport } from "@/lib/job-report";
 import { enqueueJob, hasRunner, QueueUnavailableError } from "@/lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,11 @@ async function GET_impl(request: Request, { params }: { params: Promise<{ id: st
   });
   if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, job.workspaceId);
-  return NextResponse.json(job);
+  // `results` is the newest 50 of them, which is not the same question as how many
+  // there are. Counted, so a caller can tell 50 of 50 from 50 of 4,000 — and so the
+  // row's own percentages are read as arithmetic with a denominator next to it.
+  const recorded = await prisma.jobResult.count({ where: { jobId: id } });
+  return NextResponse.json({ ...job, report: jobReport(job, recorded, job.results.length) });
 }
 
 async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
