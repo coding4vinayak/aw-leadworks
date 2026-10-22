@@ -9,7 +9,7 @@
 // nothing in `package.json` installs a browser (`postinstall` is absent), and
 // `~/.cache/ms-playwright` does not exist — every scrape dies on the launch. Measured:
 // three sources run in a row, all three jobs `FAILED`, and all three wrote the same
-// five-line banner into `Job.error` and `Source.lastRunError`:
+// the same banner into `Job.error` and `Source.lastRunError`:
 //
 //   browserType.launch: Executable doesn't exist at /home/opc/.cache/ms-playwright/
 //   chromium_headless_shell-1248/chrome-headless-shell-linux-arm64/chrome-headless-shell
@@ -22,10 +22,11 @@
 // it is the absence of a stated capability, stated.
 //
 // The second answer is the one that matters more, and it is the reason this file sits next
-// to `egress.ts` rather than inside the scraper: the same three runs proved the app *tries*
-// to connect to whatever `config.url` holds, because the failure was identical for
-// `https://example.com/` and for `file:///etc/passwd`. `src/lib/egress.ts` is the vendored
-// policy for exactly that shape — an address this process will connect to because a caller
+// to `egress.ts` rather than inside the scraper. The identical banner hid it: `chromium.launch()`
+// dies before any address is opened, so nothing the three runs printed could distinguish
+// `https://example.com/` from `file:///etc/passwd` — and the source, read straight after, says
+// `page.goto(config.url)` with nothing between the row and the wire. `src/lib/egress.ts` is the
+// vendored policy for exactly that shape — an address this process will connect to because a caller
 // named it — and the scrape path never called it. `tests/unit/egress-sites.test.ts` did not
 // see the gap either: its census matches a callee whose name contains `fetch`, and this
 // app's one navigation is `page.goto`, so the single site where a caller's address reaches a
