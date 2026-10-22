@@ -36,6 +36,16 @@
  *   status is `PARTIAL` when no column was filled. That is the true state of every
  *   provider in this build except `derive`, and a log line that claimed `SUCCESS`
  *   would be the second way this job lied.
+ * - **A visit that was refused says who refused it.** The schema pairs
+ *   `EnrichmentLog.beforeData` with `afterData` for exactly this audit, and only one
+ *   of the two was ever written: measured, a lead whose typed `VP` outlived a
+ *   provider's `C_LEVEL` and a lead whose provider answer the rule's own declaration
+ *   had pruned away left *byte-identical* log rows — `PARTIAL`, `fieldsEnriched: []`,
+ *   `afterData: {}`, `beforeData: null` — while the facts behind them are opposite
+ *   ones ("the row's own word won" versus "nobody asked for that"). The plan now
+ *   reports the row's value for every column the provider answered, so a refusal is
+ *   a recorded fact rather than a silence, and `null` in that record is the row
+ *   saying it held nothing.
  */
 
 import type { Prisma } from "@/generated/prisma/client";
@@ -84,6 +94,14 @@ export interface EnrichmentPlan {
   data: Prisma.LeadUpdateInput;
   /** The columns this visit filled, in the order the provider named them. */
   written: string[];
+  /**
+   * What the row said, for every column the provider answered: the prior value, or
+   * `null` where the row held nothing. This is `EnrichmentLog.beforeData`, and it is
+   * keyed by what was *answered*, not by what was written — the pair of the two is
+   * the audit. A column the provider left alone is absent, and a column the rule's
+   * declaration pruned away never reaches this plan at all, so it is absent here too.
+   */
+  before: Record<string, unknown>;
   /** `EnrichmentLog.status` — see the module docblock. */
   logStatus: "SUCCESS" | "PARTIAL";
 }
@@ -126,11 +144,17 @@ function fits(column: string, value: unknown): boolean {
 export function planEnrichmentWrite(lead: EnrichableLead, result: Record<string, unknown> | null | undefined): EnrichmentPlan {
   const data: Record<string, unknown> = { lastEnrichedAt: new Date() };
   const written: string[] = [];
+  const before: Record<string, unknown> = {};
   const answers = result ?? {};
 
   for (const column of ENRICH_WRITABLE) {
     const value = answers[column];
     if (value === undefined || value === null) continue;
+    // The row is asked before it is changed, and for every column the provider had an
+    // opinion about — including the ones this plan is about to refuse. What landed is
+    // `written`; this is the other half of the audit, and the reason a refusal is a
+    // recorded fact rather than a `PARTIAL` with nothing in it.
+    before[column] = lead[column] ?? null;
     if (holds(lead[column])) continue;
     if (!fits(column, value)) continue;
     data[column] = value;
@@ -148,6 +172,7 @@ export function planEnrichmentWrite(lead: EnrichableLead, result: Record<string,
   return {
     data: { ...data, ...scoredWriteData(rowAfterWrite(lead, data)) } as Prisma.LeadUpdateInput,
     written,
+    before,
     logStatus: written.length > 0 ? "SUCCESS" : "PARTIAL",
   };
 }

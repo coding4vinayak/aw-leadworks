@@ -334,6 +334,75 @@ a workspace fill with leads that never got the fields they asked for; the rules 
 now refuses it with the list of names the worker dispatches on, and folds `Apollo`
 onto the spelling the dispatch table compares (`enrichment-providers.ts`).
 
+### What the row said before a visit changed it
+
+`schema.prisma` declares `EnrichmentLog.beforeData Json?` beside `afterData Json?` —
+the audit pair, one column for what the row said and one for what landed. Only the
+second was ever written. Measured against the running app before this round, over three
+leads sharing the title `Chief Operating Officer` and one provider: the lead whose typed
+`VP` outlived the provider's `C_LEVEL`, and the lead whose provider answer the rule's own
+declaration had pruned away, left **byte-identical** log rows —
+`["PARTIAL", [], null, {}, "derive"]`. `beforeData` was `null` in all three, including the
+gap case where something *was* written, so the row held nothing or the row refused to say
+and the record did not tell them apart. Two opposite facts — "the row's own word won" and
+"nobody asked for that" — were stored as one silence.
+
+`planEnrichmentWrite` reports the row's own words now, and `updateLeadEnrichment` stores
+them.
+
+- **`before` is keyed by what was *answered*, never by what was written.** That is the
+  point of the pair: `fieldsEnriched` says what changed and `beforeData` says what the row
+  said, which makes a refusal a recorded fact instead of an empty string.
+- **`null` in that record is the row saying it held nothing.** Enrichment here is additive,
+  so the first visit to an empty column logs `{"seniority": null}` and the second logs
+  `{"seniority": "C_LEVEL"}` — the same rule, two honest rows.
+- **The row's own value is recorded even when nothing lands.** A provider handing back a
+  bare string for a column that holds a list — `"React"` where the row has `["React"]` —
+  is not coerced, and until this round that refusal left no trace; the row now says
+  `{"technologies": ["React"]}` beside an empty `afterData`. A blank `"  "` and an empty
+  `[]` are recorded as the gaps they are, and get filled.
+- **A column the rule's declaration pruned never reaches this plan, so it is absent here
+  too.** The pruning happened upstream in `restrictToDeclared`, and this module does not
+  invent a value for an answer it was never shown.
+- **One plan per visit, one log row per plan.** Both halves plus `fieldsEnriched` are
+  arguments to the same single `enrichmentLog.create`, so the pair can never describe two
+  different visits. `logEnrichmentError` writes neither half: nothing was answered, so
+  there is nothing the row could be said to have been asked.
+
+`GET /api/leads/{id}` includes `enrichmentLogs` with no `select`, so both halves arrive
+with the row. `explain-lead` still cites only `afterData` — what landed, not what was
+there before — which is the one read surface this round left alone.
+
+Pinned offline by `tests/unit/enrich-provenance.test.ts` (18: the schema already asked for
+both halves; `before` keyed by the answer set and not the write set; a gap as `null`; a
+blank and an empty list kept as the row said them; a dropped shape mismatch visible while
+nothing lands; a pruned column absent; the refusal and the pruning having different
+signatures; the record surviving a JSON round trip; the second visit; and a mixed list
+where `written` is two columns while `before` is three — plus a source scan showing the
+triple in one create call, one plan per visit, no invented halves on a thrown visit, the
+detail door returning whole log rows, and #29's score and status invariants untouched).
+The live proof is `demo/run-demo.sh leadworks` STEP 14: the lead that kept its `VP` logs
+`beforeData {"seniority": "VP"}` while the lead whose answer was pruned logs `{}` —
+*after* agreeing with it on `status`, on the empty write list and on the empty
+`afterData`, which is exactly the byte-identical pair this round exists to split; the lead
+with the real gap logs `{"seniority": null}` beside `{"seniority": "C_LEVEL"}`, `SUCCESS`,
+`ENRICHED` and **47 → 53**; a provider that read the title and abstained (`derive` answers
+nothing for `Head of Growth`) still records the visit — a stamp, a `PARTIAL`, and nothing
+in either half of the audit; and running the same rule a second time logs `PARTIAL` with
+`beforeData {"seniority": "C_LEVEL"}`, both rows readable side by side on the lead. 10
+checks in this step, and the whole run against this build is **129 ✓ / 0 ✗**, exit 0.
+
+What this does not claim: the abstaining provider and the pruned answer are *one* record,
+because in both cases nothing reached the plan. What separates them is the rule's own
+`actions` — printed above each row in that step, and stored on the rule — not anything the
+log invents.
+
+The count above is the build this section landed on. The demo's next step adds ten more
+checks and prints the count against that one.
+
+The count the run prints belongs to the build this section landed on. The demo's next step
+adds ten more checks and prints the count against that one.
+
 ### The button on a lead's own row
 
 `POST /api/leads/{id}?action=enrich` is the one door that names a person rather than a
