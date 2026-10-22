@@ -1667,11 +1667,11 @@ What this does not claim, in the words the surfaces use:
 - **A stop lands in two writes, and the window between them is the row that was in flight.**
   `?action=cancel` marks the row at once; the worker's own terminal write — the one carrying the
   counters, the denominator and the percentage — comes only after the lead it had already started
-  finishes. A reader that polls the *status* alone can therefore catch a row saying 3 accounted
-  for beside 4 records, short by exactly the one row it is still working, for as long as that row
-  takes. STEP 22 used to poll that way and this run is how it was found: the step now reads the
-  mark's snapshot and the worker's snapshot separately, waits for the row to agree with the
-  records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
+  finishes, and each row's record is written before its counter is counted. A reader that polls the
+  *status* alone can therefore catch a row saying 3 accounted for beside 4 records, short by the
+  one row it is still working, for as long as that row takes. STEP 22 used to poll that way and the run before this one is how it was found: the step
+  now reads the mark's snapshot and the worker's snapshot separately, waits for the row to agree
+  with the records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
   abandoning a row mid-visit — the one thing a stop must not do — or writing each record and its
   counters in one transaction, which is a decision about every row rather than about the stop.
 - **`Job.status` still has no value between COMPLETED and FAILED**, so a stop that reached some
@@ -1690,12 +1690,13 @@ Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated bo
   `results.recorded` 3 — one per row it did and none for the crowd it did not — the leads
   themselves agreeing (3 rows carrying a fresh `lastEnrichedAt`, 297 not), and `report.problem`
   null beside a note that names reached, left, and the row that was already in flight.
-- **A stop is two writes, and the demo reads both.** The door's mark and the worker's own
-  terminal stamp landed 3 rows apart from each other and 0 rows apart in this run's account — the
-  step snapshots the row as the mark arrives, waits for the row to agree with the records it
-  holds, and asserts the gap never exceeds the one row that was in flight. An earlier run of this
-  step polled the status alone and read 3 accounted for beside 4 records: that is the window, and
-  the check is now the proof of its size rather than an accident of timing.
+- **A stop is two writes, and the demo reads both.** The door marks the row at once; the
+  worker's terminal stamp — the one carrying the counters — follows when the lead it had already
+  started finishes. STEP 22 snapshots the row as the mark arrives and again once the row agrees
+  with the records it holds, and asserts the gap between the two is never more than the one row in
+  flight; this run's gap was **0**, because the mark landed at a boundary with nothing in flight.
+  The run before it polled the status alone and read 3 accounted for beside 4 records — that is
+  the window, and the check is now the proof of its size rather than an accident of timing.
 - **A stopped job tells nobody a finish it did not have — proved against a job that did.** A
   webhook subscribed to `enrichment.completed` receives **nothing** for the stopped job and
   **exactly one** delivery for a 3-lead control that finished, so the silence above means the
