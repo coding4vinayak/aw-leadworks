@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteNav, SiteFooter } from "@/components/site";
+import { VERSION } from "@/lib/version";
 
 export const metadata: Metadata = {
   title: "LeadWorks — Find the buyers who are already looking.",
@@ -14,7 +15,7 @@ export default function Home() {
       <main>
         <section className="mx-auto max-w-4xl px-6 pb-16 pt-20 text-center">
           <p className="inline-block rounded-full bg-blue-50 text-blue-700 px-3 py-1 text-xs font-semibold uppercase tracking-wide">
-            v1.0 · Now generally available
+            v{VERSION} · Now generally available
           </p>
           <h1 className="mt-6 text-5xl font-bold tracking-tight">LeadWorks</h1>
           <p className="mx-auto mt-4 max-w-2xl text-xl text-gray-600">Find the buyers who are already looking.</p>
