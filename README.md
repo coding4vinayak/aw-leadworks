@@ -160,7 +160,10 @@ the snippets omit the header for width.
 ```
 GET    /api/health                         # liveness + DB ping, no key
 GET    /api/sources?workspaceId=           # list
-POST   /api/sources                        # create (web scraper, API, CSV, manual)
+POST   /api/sources                        # create (web scraper, API, CSV, manual); a
+                                           # `schedule` is refused unless some minute can
+                                           # match it (see *the cadence somebody types*)
+PATCH  /api/sources/{id}                   # rename, retype, or set/clear the cadence
 GET    /api/sources/{id}                   # detail + recent jobs
 POST   /api/sources/{id}?action=run        # launch a scrape now
 GET    /api/jobs?workspaceId=              # list, filter by type/status
@@ -398,6 +401,8 @@ same click used to walk 19 rows and stamp none. The same door opened on a
 and `POST /api/enrichment-rules` requires the field. Until this round nothing performed
 it: one column had two readers and honoured neither. `scheduler.ts` asked
 `shouldRunNow(typeof rule.actions === "string" ? rule.actions : "", now)` — the JSON
+(`shouldRunNow` is the matcher `scheduler.ts` kept until #38 replaced it with
+`cron-schedule.ts`; the coercion above is what was measured, not what ships now)
 object every door requires, coerced to `""` — and both run doors queued `fields: []`
 whatever the rule declared.
 
@@ -418,19 +423,24 @@ identical `Chief Operating Officer` leads — one declaring `industry`, one decl
   every job in this build was queued before the declaration was read, and it is what the
   single-lead door still sends, so STEP 12's visit is untouched. What a visit may write
   at all remains `enrich-plan.ts`'s decision; this narrows it further and never widens it.
-- **`schedule` is the cron the minute is matched against**, stored in the one
-  single-space form `shouldRunNow` splits.
+- **`schedule` is the cron the minute is matched against**, read by `lib/cron-schedule.ts`
+  — the grammar and the matcher in one module, stored in the single-space form it splits,
+  and asked the same way by every door that keeps a cadence.
 - **A declaration this build cannot honour is refused at the door that would store it,**
   every problem in one 400, with the offending part quoted: a key nothing performs
   (`enrich` was this repo's own demo spelling), a column no write knows — the refusal
   quotes the list `ENRICH_WRITABLE` owns, which `rule-actions.ts` imports instead of
-  re-spelling — an empty list, a cadence holding a step (`*/5`) or a range (`9-17`),
-  which reads as a schedule and is never matched by this build, a number outside its
-  field's range, and the one pairing the blob cannot state about itself: a `SCHEDULED`
+  re-spelling — an empty list, a cadence holding a weekday or month name, a `?`, a step of
+  `0`, a range that runs backwards or a number outside its field's range, and the one
+  pairing the blob cannot state about itself: a `SCHEDULED`
   rule with no cadence is stored, active and never swept, and a cadence on any other
   trigger is stored and never swept. Both halves of that are checked on the edit door
   too, against whichever half the request left alone, so flipping `trigger` to
   `SCHEDULED` cannot smuggle in the row the create door refuses.
+  *#38 retired one clause of this list:* a step (`*/5`) or a range (`9-17`) used to be
+  refused here on the matcher's behalf, because the matcher split each field on `,` and
+  compared whole strings. That matcher is gone; the two shapes are cadences now, they are
+  accepted at every door that stores one, and the rest of the list is still refused.
 - **Junk already in the column contributes a log line and skips the rule**, the way
   unreadable `conditions` already do, and `?action=run` answers 400 instead, because
   that call has a caller to tell.
@@ -821,6 +831,112 @@ no workspace to decide from`; one sweep minute after the guard refused, the same
 files, 66,598 bytes**, and this script's own count of the same directory against the same table's
 30 paths lands on the same 25. 16 checks in this step, 9 in STEP 17 above it, and the whole run
 against this build is **189 ✓ / 0 ✗**, exit 0.
+
+### …and the cadence somebody types is the cadence the sweep reads: one grammar, four doors, and a line for the rows that predate it
+
+#34 refused a step and a range at the enrichment-rule door *on the matcher's behalf* —
+`("/5" and "9-17" are not matched, so such a rule would never fire)`. That matcher was
+`shouldRunNow`, nineteen lines at the foot of `scheduler.ts`, under a comment reading
+`Simplified cron matching - in production use croner or similar`: split each field on `,`,
+compare whole strings. The refusal was right about the matcher and wrong about the product,
+because it was the only place the matcher's limits were stated. `Source.schedule` and
+`ExportProfile.schedule` are plain `String?` columns behind doors that take any 64 characters.
+
+Measured against the running app before any of this changed: four sources created in one
+minute, left for four sweep minutes.
+
+| stored `schedule` | what it asks for | `Job` rows in four sweep minutes |
+|---|---|---|
+| `*/5 * * * *` | a scrape every fifth minute | **0**, in a window holding minute :20 and :25 |
+| `0 9 * * 1-5` | a weekday-morning scrape | **0**, forever |
+| `* * * * * 1` | a scrape restricted to one weekday | **4** — one per minute, on **every** day |
+| `* * * * *` | the control | 4, which is what proves the other three were a deaf sweep, not a dead one |
+
+Two silences and one lie: a six-field expression passed the matcher's `parts.length < 5` test,
+was read as its *first five* fields, and so ran every minute of every day while its sixth field
+— the one that was supposed to restrict it — was the field that got dropped. Nothing was printed
+in any of the three cases. The same three strings, sent to `POST /api/enrichment-rules`, came
+back 400 with the offending part quoted.
+
+`src/lib/cron-schedule.ts` is the fix in both halves. It honours `*`, a whole number, a comma
+list, an inclusive range `a-b`, and a step `*/n`, `a-b/n` or `a/n`; it takes `7` as Sunday's
+other spelling and folds it to `0` before matching; and it refuses, by name, what it will not
+read — a weekday or month name (naming the convention it belongs to), `?` and `#`, the `L`/`W`
+extensions, a step of `0`, a range that runs backwards, a number outside its field, an empty
+entry between commas, anything that is not exactly five fields — every field's problem in one
+message. Two decisions are stated rather than inherited:
+
+- **A cadence that restricts both a day of month and a day of week means the day that is
+  both**, not either. Vixie cron means either. This matcher has always meant both, and #38 kept
+  it, because rows stored under the old matcher mean what *it* said — silently widening every
+  `0 12 15 * 1` in a live database would be the same class of surprise this round exists to close.
+  It is a pinned behaviour now, not a comment someone can forget.
+- **`matchesSchedule` answers `false` for a cadence `scheduleProblem` would refuse**, so a caller
+  that skipped the check still cannot run work nobody asked for. It only cannot say why it is
+  quiet — which is why the doors check and the sweep logs.
+
+The four states a cadence can be in, and who says them: `POST /api/sources` and
+`PATCH /api/sources/{id}` refuse an unreadable one with the matcher's own sentence before
+`prisma.source.create`/`update` runs (`null` still means no cadence, which is why the door gates
+on `typeof … === "string"`); `POST /api/enrichment-rules` refuses it through `actionsProblem`,
+which now imports the grammar instead of re-spelling the field table, so the rule's 400 contains
+the matcher's sentence verbatim; the sweep asks the grammar per row and, for a `schedule` stored
+before the door refused, prints `Source <id> is active and scheduled, but no minute matches it —
+schedule "* * * * * 1" is 6 fields — this build reads exactly five (…)` and skips the row; and a
+cadence that is well formed but cannot fall on the calendar (`0 0 30 2 *`) is matched as never,
+not refused — inventing a rule about February 30th would be the product deciding what a cron
+means, which is the thing this round stopped doing.
+
+Pinned offline by `tests/unit/cron-schedule.test.ts` (27 of the 670 in the suite: known answers
+on fixed clocks, including 12-of-60 for `*/5`, the range-with-step, `7` and `0` as the same
+Sunday, the 15th-and-a-Monday pairing, and February 30th; every refusal's wording checked
+against the field it names; the accepted shapes quoted once in `GRAMMAR`; the module imports
+nothing, reads no clock, and mutates nothing it was handed). The cross-check the round turns on
+is one table of 19 cadences run through **both** verdicts — the matcher's and the rule door's —
+asserting they agree on every row and that the rule's message contains the matcher's sentence,
+because two grammars disagreeing is the bug this round measured, wearing a different hat. The
+source scans pin `shouldRunNow` and its `Simplified cron matching` comment gone from every file
+in `src/`, the five field ranges spelled in exactly one module, three `matchesSchedule` calls in
+the sweep and no `getX()` clock read in it, and both source doors refusing before their write.
+`rule-actions.test.ts`, `rule-priority.test.ts` and `queue.test.ts` were retargeted where they
+pinned the deleted matcher — the two cadences #34 refused by name are asserted *accepted* now,
+and the field table's own copy is gone rather than kept beside the original. Lint went from 18
+warnings to 14: four of them were dead locals in the code this round deleted, two of them in the
+matcher (`nowDayOfMonth`/`nowDayOfWeek`, computed while the same line already had `now.getDate()`).
+
+Live, `demo/run-demo.sh leadworks` STEP 19 — 18 checks, and the whole run **207 ✓ / 0 ✗**,
+exit 0, against the rebuilt app. Six cadences go to `POST /api/sources`, and each comes back
+400 naming the part it refuses in quotes and the field it belongs to: `0 9 * * MON-FRI` gets
+`"MON-FRI" is not something this build's matcher reads — day of week must be "*" or a whole
+number, a comma-separated list, an inclusive range "a-b", or a step`, `* * * * * 1` gets
+`schedule "* * * * * 1" is 6 fields — this build reads exactly five (minute hour day-of-month
+month day-of-week)`, `*/0 * * * *` gets `"*/0" steps by 0, which never advances — a step is 1
+or more`, `61 * * * *` gets `minute "61" holds 61, outside 0-59`, `0 0 ? * 1` gets `"?" holds a
+"?" or "#", which this build's matcher does not read`, and `20-5 * * * *` gets `"20-5" is a
+range that runs backwards in minute: 20-5`. The same `MON-FRI` sent to
+`POST /api/enrichment-rules` comes back with the matcher's sentence *inside* the rule door's
+400 — the check is a substring test, because one grammar two doors paraphrase is two grammars.
+The three cadences #34 refused at the rule door on the matcher's behalf — `*/5 * * * *`,
+`0 9 * * 1-5`, `*/15 9-17 * * 1-5` — answer **201** now, and `PATCH /api/sources/{id}` refuses
+`0 9 * * SUN` with the same quoted-part sentence the create door uses while `schedule: null`
+stays a clear rather than a cadence to refuse.
+
+Then the minute itself: a source stored with `*/2 * * * *` mints its first scrape job inside
+the 60-second poll and that job's own timestamp reads **minute :04** — an even minute, which is
+what a 2-minute step means, where the pre-round build answered `*/5 * * * *` with 0 jobs in a
+260-second window that contained two of the fifth-minutes. The row the measurement caught
+lying — `* * * * * 1`, hand-inserted over `psql` because no door would take it
+anymore — mints **0** jobs in the same window and prints
+`Source demo38legacy is active and scheduled, but no minute matches it — schedule "* * * * * 1"
+is 6 fields — this build reads exactly five (minute hour day-of-month month day-of-week)`, so a
+cadence that predates the door is a line in the stdout instead of an absence nobody can
+distinguish from a quiet minute. Cleanup leaves 0 of STEP 19's rows in `Source`.
+
+STEP 13's refusal list was retargeted rather than left to rot: `*/5 * * * *` came out of it (it
+is readable now, and STEP 19 proves what it does) and `* * * * * 1` went in, so that step still
+shows a door refusing a cadence the sweep cannot act on instead of quietly agreeing with one
+it cannot read.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
@@ -870,7 +986,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 642 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 670 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
@@ -986,8 +1102,10 @@ is indistinguishable from an idle queue, because `/api/health` reports `waiting`
 `failed`, and all three are zero for a queue with a poller and for a queue with a worker.
 `registerScheduledSweep()` now supplies it: `upsertJobScheduler` under the fixed key
 `leadworks-scheduled-sweep`, `{ pattern: "* * * * *" }`, template name `run-scheduled` — every
-minute because `shouldRunNow` in `scheduler.ts` compares the stored cron's *minute* field
-against `now.getMinutes()`, so a coarser sweep drops matches. It runs last in `startWorkers()`
+minute because `matchesSchedule` in `cron-schedule.ts` decides which of those minutes mean
+anything, so a coarser sweep drops matches — the sweep hands it the clock and never reads one
+itself (`scheduler.ts` contained two unused `now.getX()` locals until #38 deleted them with the
+matcher they belonged to). It runs last in `startWorkers()`
 and bounded, so a schedule this app cannot add is not reported as six Workers that failed to
 start. Bounded is the operative word (#62): a bare `try { await registerScheduledSweep() }
 catch` did not save the boot, because against a Redis that answers nothing the call *never
