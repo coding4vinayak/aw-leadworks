@@ -1,4 +1,8 @@
 import { ENRICH_WRITABLE } from "./enrich-plan";
+import {
+  canonicalSchedule,
+  scheduleProblem,
+} from "./cron-schedule";
 
 /**
  * `EnrichmentRule.actions`, read as the promise its own comment makes.
@@ -6,7 +10,7 @@ import { ENRICH_WRITABLE } from "./enrich-plan";
  * `prisma/schema.prisma` spells the column `actions Json // What enrichment to
  * perform`, and `RULE_CREATE` makes it **required** — a rule cannot be stored
  * without declaring what it does. Nothing read it back, and one place read it
- * *wrong*: `scheduler.ts` handed the whole JSON column to `shouldRunNow` as a cron
+ * *wrong*: `scheduler.ts` handed the whole JSON column to the minute matcher as a cron
  * string (`typeof rule.actions === "string" ? rule.actions : ""`), so the required
  * object became `""`, `parts.length < 5` became true, and the SCHEDULED leg of the
  * minute sweep returned false for every rule the API can create.
@@ -46,13 +50,14 @@ import { ENRICH_WRITABLE } from "./enrich-plan";
  * The vocabulary is the row's own: a field is one of `ENRICH_WRITABLE`, the columns
  * `lib/enrich-plan.ts` says an enrichment may fill, so the two halves of a visit —
  * what the rule asked for and what a write is allowed to be — are spelled from one
- * list. `schedule` is the five fields `shouldRunNow` in `scheduler.ts` reads:
- * minute, hour, day of month, month, day of week, single-space separated, each one
- * `*` or a comma-separated list of numbers inside its own range. A step (`*` then a
- * slash and a count) or a range (`1-5`) is refused *by name* rather than stored,
- * because that matcher splits on `,` and compares whole strings: a rule written that
- * way would never fire, which is exactly the bug this module exists to make
- * impossible to create.
+ * list. `schedule` is the five fields `lib/cron-schedule.ts` reads, and this module
+ * imports the grammar rather than re-spelling it. Until #38 it also imported the
+ * matcher's *limits*: a step (a star, a slash and a count) or a range (`1-5`) was
+ * refused by name here because the matcher split each field on `,` and compared
+ * whole strings, so such a rule could never fire. The matcher has learned those two shapes, which retires
+ * this module's refusal of them and keeps every other one — a name, a `?`, a step of
+ * `0`, a number outside its field, an empty entry, a sixth field are all still
+ * refused here and now refused at the source door too, by the same call.
  */
 
 /** The keys a rule is allowed to declare about itself. */
@@ -66,15 +71,6 @@ export interface RuleActions {
   schedule: string | null;
 }
 
-/** The five fields `shouldRunNow` reads, with the range each one is allowed to hold. */
-const SCHEDULE_FIELDS: { name: string; lo: number; hi: number }[] = [
-  { name: "minute", lo: 0, hi: 59 },
-  { name: "hour", lo: 0, hi: 23 },
-  { name: "day of month", lo: 1, hi: 31 },
-  { name: "month", lo: 1, hi: 12 },
-  { name: "day of week", lo: 0, hi: 6 },
-];
-
 /** The triggers that carry a cadence, and the ones that do not. */
 const SCHEDULED_TRIGGER = "SCHEDULED";
 
@@ -84,11 +80,6 @@ function describe(value: unknown): string {
   if (Array.isArray(value)) return "an array";
   if (typeof value === "object") return "an object";
   return String(value);
-}
-
-/** `0  9 * *  1` and `0 9 * * 1` ask the same question of the same clock. */
-function canonicalSchedule(value: string): string {
-  return value.trim().split(/\s+/).join(" ");
 }
 
 function asFieldList(value: unknown): string[] | null {
@@ -114,37 +105,6 @@ function asFieldList(value: unknown): string[] | null {
 function canonicalColumn(word: string): string | null {
   const lowered = word.toLowerCase();
   return ENRICH_WRITABLE.find((column) => column.toLowerCase() === lowered) ?? null;
-}
-
-/** Why one cron field is not something `shouldRunNow` can match, or `null`. */
-function scheduleFieldProblem(field: string, spec: { name: string; lo: number; hi: number }): string | null {
-  if (field === "*") return null;
-  const parts = field.split(",");
-  for (const part of parts) {
-    if (part === "") return `"${field}" has an empty entry between its commas`;
-    if (!/^\d+$/.test(part)) {
-      return `"${field}" is not something this build's matcher reads — ${spec.name} must be "*" or a comma-separated list of whole numbers ("/5" and "9-17" are not matched, so such a rule would never fire)`;
-    }
-    const n = Number(part);
-    if (n < spec.lo || n > spec.hi) return `${spec.name} "${field}" holds ${n}, outside ${spec.lo}-${spec.hi}`;
-  }
-  return null;
-}
-
-/** Why this cadence can never be honoured, or `null` when the matcher can read it. */
-function scheduleProblem(value: unknown): string | null {
-  if (typeof value !== "string") return `schedule must be a cron expression of five fields — it is ${describe(value)}`;
-  const cron = canonicalSchedule(value);
-  const parts = cron.split(" ");
-  if (parts.length !== SCHEDULE_FIELDS.length) {
-    return `schedule "${value}" is ${parts.length} fields — this build reads exactly five (minute hour day-of-month month day-of-week)`;
-  }
-  const problems: string[] = [];
-  parts.forEach((part, index) => {
-    const problem = scheduleFieldProblem(part, SCHEDULE_FIELDS[index]);
-    if (problem !== null) problems.push(problem);
-  });
-  return problems.length > 0 ? problems.join("; ") : null;
 }
 
 /**

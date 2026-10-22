@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { SOURCE_CREATE } from "@/lib/fields";
+import { scheduleProblem } from "@/lib/cron-schedule";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,17 @@ async function POST_impl(request: Request) {
   // `isActive` still means true — that is the column's own `@default`.
   const input = validateBody(body, SOURCE_CREATE);
   if (!input.ok) return input.error;
+
+  // A cadence no minute can equal is not a slower schedule — it is no schedule, and this
+  // column takes any 64 characters. #38 measured `*/5 * * * *` stored with a 201, minting
+  // zero `Job` rows across four sweep minutes that contained two of its fifth-minutes, while
+  // `POST /api/enrichment-rules` refused the identical string with a 400. The refusal is the
+  // matcher's own grammar, imported rather than re-spelled, so the door and the minute that
+  // reads it cannot drift into disagreeing about what a cron means here.
+  if (typeof input.data.schedule === "string") {
+    const unreadable = scheduleProblem(input.data.schedule);
+    if (unreadable !== null) return NextResponse.json({ error: unreadable }, { status: 400 });
+  }
 
   const source = await prisma.source.create({ data: { workspaceId, ...input.data } });
 

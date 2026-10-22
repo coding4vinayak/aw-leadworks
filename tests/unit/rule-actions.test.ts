@@ -157,24 +157,39 @@ describe("actionsProblem: every shape a caller can write", () => {
 });
 
 describe("the cadence is the five fields the matcher reads", () => {
-  it("accepts what `shouldRunNow` can actually match", () => {
+  it("accepts what the matcher can actually match", () => {
     for (const cron of ["* * * * *", "0 9 * * *", "30 8,12 * * 0,6", "0 9 * 1,6 1"]) {
       assert.equal(refusal({ schedule: cron }), null, `${cron} is matchable`);
     }
+  });
+
+  it("accepts the two cadences #34 refused by name, because the matcher reads them now", () => {
+    // The step and the range used to be refused *here* on the grounds that the matcher
+    // split each field on "," and compared whole strings. #38 gave the matcher the grammar
+    // the column advertises, so refusing them would have been a lie about the matcher.
+    for (const cron of ["*/5 * * * *", "0 9 * * 1-5", "*/15 9-17 * * 1-5", "10/15 * * * *", "5-20/10 * * * *", "0 0 1 1 *", "0 9 * * 7"]) {
+      assert.equal(refusal({ schedule: cron }), null, `${cron} is a cadence this build runs`);
+    }
+    // …and the reader keeps it instead of folding it to "no cadence declared".
+    assert.equal(readRuleActions({ schedule: "*/5 * * * *" }).schedule, "*/5 * * * *");
   });
 
   it("stores the cadence in the form the matcher splits on", () => {
     assert.equal(readRuleActions({ schedule: "  0   9 * * 1  " }).schedule, "0 9 * * 1");
   });
 
-  it("refuses a field the matcher would never satisfy, and says why", () => {
-    // `shouldRunNow` splits each field on "," and compares whole strings, so a step or a
-    // range is not a coarser cadence — it is a rule that can never run.
-    const step = refusal({ schedule: "*/5 * * * *" })!;
-    assert.ok(step.includes('"*/5"'), `the offending field is quoted back, got: ${step}`);
-    assert.match(step, /is not something this build's matcher reads/);
-    assert.match(step, /minute must be/, "and the position it belongs to");
-    assert.match(refusal({ schedule: "0 9 * * 1-5" })!, /day of week must be/);
+  it("refuses a field the matcher still cannot satisfy, and says why", () => {
+    // What is left to refuse is what no matcher here reads: a name, a placeholder, a step
+    // that never advances, a range backwards, a number outside its field.
+    const name = refusal({ schedule: "0 9 * * MON-FRI" })!;
+    assert.ok(name.includes('"MON-FRI"'), `the offending field is quoted back, got: ${name}`);
+    assert.match(name, /is not something this build's matcher reads/);
+    assert.match(name, /day of week must be/, "and the position it belongs to");
+    assert.match(refusal({ schedule: "0 9 * * MON-FRI" })!, /weekday or month name/);
+    assert.match(refusal({ schedule: "0 0 1 JAN *" })!, /matcher reads — month must be/, "a month name is refused as the field it is in");
+    assert.match(refusal({ schedule: "*/0 * * * *" })!, /steps by 0, which never advances/);
+    assert.match(refusal({ schedule: "20-5 * * * *" })!, /runs backwards in minute/);
+    assert.match(refusal({ schedule: "0 0 ? * 1" })!, /holds a "\?" or "#"/);
     assert.match(refusal({ schedule: "0, 9 * * *" })!, /"0," has an empty entry/);
     assert.match(refusal({ schedule: "0 25 * * *" })!, /hour "25" holds 25, outside 0-23/);
     assert.match(refusal({ schedule: "60 * * * *" })!, /minute "60" holds 60, outside 0-59/);
@@ -190,7 +205,7 @@ describe("the cadence is the five fields the matcher reads", () => {
   });
 
   it("keeps an unreadable cadence out of the read-back too", () => {
-    assert.equal(readRuleActions({ schedule: "*/5 * * * *" }).schedule, null);
+    assert.equal(readRuleActions({ schedule: "0 9 * * MON" }).schedule, null);
     assert.deepEqual(readRuleActions({ fields: ["email"], schedule: "nope" }), { fields: ["email"], schedule: null });
   });
 });
@@ -199,7 +214,7 @@ describe("the pairing the blob cannot state", () => {
   it("refuses a SCHEDULED rule with no cadence, because nothing would ever run it", () => {
     assert.match(ruleDeclarationProblem("SCHEDULED", { fields: ["seniority"] })!, /a SCHEDULED rule needs actions\.schedule/);
     assert.match(ruleDeclarationProblem("SCHEDULED", {})!, /needs actions\.schedule/);
-    assert.match(ruleDeclarationProblem("SCHEDULED", { schedule: "*/5 * * * *" })!, /needs actions\.schedule/, "an unmatchable cadence is no cadence");
+    assert.match(ruleDeclarationProblem("SCHEDULED", { schedule: "0 9 * * MON" })!, /needs actions\.schedule/, "an unmatchable cadence is no cadence");
   });
 
   it("refuses a cadence on a trigger nothing sweeps", () => {
@@ -293,7 +308,7 @@ describe("the wiring, from the source", () => {
     assert.ok(!/typeof rule\.actions/.test(code), "the coercion that made every rule inert is gone");
     assert.equal(countCodeMentions(code, "rule-actions"), 1, "one import of the reader");
     const sweep = blankComments(functionBody(scheduler, "runScheduledJobs")!);
-    assert.match(sweep, /shouldRunNow\(declared\.schedule \?\? "", now\)/);
+    assert.match(sweep, /matchesSchedule\(declared\.schedule \?\? "", now\)/);
     // #34: the list on the job is the rule's own, filtered by what a higher-ranked rule
     // claimed — `planTick` is the only place that decides it, and `due` is built from the
     // rules this minute is actually due for.
