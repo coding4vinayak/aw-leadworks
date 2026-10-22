@@ -1571,13 +1571,13 @@ running application wrote itself:
   measured=false`, reason *“not measured: this job stamped no denominator, so there is no share
   of a whole to report”*.
 - **The residue counted out loud**: `terminal jobs still holding no per-item record, by type:
-  DEDUPE=55 ENRICH=380 EXPORT=125 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
+  DEDUPE=55 ENRICH=380 EXPORT=125 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated 3 ENRICH=376 EXPORT=117 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
   reason they are not gaps, and 353 COMPLETED rows on this database whose own counters disagree
   named at the top of the step.
 - **The cascade, checked rather than assumed**: after the step's cleanup,
   `0 per-item records left on this step's 4 jobs`.
 
-The whole run came out **290 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 19
+The whole run came out **290 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 19 87 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 17
 (the #41 round, below) among them. It was performed on resources this round owns
 rather than on the shared `demo/run-demo.sh leadworks` boot, and the reason is a collision, not
 a preference: another session's runner on this box begins with `fuser -k 3300/tcp` and re-seeds
@@ -1697,6 +1697,16 @@ Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated bo
   flight; this run's gap was **0**, because the mark landed at a boundary with nothing in flight.
   The run before it polled the status alone and read 3 accounted for beside 4 records — that is
   the window, and the check is now the proof of its size rather than an accident of timing.
+Live, in STEP 22 of the LeadWorks demo — **17 checks** on the same isolated boot as STEP 21:
+
+- **A stop read between two leads is a measurable share.** 300 leads imported, an ENRICH job
+  over those named ids, found `RUNNING` with 2 of 300 already counted and `progress=1` — a
+  percentage stamped while the job is still walking, not only at its finish line.
+  `?action=cancel` answers 200, and the row settles **`CANCELLED` at 4 processed + 0 failed of
+  300 with `progress: 1`**: 4 reached, 296 never started, `results.recorded` 4 — one per row it
+  did and none for the crowd it did not — the leads themselves agreeing (4 rows carrying a
+  fresh `lastEnrichedAt`, 296 not), and `report.problem` null beside a note that names
+  reached, left, and the row that was already in flight.
 - **A stopped job tells nobody a finish it did not have — proved against a job that did.** A
   webhook subscribed to `enrichment.completed` receives **nothing** for the stopped job and
   **exactly one** delivery for a 3-lead control that finished, so the silence above means the
@@ -1711,7 +1721,7 @@ Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated bo
   by name and with their reasons — and its cleanup takes 703 leads and 4 jobs back out through
   the doors, leaving 0 rows and 0 records from the step.
 
-STEP 22's 19 checks are among the **290 ✓ / 0 ✗, exit 0** that STEP 21's note above reports
+STEP 22's 19 checks are among the **290 ✓ / 0 ✗, exit 0** that STEP 21's note above reports 7 checks are among the **287 ✓ / 0 ✗, exit 0** that STEP 21's note above reports
 for the whole run.
 
 The 44 new offline tests are the same claims without a server: `stopAt`, `stopNote` and
