@@ -177,10 +177,13 @@ GET    /api/jobs?workspaceId=              # list, filter by type/status
 GET    /api/jobs/{id}                      # detail + up to 50 per-item results, beside a
                                            # `report` that says whether this row's
                                            # percentage has a denominator to be taken over
-POST   /api/jobs/{id}?action=retry|cancel  # re-run, or stop it: a worker that is running
+POST   /api/jobs/{id}?action=retry|cancel  # stop it, or restart it: a worker that is running
                                            # reads the mark before its next row, finishes the
                                            # row already in flight, and stamps CANCELLED with
-                                           # the arithmetic of the rows it actually did
+                                           # the arithmetic of the rows it actually did — and a
+                                           # row carrying that mark is one `?action=retry` may
+                                           # be taken from, which makes a new job over the
+                                           # crowd the stopped one's config names
 GET    /api/leads?workspaceId=             # list, filter status/minScore
 POST   /api/leads                          # create
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
@@ -1571,13 +1574,13 @@ running application wrote itself:
   measured=false`, reason *“not measured: this job stamped no denominator, so there is no share
   of a whole to report”*.
 - **The residue counted out loud**: `terminal jobs still holding no per-item record, by type:
-  DEDUPE=55 ENRICH=380 EXPORT=125 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
+  DEDUPE=55 ENRICH=380 EXPORT=125 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated 3 ENRICH=376 EXPORT=117 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
   reason they are not gaps, and 353 COMPLETED rows on this database whose own counters disagree
   named at the top of the step.
 - **The cascade, checked rather than assumed**: after the step's cleanup,
   `0 per-item records left on this step's 4 jobs`.
 
-The whole run came out **290 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 19
+The whole run came out **290 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 19 87 ✓ / 0 ✗, exit 0** — STEP 21's 25 checks and STEP 22's 17
 (the #41 round, below) among them. It was performed on resources this round owns
 rather than on the shared `demo/run-demo.sh leadworks` boot, and the reason is a collision, not
 a preference: another session's runner on this box begins with `fuser -k 3300/tcp` and re-seeds
@@ -1648,7 +1651,7 @@ The mark outranks every word a worker writes, at all four places a status is sta
 | an operator mid-run | `GET /api/jobs/{id}` | a measurable `progress` over a `totalItems` the worker stamped as it counted, and `results.recorded` — one per row reached, none for rows never started |
 | the same operator after a cancel | the same door | `verdict=CANCELLED`, `verdictNote` naming reached/left/in-flight, `problem=null` |
 | a caller of `?action=cancel` | `{ ok: true }` | the word the row ends on, unless it had already finished — the door still refuses to cancel a terminal row |
-| a caller of `?action=retry` | a new row | unchanged: retry has always made a *new* job, so an operator who stops a job at row 4 of 200 restarts it over the rows still standing |
+| a caller of `?action=retry` | a new row | retry has always made a *new* job, and #42 made a *stopped* row one it can be made from — this row said "unchanged" and the door answered `400 "Can only retry failed or completed jobs"`; see **A stop that can be undone** below |
 | a webhook subscriber | the wire | nothing for a stopped job; one `enrichment.completed` for a finished one |
 
 What this does not claim, in the words the surfaces use:
@@ -1672,6 +1675,11 @@ What this does not claim, in the words the surfaces use:
   one row it is still working, for as long as that row takes. STEP 22 used to poll that way and the run before this one is how it was found: the step
   now reads the mark's snapshot and the worker's snapshot separately, waits for the row to agree
   with the records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
+  finishes. A reader that polls the *status* alone can therefore catch a row saying 3 accounted
+  for beside 4 records, short by exactly the one row it is still working, for as long as that row
+  takes. STEP 22 used to poll that way and this run is how it was found: the step now reads the
+  mark's snapshot and the worker's snapshot separately, waits for the row to agree with the
+  records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
   abandoning a row mid-visit — the one thing a stop must not do — or writing each record and its
   counters in one transaction, which is a decision about every row rather than about the stop.
 - **`Job.status` still has no value between COMPLETED and FAILED**, so a stop that reached some
@@ -1697,6 +1705,23 @@ Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated bo
   flight; this run's gap was **0**, because the mark landed at a boundary with nothing in flight.
   The run before it polled the status alone and read 3 accounted for beside 4 records — that is
   the window, and the check is now the proof of its size rather than an accident of timing.
+Live, in STEP 22 of the LeadWorks demo — **17 checks** on the same isolated boot as STEP 21:
+
+- **A stop read between two leads is a measurable share.** 300 leads imported, an ENRICH job
+  over those named ids, found `RUNNING` with 1 of 300 already counted and `progress=0` — the
+  percentage is stamped while the job is still walking, not only at its finish line, and one row
+  out of three hundred is a third of a percent, which is what the arithmetic says rather than
+  what a typed number would. `?action=cancel` answers 200, and the row settles **`CANCELLED` at
+  3 processed + 0 failed of 300 with `progress: 1`**: 3 reached, 297 never started,
+  `results.recorded` 3 — one per row it did and none for the crowd it did not — the leads
+  themselves agreeing (3 rows carrying a fresh `lastEnrichedAt`, 297 not), and `report.problem`
+  null beside a note that names reached, left, and the row that was already in flight.
+- **A stop is two writes, and the demo reads both.** The door's mark and the worker's own
+  terminal stamp landed 3 rows apart from each other and 0 rows apart in this run's account — the
+  step snapshots the row as the mark arrives, waits for the row to agree with the records it
+  holds, and asserts the gap never exceeds the one row that was in flight. An earlier run of this
+  step polled the status alone and read 3 accounted for beside 4 records: that is the window, and
+  the check is now the proof of its size rather than an accident of timing.
 - **A stopped job tells nobody a finish it did not have — proved against a job that did.** A
   webhook subscribed to `enrichment.completed` receives **nothing** for the stopped job and
   **exactly one** delivery for a 3-lead control that finished, so the silence above means the
@@ -1711,7 +1736,7 @@ Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated bo
   by name and with their reasons — and its cleanup takes 703 leads and 4 jobs back out through
   the doors, leaving 0 rows and 0 records from the step.
 
-STEP 22's 19 checks are among the **290 ✓ / 0 ✗, exit 0** that STEP 21's note above reports
+STEP 22's 19 checks are among the **290 ✓ / 0 ✗, exit 0** that STEP 21's note above reports 7 checks are among the **287 ✓ / 0 ✗, exit 0** that STEP 21's note above reports
 for the whole run.
 
 The 44 new offline tests are the same claims without a server: `stopAt`, `stopNote` and
@@ -1730,6 +1755,113 @@ the API list proven to say the opposite now.
 Verification: `npm test` **799/799** (44 new in `tests/unit/job-stop.test.ts`, 38 `it(` blocks
 over 9 describes — no browser, no database, no network), `npx tsc --noEmit` clean,
 `npm run lint` **0 errors / 12 warnings** (unchanged), `npm run build` exit 0.
+
+### A stop that can be undone: the door that marks a row is the door that restarts the crowd it left
+
+The round before this one made `?action=cancel` real, and in the same breath wrote a line about
+the other action on that door that its own code contradicted:
+
+| what #41's table said | what `?action=retry` answered |
+|---|---|
+| retry has always made a *new* job, so an operator who stops a job at row 4 of 200 restarts it over the rows still standing | `400 "Can only retry failed or completed jobs"` — `CANCELLED` was not one of the two words that guard accepted |
+
+That is the shape this project keeps finding: a sentence describing what a door is *for* rather
+than what it checks. #41 fixed the worker and left the door's refusal standing, so a stop was
+honest and irreversible at once — the row told an operator exactly how many leads were never
+reached, and would not let anything reach them. This round takes the sentence out of the
+contradiction by making the door say it.
+
+`src/lib/job-retry.ts` owns the two decisions the route used to make inline.
+
+| the decision | what it is now |
+|---|---|
+| which rows a resume may be taken from | the three a worker has put down: `COMPLETED`, `FAILED`, `CANCELLED`. A `PENDING` or `RUNNING` row answers `409` and names what a resume there would do — a second runner walking the same crowd beside one that has not stopped. A status outside the set the schema documents answers `400` with the word in the message, because `lib/fields.ts` records that an unknown status is invisible to every comparison in the app; a guard that fell through would open for anything it did not recognise. |
+| what the row it creates carries | `workspaceId`, `type`, `config`, and `PENDING` — and none of the stopped row's account of itself. `progress`, `totalItems`, `processedItems`, `failedItems`, `error`, `startedAt`, `completedAt` are not copied, because `lib/job-report.ts` reads those columns as arithmetic: a job that has visited nothing must not open reporting 1 of 300. |
+
+The order in the door is the order the guard needs: the status asked, then `hasRunner` (a type
+nothing runs must not leave a second `PENDING` row behind), then the insert, then the queue. The
+stopped row is written by none of it — a resume is a new job, and `CANCELLED` stays on the row
+that stopped, with the counters its own worker stamped.
+
+**What a resume is not: a cursor.** `Job` has no position column and nothing here invents one. The
+crowd lives in `config` — a named list of leads, or the conditions that select one — so the
+resumed job walks the set the operator meant, *including* the leads the stopped job already
+wrote. What makes that safe is the gate enrichment's own visit already obeys: a column the row
+holds is left alone, and the record of the visit says which gate refused it. So the second walk
+fills the rows still standing and re-states nothing on the rows already done. The one thing that
+does move twice is `lastEnrichedAt`, because the visit really happened twice.
+
+Live, in STEP 23 of the LeadWorks demo — **16 checks** on the same isolated boot as
+STEPS 21 and 22:
+
+- **A stop, taken for real.** 300 leads imported through the CSV door, an ENRICH job over those
+  named ids, found `RUNNING` with a lead already counted and `?action=cancel` answered 200; the
+  worker's own stamp settled the row at **8+0 of 300,
+  `progress=3%`**, its two writes 1 row apart, and 8 of the
+  crowd carrying what the first walk wrote — one lead per row the job accounted for.
+- **The door answers a stopped row.** `POST /api/jobs/{id}?action=retry` against that
+  `CANCELLED` row returns **200 with a new job id** — the ask that got a 400 before this round.
+  The row it makes is `RUNNING` (not the mark copied forward) and its `config` is
+  byte-identical to the stopped job's: the whole 300, because there is nothing on this table
+  that could remember a position.
+- **The resume finishes the crowd.** It settles **`COMPLETED` at 300 of 300 with
+  `progress=100`** — 100 because the arithmetic says 100 — and `report.problem` is null beside
+  it. `results.recorded` is **300**: one record per row of the walk, including the rows
+  the stopped job had already visited.
+- **The second walk refuses exactly the leads the stop wrote, and only those.** Of those
+  300 records, **292 are `SUCCESS` and 8 are `SKIPPED`** with
+  a reason quoting the value the row already held. 8 equals the number of leads
+  the first walk had touched and 292 equals the number it never reached — the gate
+  deciding the split, row by row, with no arithmetic in the door. The crowd ends at
+  **300/300 leads holding the seniority**, which is where a job that had never been
+  stopped would have left it.
+- **The stopped row is not resurrected.** Read again after its resume finished: same `CANCELLED`,
+  same 8 processed, same `completedAt`. Two jobs, two walks, two records of them. The
+  same door still refuses to cancel that row a second time (`400`), which is the guard #42 did
+  not touch.
+- **A row a worker still holds is not a stop.** The same ask against an ENRICH found `RUNNING`
+  with a lead counted answers **409**, names the double walk in its message, and creates no
+  second row — `400` was the old answer to a different question, and a state collision is not a
+  malformed request.
+- **The wire says which of the two finished.** 1 `enrichment.completed` for
+  the resumed job, and still zero for the stop that never completed.
+- **Cleanup** takes 300 leads and 3 jobs back out through the doors and proves
+  0 crowd rows, 0 per-item records and 0 job rows remain
+  from the step.
+
+What this does not claim:
+
+- **A resume taken while the stopped job still has a row in flight can visit that lead twice.**
+  The writes are idempotent and the second visit is refused and recorded, so nothing is
+  clobbered — but `lastEnrichedAt` moves twice and both jobs' records can name the same lead.
+  STEP 23 takes its resume after the second of a stop's two writes lands, which is the shape an
+  operator's click will usually be; the window itself is #41's, not a new one.
+- **The resumed job's numbers are its own walk, not the crowd's history.** 300 records
+  for 300 leads, of which 8 say they filled nothing. A reader who wants to know
+  what the crowd got asks the leads; the two job rows together are a record of two attempts, not
+  one sum.
+- **Nothing here is a scheduler.** The resume is a click on a door; no retry happens by itself,
+  and nothing marks a stopped row as worth resuming.
+- **Two workers still do not consult the mark** — `lib/exporter.ts` and `lib/scraper.ts`, named
+  with their reasons in the section above. A door cannot undo a stop those workers never made:
+  their rows end `COMPLETED` or `FAILED` however an operator feels about it.
+- **No history was rewritten**, and there was no marked history to resume — the census that
+  opened #41 counted 0 `CANCELLED` rows in 475 jobs, which is the other way of saying no
+  operator could ever have used that door.
+
+Verification: `npm test` **827/827** (28 new in `tests/unit/job-retry.test.ts`
+over 4 describes — no browser, no database, no network), `npx tsc --noEmit` clean,
+`npm run lint` **0 errors / 12 warnings** (unchanged), `npm run build` exit 0. The 28 new tests
+answer `retryAsk` by hand for all five documented statuses and for the lookalikes a fall-through
+guard would open for (`cancelled`, `Canceled`, `COMPLETED `, the empty and blank strings); prove
+`retryRow`'s key set is exactly the four columns a new job may claim, with `sourceId` omitted when
+the row has none; take `progressValue` of the stopped row's own numbers to show what copying them
+would have said; drive `planEnrichmentWrite` and `enrichmentVisit` over a crowd of four whose
+first three the stop already wrote and assert the end state — one write, three refusals naming the
+gate, every lead holding the one value; and pin the door by index arithmetic (status before runner
+before insert before queue, no `job.update` anywhere in the retry branch), the census that the old
+sentence is gone from this door and the only inline retry guard left is the export one, and the
+fact that the module that decides all of this holds no query and no status code.
 
 ## Score: one arithmetic, and who may change it
 
