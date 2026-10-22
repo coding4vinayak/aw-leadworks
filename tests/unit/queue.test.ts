@@ -29,6 +29,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { blankComments } from "./route-handlers";
 
 const source = (path: string) =>
   readFileSync(new URL(path, import.meta.url), "utf8")
@@ -230,12 +231,16 @@ describe("the scheduled worker has a producer", () => {
     assert.match(register![1], /SCHEDULED_SWEEP_KEY,/, "and the key is the first argument");
   });
 
-  it("repeats every minute, because shouldRunNow matches the cron minute field", () => {
+  it("repeats every minute, because the matcher decides which minutes mean anything", () => {
     assert.match(queueModule, /const SCHEDULED_SWEEP_PATTERN = "\* \* \* \* \*";/);
     assert.match(register![1], /\{ pattern: SCHEDULED_SWEEP_PATTERN \}/);
-    const scheduler = source("../../src/lib/scheduler.ts");
-    assert.match(scheduler, /now\.getMinutes\(\)/,
-      "scheduler.ts compares stored crons against the current minute, so a coarser sweep silently drops matches");
+    // #38: the clock is read in one place, and it is not the sweep. A tick every minute is
+    // still what a `*/5` cadence needs — the coarser question is answered by `cron-schedule.ts`.
+    const matcher = source("../../src/lib/cron-schedule.ts");
+    assert.match(matcher, /now\.getMinutes\(\)/, "the matcher is what compares a cadence to the current minute");
+    const scheduler = blankComments(source("../../src/lib/scheduler.ts"));
+    assert.ok(!/getMinutes|getHours|getDate\(\)|getDay\(\)/.test(scheduler),
+      "the sweep asks a boolean and never reads the clock itself");
   });
 
   it("hands the worker a job name, and no sweep timer is built at module scope", () => {

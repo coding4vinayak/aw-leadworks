@@ -3,6 +3,7 @@ import { queues, enqueue } from "./queue";
 import { asInputJson, asRecord } from "./json";
 import { leadWhere, readStoredConditions } from "./rule-conditions";
 import { actionsProblem, readRuleActions } from "./rule-actions";
+import { matchesSchedule, scheduleProblem } from "./cron-schedule";
 import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
 import {
   censusLog,
@@ -16,7 +17,8 @@ import { readdir, stat, unlink } from "fs/promises";
 
 /**
  * One minute's worth of the schedule: every active source, export profile and SCHEDULED
- * enrichment rule whose cron matches the current wall clock, turned into the `Job` rows
+ * enrichment rule whose cron matches the current wall clock — read by `cron-schedule.ts`,
+ * the one matcher and the one grammar the doors refuse with, turned into the `Job` rows
  * and queue entries they describe. The `scheduled` worker's handler is its only call site,
  * and `registerScheduledSweep()` in `queue.ts` is what produces the jobs that handler waits
  * for.
@@ -49,8 +51,6 @@ import { readdir, stat, unlink } from "fs/promises";
  */
 export async function runScheduledJobs(): Promise<void> {
   const now = new Date();
-  const currentHour = now.getHours();
-  const currentDay = now.getDay(); // 0 = Sunday
 
   // Its own error, its own line: a filesystem or a query that misbehaves here must not cost
   // the sources, profiles and rules this minute is due for, and a retired export that is not
@@ -78,7 +78,16 @@ export async function runScheduledJobs(): Promise<void> {
 
   for (const source of sources) {
     if (!source.schedule) continue;
-    if (shouldRunNow(source.schedule, now)) {
+    // A cadence no minute can equal used to be indistinguishable from a quiet week: #38
+    // measured a `*/5 * * * *` that stored as 201 and minted nothing across four sweep
+    // minutes, while the same string was refused with a 400 at the rule door. The door
+    // refuses one now; this line is for the rows written before it did.
+    const unreadable = scheduleProblem(source.schedule);
+    if (unreadable !== null) {
+      console.warn(`Source ${source.id} is active and scheduled, but no minute matches it — ${unreadable}`);
+      continue;
+    }
+    if (matchesSchedule(source.schedule, now)) {
       const job = await prisma.job.create({
         data: {
           workspaceId: source.workspaceId,
@@ -99,7 +108,14 @@ export async function runScheduledJobs(): Promise<void> {
 
   for (const profile of exportProfiles) {
     if (!profile.schedule) continue;
-    if (shouldRunNow(profile.schedule, now)) {
+    // Named and skipped, the way a source is: a weekly drop whose cadence the matcher
+    // cannot read is a weekly drop that never happens, and the profile says it is active.
+    const unreadable = scheduleProblem(profile.schedule);
+    if (unreadable !== null) {
+      console.warn(`Export profile ${profile.id} is active and scheduled, but no minute matches it — ${unreadable}`);
+      continue;
+    }
+    if (matchesSchedule(profile.schedule, now)) {
       const job = await prisma.job.create({
         data: {
           workspaceId: profile.workspaceId,
@@ -137,7 +153,7 @@ export async function runScheduledJobs(): Promise<void> {
   // cannot be read contributes a log line and is not in the running — and does not get to
   // claim columns it will never visit.
   //
-  // The `actions` half used to hand the whole JSON column to `shouldRunNow` as a cron
+  // The `actions` half used to hand the whole JSON column to the minute matcher as a cron
   // string, and the object the API requires coerced to `""`: measured, a `SCHEDULED` rule
   // holding `{ fields: ["seniority"] }` queued nothing across three sweep minutes while the
   // same rule with a bare `"* * * * *"` in that column queued one job a minute. Junk in the
@@ -150,7 +166,7 @@ export async function runScheduledJobs(): Promise<void> {
       continue;
     }
     const declared = readRuleActions(rule.actions);
-    if (!shouldRunNow(declared.schedule ?? "", now)) continue;
+    if (!matchesSchedule(declared.schedule ?? "", now)) continue;
     const stored = readStoredConditions(rule.conditions);
     if (stored.problem !== null) {
       // Nothing was queued and no lead was touched: a blob that cannot be read
@@ -320,25 +336,4 @@ export async function logExportFileCensus(now: Date = new Date()): Promise<Uncla
     console.info(line);
   }
   return census;
-}
-
-function shouldRunNow(cronExpression: string, now: Date): boolean {
-  // Simplified cron matching - in production use croner or similar
-  const parts = cronExpression.split(" ");
-  if (parts.length < 5) return false;
-
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-  const nowMinute = now.getMinutes();
-  const nowHour = now.getHours();
-  const nowDayOfMonth = now.getDate();
-  const nowMonth = now.getMonth() + 1;
-  const nowDayOfWeek = now.getDay();
-
-  const minuteMatch = minute === "*" || minute.split(",").includes(nowMinute.toString());
-  const hourMatch = hour === "*" || hour.split(",").includes(nowHour.toString());
-  const dayOfMonthMatch = dayOfMonth === "*" || dayOfMonth.split(",").includes(now.getDate().toString());
-  const monthMatch = month === "*" || month.split(",").includes(nowMonth.toString());
-  const dayOfWeekMatch = dayOfWeek === "*" || dayOfWeek.split(",").includes(now.getDay().toString());
-
-  return minuteMatch && hourMatch && dayOfMonthMatch && monthMatch && dayOfWeekMatch;
 }
