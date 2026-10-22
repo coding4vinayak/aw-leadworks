@@ -840,7 +840,10 @@ against this build is **189 ✓ / 0 ✗**, exit 0.
 `Simplified cron matching - in production use croner or similar`: split each field on `,`,
 compare whole strings. The refusal was right about the matcher and wrong about the product,
 because it was the only place the matcher's limits were stated. `Source.schedule` and
-`ExportProfile.schedule` are plain `String?` columns behind doors that take any 64 characters.
+`ExportProfile.schedule` are plain `String?` columns; the source doors took any 64 characters of
+them, while a profile's cadence has exactly one writer — `prisma/seed.ts`, storing `0 9 * * 1`,
+a shape this grammar reads — so an unreadable one there means somebody moved the row outside the
+app, which is the case the log line exists for.
 
 Measured against the running app before any of this changed: four sources created in one
 minute, left for four sweep minutes.
