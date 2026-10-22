@@ -158,14 +158,21 @@ All routes below need the key from [Authentication](#authentication) —
 the snippets omit the header for width.
 
 ```
-GET    /api/health                         # liveness + DB ping, no key
+GET    /api/health                         # liveness + DB ping + whether this instance
+                                           # can scrape, no key
 GET    /api/sources?workspaceId=           # list
 POST   /api/sources                        # create (web scraper, API, CSV, manual); a
                                            # `schedule` is refused unless some minute can
-                                           # match it (see *the cadence somebody types*)
-PATCH  /api/sources/{id}                   # rename, retype, or set/clear the cadence
+                                           # match it (see *the cadence somebody types*),
+                                           # and a `config.url` unless this server is
+                                           # allowed to open it (see *what a scrape is
+                                           # allowed to point at*)
+PATCH  /api/sources/{id}                   # rename, retype, or set/clear the cadence; a
+                                           # `config` it names is judged as a create would
 GET    /api/sources/{id}                   # detail + recent jobs
-POST   /api/sources/{id}?action=run        # launch a scrape now
+POST   /api/sources/{id}?action=run        # launch a scrape now — 400 for an address this
+                                           # server will not open, 503 when this instance
+                                           # has no browser, and no `Job` row in either case
 GET    /api/jobs?workspaceId=              # list, filter by type/status
 GET    /api/jobs/{id}                      # detail + results
 POST   /api/jobs/{id}?action=retry|cancel  # re-run or stop
@@ -674,7 +681,10 @@ now: the schema
 declaration, the default and the one env key, the create door dropping a caller-supplied
 lifetime, the 17 parsing cases, the arithmetic and the inclusive boundary, the three verdicts,
 the two refusal sentences staying different, and the wiring scanned from source — one stamp site
-among the ten writes, the verdict asked before `stat()`, no PATCH verb on either door, and no
+among the writes (ten when #35 counted them; #39 deleted a scheduler no caller had, whose create
+and update were two of the ten, so the scan reads eight now — see
+*what a scrape is allowed to point at*), the verdict asked before `stat()`, no PATCH verb on
+either door, and no
 `unlink` in the worker or in a door — the deletion `#36` adds is the sweep's, below).
 
 The live proof is `demo/run-demo.sh leadworks` STEP 16: with the app booted at
@@ -890,7 +900,8 @@ cadence that is well formed but cannot fall on the calendar (`0 0 30 2 *`) is ma
 not refused — inventing a rule about February 30th would be the product deciding what a cron
 means, which is the thing this round stopped doing.
 
-Pinned offline by `tests/unit/cron-schedule.test.ts` (27 of the 670 in the suite: known answers
+Pinned offline by `tests/unit/cron-schedule.test.ts` (27 tests, in a suite of 670 that round and
+of 697 since #39: known answers
 on fixed clocks, including 12-of-60 for `*/5`, the range-with-step, `7` and `0` as the same
 Sunday, the 15th-and-a-Monday pairing, and February 30th; every refusal's wording checked
 against the field it names; the accepted shapes quoted once in `GRAMMAR`; the module imports
@@ -899,7 +910,11 @@ is one table of 19 cadences run through **both** verdicts — the matcher's and 
 asserting they agree on every row and that the rule's message contains the matcher's sentence,
 because two grammars disagreeing is the bug this round measured, wearing a different hat. The
 source scans pin `shouldRunNow` and its `Simplified cron matching` comment gone from every file
-in `src/`, the five field ranges spelled in exactly one module, three `matchesSchedule` calls in
+in `src/` (#39's correction: that scan searched the *deleted matcher's own phrases*, and two
+more hand-parsed cadences were sitting in `src/lib/scraper.ts` and `src/lib/exporter.ts` — both
+unreachable, both deleted by #39, and the claim is true of the app now for the reason it was
+only true of the live paths then), the five field ranges spelled in exactly one module, three
+`matchesSchedule` calls in
 the sweep and no `getX()` clock read in it, and both source doors refusing before their write.
 `rule-actions.test.ts`, `rule-priority.test.ts` and `queue.test.ts` were retargeted where they
 pinned the deleted matcher — the two cadences #34 refused by name are asserted *accepted* now,
@@ -939,6 +954,191 @@ STEP 13's refusal list was retargeted rather than left to rot: `*/5 * * * *` cam
 is readable now, and STEP 19 proves what it does) and `* * * * * 1` went in, so that step still
 shows a door refusing a cadence the sweep cannot act on instead of quietly agreeing with one
 it cannot read.
+
+### What a scrape is allowed to point at: the address a caller names, and the browser this instance does not have
+
+`WEB_SCRAPER` is one of the five `Source.type` values a caller may write.
+`POST /api/sources/{id}?action=run` mints a `Job` for it, the worker reads `job.config.url`,
+and its first act is `chromium.launch()`. Measured on this box before anything changed —
+`playwright@1.64` is a dependency, nothing in `package.json` installs a browser (`postinstall`
+is absent) and `~/.cache/ms-playwright` does not exist — three sources run in a row each came back
+**200 with a `jobId`**, three `Job` rows went `FAILED`, and all three wrote the same
+message into `Job.error` *and* into `Source.lastRunError`:
+
+```
+browserType.launch: Executable doesn't exist at /home/opc/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux-arm64/chrome-headless-shell
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     npx playwright install                                 ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+```
+
+That is verbatim off this box, re-captured while writing this section. It was the whole of what
+the application said about a scrape: a fact about the *instance* arriving in the column about a
+*lead*, three rows deep, in a UI that renders the column raw. Nothing anywhere stated the one
+thing a buyer needs before pointing a schedule at a scraper — *this instance cannot scrape*.
+
+The second half is the reason this file sits next to `egress.ts` rather than inside the scraper.
+The three runs above had **different** `config.url`s and produced an identical message, because
+`chromium.launch()` dies before any address is opened — so the banner also hid the round's other
+finding, which is what the source says happens next: `page.goto(config.url)`, with nothing between
+the row and the wire. `https://example.com/` and `file:///etc/passwd` were, to this application,
+the same instruction. `src/lib/egress.ts` is the vendored policy for exactly that
+shape (an address this process will open because a caller named it), already guarding webhook
+delivery and the LLM calls, and the scrape path never called it. `tests/unit/egress-sites.test.ts`
+did not see the gap either: its census matches a callee whose name contains `fetch`, and this
+app's one navigation is `page.goto` — so the single site where a caller's address reaches a wire
+the server itself opens was the one site the guard could not read.
+
+`src/lib/scrape-capability.ts` is the capability half, with no browser, no filesystem and no
+database behind its answers, which is the same reason an instance *without* a browser is still
+allowed to have an opinion about scraping:
+
+- `scrapeCapability(probe)` turns `{ executablePath, present }` into a `Capability` — it decides,
+  it does not look; the looking is `readBrowserProbe()` in `scraper.ts` (`chromium.executablePath()`
+  plus `existsSync`, wrapped, because a resolver is allowed to throw).
+- `browserMissingReason(path)` is the one sentence a row, a door and a health page all use. Both
+  of its states carry `BROWSER_INSTALL_COMMAND` (`npx playwright install chromium`) — the
+  `null` state is an install that is broken rather than missing, and the operator has no other
+  command to reach for — but they are not the same fact, and neither one prints `no browser at null`.
+- `classifyLaunchFailure(message)` recognises Playwright's `Executable doesn.t exist at <path>`
+  and returns the sentence, or `null` meaning *this error is about the page, not about the
+  instance* — and then the caller keeps the original message, because inventing a tidier one for a
+  real scrape failure trades the box-drawing banner for a different lie. The apostrophe is typed
+  both ways by different versions, so the pattern requires neither.
+- `scrapeTarget(config)` reads the address and is **deliberately not filtered on `Source.type`**.
+  The sweep mints a `SCRAPE` job for any active source whose cadence matches and `runScrapeJob`
+  reads `job.config.url` whatever the type column says, so an `API`-labelled row holding a url is
+  a scrape target as far as the browser is concerned; #38's own demo stores `type: "API"` sources
+  pointing at its hook server, which is the case a type-shaped guard would have walked past.
+- `NO_TARGET_REASON` and `scrapeTargetProblem(config)` — the last being the one export that is not
+  pure, because `classifyTarget` resolves the host and an unresolvable host is a refusal.
+
+Five sites ask, in four shapes:
+
+| site | what it asks | what it answers |
+|---|---|---|
+| `POST /api/sources` | `scrapeTargetProblem` on the incoming `config`, and `scrapeTarget === null` when the type says scraper | 400 in the egress module's own words, or `NO_TARGET_REASON`, before `prisma.source.create` |
+| `PATCH /api/sources/{id}` | the same, of the **effective** config — a patch that does not name `config` leaves the stored one, a patch that does not name `type` leaves a scraper a scraper | 400 before `prisma.source.update`, and the row keeps the address it had |
+| `POST /api/sources/{id}?action=run` | the **stored** row: address, then no-address, then `readBrowserProbe()` | 400, 400, or 503 with the capability sentence — and no `Job` row in any of the three |
+| `runScrapeJob`, the worker | `assertAllowedTarget` immediately above every `page.goto`, the first url and each pagination url | the refusal thrown as itself; a missing browser turned into the sentence by `classifyLaunchFailure` |
+| `GET /api/health` | `readBrowserProbe()`, reported and never deciding the status | `scrape: {runnable, reason}` beside `ok/db/queues/time`, still 200 — a browser-less instance is not a down one |
+
+Two orderings are pinned, not left to the reader.
+
+- **Policy before capability**, in the worker and at the run door. Which address this server will
+  open does not depend on which machine the code runs on; whether this machine has a browser does.
+  Ask the box-shaped question first and a browser-less instance hides every refusal it also ought
+  to give — which on *this* box would also have meant the ordering could not be demonstrated at
+  all. It is demonstrated: STEP 20 writes a `file:` address straight into `Job.config` through
+  `POST /api/jobs`, the one door this round leaves alone, and the job fails with
+  `file: is not a scheme this server will request` — not with the capability sentence, and not
+  with the banner.
+- **The judgement before the write**, at all three doors, so the answer is a 400 naming the
+  address instead of a 200 with a `jobId`, a `PENDING` row, and a doomed `FAILED` a few seconds
+  later. 503 and not 400 for the missing browser, because nothing about the request is wrong: the
+  same call against a deployment that ran the install command succeeds.
+
+Two schedulers died in the making of this. `runScheduledScrapers` (`scraper.ts`) and
+`runScheduledExports` (`exporter.ts`) were both caller-less, both hand-parsing a cadence with
+their own `split(" ")` after #38 had declared the matcher the app's one grammar — and #38's own
+"gone from every file in `src/`" scan had missed them because it searched the *deleted matcher's
+own phrases*, not the shape. The scrape half also carried `config: { url: source.config }`: had it
+ever run, its scrape job's address would have been the source's whole JSON object. Deleting the
+export half moved #35's scan from ten reachable export writes to eight (its `Job`-equivalent
+create and update were two of the ten), which is retargeted in that file with the reason, not
+relaxed. `npm run lint` went from 14 warnings to 13 with them.
+
+The limits, stated:
+
+- **`POST /api/jobs` still stores a caller's `config` unguarded**, and this round leaves it that
+  way on purpose: a `Job` is what the queue is for, and the cover is the assertion at the send
+  site, above the navigation — which STEP 20 fires on a real worker rather than arguing about.
+- **Click-pagination goes wherever the page's DOM points.** `nextBtn.click()` navigates without a
+  url this app named; the guard judges the addresses this application writes down.
+- **The sentence names the resolver's path**, `…/chromium-1248/chrome-linux-arm64/chrome` here,
+  while a default headless launch misses a *different* one, the `chromium_headless_shell-1248`
+  path in the banner above. Recorded rather than smoothed, because one install command puts both
+  there — the instruction is right even where the path is the near neighbour.
+- **A scraper row with no address is refused at three doors; a non-scraper row with no address is
+  refused only at the run door** — because it is the run that mints a `SCRAPE` job whatever the
+  type column says, and the write doors have no scrape to judge yet.
+- **The census is textual.** A check inside a branch the request never passes still counts as
+  covering it — the same weakness the auth guard has, in the same direction: it can be satisfied
+  by code that is unreachable, never by code that is missing.
+- No page renders the `scrape` field yet. The door returns it.
+
+Pinned offline by `tests/unit/scrape-capability.test.ts` (26 tests, in a suite of 670 before the
+round and 697 now: the banner above reproduced verbatim as the fixture and recognised by the
+classifier, including a message spelled with the other apostrophe; the two capability states being
+different facts and neither printing a path it does not have; `scrapeTarget` reading an `API`-typed
+row's url and refusing an array, a string and a `null` config; and a table of the **nine** targets
+this door used to store — `file:///etc/passwd`, `data:text/html,<h1>hi</h1>`, `javascript:alert(1)`,
+`about:config`, `http://admin@127.0.0.1:6379/`, `http://169.254.169.254/latest/meta-data/`,
+`http://localhost:5432/`, `/etc/passwd`, `localhost:6379/dev.db` — each refused with the wording
+its own code produces, under a control that passes (`http://93.184.216.34/`, a public IP literal,
+so the nine are a policy and not a broken check) and with the development override deleted for the
+duration of the test because the scheme and userinfo refusals are meant to hold *through* it). The
+source scans pin the order at every site: `assertAllowedTarget` above each `page.goto`, policy
+above capability in the worker and at the run door, all three doors' checks before their
+`prisma.*` write, the run door's 503 before `prisma.job.create`, `readBrowserProbe` imported
+lazily into health so the capability cannot make the liveness door throw, and the shipped
+`prisma/seed.ts` `WEB_SCRAPER` row still acceptable to the door it now shares — a seed that could
+not survive its own app's validation is a demo that only passes when nobody runs it. The census in
+`tests/unit/egress-sites.test.ts` (3 tests) gained `NAVIGATION_CALLEE`, matching `goto`, `navigate`
+and `loadURL` beside the fetch-shaped names — `reload` and `setContent` stay out because neither
+takes an address a caller named — and pins the exact set of navigation sites in the app,
+`src/lib/scraper.ts page.goto`, as `policy`-covered with argument `pageUrl`, so the extension
+cannot silently stop matching anything. Its own guard was mutation-checked: deleting the
+pre-`goto` assertion makes three tests fail.
+
+Live, `demo/run-demo.sh leadworks` STEP 20 — 28 checks, and the whole run **235 ✓ / 0 ✗**, exit 0,
+against the rebuilt app. Seven addresses go to `POST /api/sources` and seven come back 400 in the
+egress module's own words: `file:///etc/passwd` → `file: is not a scheme this server will request`,
+`data:text/html,<h1>lead</h1>` → `data: is not a scheme…`, `javascript:alert(1)` → `javascript: is
+not a scheme…`, `about:config` → `about: is not a scheme…`, `/etc/passwd` → `config.url is not an
+absolute URL`, `localhost:6379/dev.db` → `localhost: is not a scheme…`, and
+`http://admin@127.0.0.1:6379/` → `a URL with credentials in it is not an address we will fetch` —
+that last one with the runner's `ABET_ALLOW_PRIVATE_TARGETS=1` in force, because the scheme and
+userinfo refusals are asked *before* the override. A `WEB_SCRAPER` with no `config.url` is refused
+too: `a scrape navigates to the address in config.url, and this config holds none — no run of this
+source could keep the promise`. Then the same door answers **201** for `http://127.0.0.1:3901/scrape-me`,
+the run's own hook server, and the stdout carries the hatch saying itself out loud —
+`egress: ABET_ALLOW_PRIVATE_TARGETS is set — http://127.0.0.1:3901 allowed despite internal
+addresses 127.0.0.1` — because a hatch that passes quietly is a hole that reads as a policy.
+`PATCH` that row's `config.url` to `file:///etc/shadow` is refused with the create door's sentence
+and the row keeps the address it had; a `config` with no url onto a scraper is refused, because the
+row's type is already the promise; and `PATCH { isActive: false }`, which names neither, still
+works — the doors refuse writes they can judge, not every write.
+
+Then the three states the run door answers. A `file:///etc/passwd` row hand-inserted over `psql` —
+a legal write in every round before this one — gets **400** and **0** `Job` rows, so an address that
+was storable last week cannot mint work today. An allowed address on this browser-less box gets
+**503** `this instance cannot run a scrape — no browser at /home/opc/.cache/ms-playwright/chromium-1248/chrome-linux-arm64/chrome;
+npx playwright install chromium puts it there`, again with no row: the check is a ternary, so an
+instance that *has* a browser passes the same leg honestly rather than asserting this box's shape.
+The ordering leg stores a `file:` address in a job's own `config` through `POST /api/jobs` (**201**)
+and reads the row back `FAILED` with `file: is not a scheme this server will request` — no banner,
+and not the capability sentence either, which is the proof that the verdict that does not depend on
+the box is stated first; `Source.lastRunError` carries the same sentence. An active `* * * * *`
+source still mints its scrape job (this round changed what the job says, not whether the sweep
+runs) and writes the capability sentence where the banner used to be — the step asserts the absence
+of `╔` and `═`, not merely the presence of nicer words. `GET /api/health` still answers the shape
+every reader expects, with `ok=true db=up` untouched, and now adds
+`scrape={"runnable":false,"reason":…}` word for word the run door's 503; cleanup leaves 0 of the
+step's rows in `Source`.
+
+STEP 19's legs were re-run rather than assumed: still **18 checks**, `*/2 * * * *` still mints and
+every job still lands on an even minute (minute :04 in this window), the hand-inserted
+`* * * * * 1` row still mints 0 and still prints its `no minute matches it` line, and both doors
+still refuse the six cadences. The one footprint this round leaves on an earlier step is
+`tests/unit/export-retention.test.ts`'s write census, retargeted from ten to eight with the
+scheduler named — the same treatment #38 gave STEP 13's refusal list, and for the same reason: a
+pin that agrees with code it no longer describes is quieter than the bug it replaced.
 
 ## Score: one arithmetic, and who may change it
 
