@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { rowAfterWrite, scoredWriteData } from "./lead-score";
 import { crowdWhere, namedLeads } from "./lead-crowd";
 import { jobResultRow, progressValue } from "./job-report";
+import { MARK, isMarked, startWrite, stoppedWrite } from "./job-stop";
 
 /**
  * `flag` and `score_down` are one thing now: the validator records what failed on
@@ -22,7 +23,13 @@ export async function runValidateJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
 
-  await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
+  // The mark, obeyed before anything begins: `not: MARK` is in the WHERE, so a cancel that
+  // landed after the read above is not overwritten by this worker's own RUNNING.
+  const began = await prisma.job.updateMany({
+    where: { id: jobId, status: { not: MARK } },
+    data: startWrite(new Date()),
+  });
+  if (!began.count) return;
 
   const config = job.config as unknown as ValidateConfig;
   // The crowd clause is `lead-crowd.ts`'s to write, and so is the reading of
@@ -36,7 +43,15 @@ export async function runValidateJob(jobId: string): Promise<void> {
   let failed = 0;
   let flagged = 0;
 
+  let stopped = false;
+
+  // The mark is read at the boundary before a row, so a lead whose validation is
+  // already half-written finishes and the next one is never started.
   for (const lead of leads) {
+    if (isMarked(await prisma.job.findUnique({ where: { id: job.id }, select: { status: true } }))) {
+      stopped = true;
+      break;
+    }
     try {
       const results = await validateLead(lead, config);
       const failedChecks = results.filter(r => !r.valid);
@@ -109,20 +124,28 @@ export async function runValidateJob(jobId: string): Promise<void> {
     }
   }
 
-  await prisma.job.update({
-    where: { id: job.id },
-    data: {
-      status: "COMPLETED",
-      completedAt: new Date(),
-      // The crowd this job walked is the denominator. Typing `progress: 100` here
-      // — which is what every one of the 466 COMPLETED rows on this instance says —
-      // reports a share of a whole the row never wrote down.
-      totalItems: leads.length,
-      progress: progressValue({ total: leads.length, processed: validated, failed }),
-      processedItems: validated,
-      failedItems: failed,
-    },
+  const counters = { total: leads.length, processed: validated, failed };
+  const finish = await prisma.job.updateMany({
+    // A stop writes under the mark; a finish writes around it, so a cancel that landed
+    // while the last lead was in flight is not answered with a COMPLETED.
+    where: { id: job.id, status: stopped ? MARK : { not: MARK } },
+    data: stopped
+      ? stoppedWrite(counters, new Date())
+      : {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        // The crowd this job walked is the denominator. Typing `progress: 100` here
+        // — which is what every one of the 466 COMPLETED rows on this instance says —
+        // reports a share of a whole the row never wrote down.
+        totalItems: leads.length,
+        progress: progressValue(counters),
+        processedItems: validated,
+        failedItems: failed,
+      },
   });
+  if (!finish.count && !stopped) {
+    await prisma.job.updateMany({ where: { id: job.id, status: MARK }, data: stoppedWrite(counters, new Date()) });
+  }
 }
 
 interface ValidationResult {

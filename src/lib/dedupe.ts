@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { jobResultRow, progressValue } from "./job-report";
+import { MARK, isMarked, startWrite, stoppedWrite } from "./job-stop";
 import { rowAfterWrite, scoredWriteData } from "./lead-score";
 
 export interface DedupeConfig {
@@ -84,10 +85,17 @@ export async function runDedupeJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
 
-  await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
+  // The mark, obeyed before anything begins: `not: MARK` is in the WHERE, so a cancel that
+  // landed after the read above is not overwritten by this worker's own RUNNING.
+  const began = await prisma.job.updateMany({
+    where: { id: jobId, status: { not: MARK } },
+    data: startWrite(new Date()),
+  });
+  if (!began.count) return;
 
   let duplicatesFound = 0;
   let duplicatesResolved = 0;
+  let stopped = false;
 
   try {
     const config = readDedupeConfig(job.config);
@@ -109,12 +117,20 @@ export async function runDedupeJob(jobId: string): Promise<void> {
 
     for (const group of groups) {
       if (group.length <= 1) continue;
-      duplicatesFound += group.length - 1;
 
       const master = selectMasterRecord(group, config);
       const duplicates = group.filter(l => l.id !== master.id);
 
       for (const dup of duplicates) {
+        // The mark, at the boundary before a duplicate. `duplicatesFound` counts this
+        // group whether or not the stop lands inside it, so the denominator is the whole
+        // crowd the job was about to fold and the row reports the share it reached — not
+        // a typed 100 over the part it happened to finish.
+        if (isMarked(await prisma.job.findUnique({ where: { id: job.id }, select: { status: true } }))) {
+          stopped = true;
+          break;
+        }
+        duplicatesFound++;
         await mergeRecords(master, dup, config.action || "merge", job.id);
         duplicatesResolved++;
         // Written after the merge, because two of the three actions delete the
@@ -133,25 +149,36 @@ export async function runDedupeJob(jobId: string): Promise<void> {
           }),
         });
       }
+      if (stopped) break;
     }
 
-    await prisma.job.update({
-      where: { id: job.id },
-      data: {
-        status: "COMPLETED",
-        completedAt: new Date(),
-        // Found and resolved are the same unit — duplicate rows — so the share is
-        // arithmetic rather than a typed 100.
-        progress: progressValue({ total: duplicatesFound, processed: duplicatesResolved, failed: 0 }),
-        // What was found and what was done with it. A COMPLETED job that found
-        // duplicates and resolved none is visible here instead of implied.
-        totalItems: duplicatesFound,
-        processedItems: duplicatesResolved,
-      },
+    const counters = { total: duplicatesFound, processed: duplicatesResolved, failed: 0 };
+    const finish = await prisma.job.updateMany({
+      // A stop writes under the mark; a finish writes around it, so a cancel that landed
+      // while the last duplicate was in flight is not answered with a COMPLETED.
+      where: { id: job.id, status: stopped ? MARK : { not: MARK } },
+      data: stopped
+        ? stoppedWrite(counters, new Date())
+        : {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          // Found and resolved are the same unit — duplicate rows — so the share is
+          // arithmetic rather than a typed 100.
+          progress: progressValue(counters),
+          // What was found and what was done with it. A COMPLETED job that found
+          // duplicates and resolved none is visible here instead of implied.
+          totalItems: duplicatesFound,
+          processedItems: duplicatesResolved,
+        },
     });
+    if (!finish.count && !stopped) {
+      await prisma.job.updateMany({ where: { id: job.id, status: MARK }, data: stoppedWrite(counters, new Date()) });
+    }
   } catch (error) {
-    await prisma.job.update({
-      where: { id: job.id },
+    // An error is this worker's own word, and it does not outrank the operator's: the
+    // WHERE carries the mark for the same reason the finish does.
+    await prisma.job.updateMany({
+      where: { id: job.id, status: { not: MARK } },
       data: { status: "FAILED", completedAt: new Date(), error: error instanceof Error ? error.message : "Unknown error" },
     });
   }

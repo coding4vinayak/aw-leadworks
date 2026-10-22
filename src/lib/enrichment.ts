@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { enrichmentVisit, jobResultRow, progressValue } from "./job-report";
+import { MARK, isMarked, startWrite, stoppedWrite } from "./job-stop";
 import { queues, enqueue } from "./queue";
 import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
@@ -78,7 +79,13 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
 
-  await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
+  // The mark, obeyed before anything begins: `not: MARK` is in the WHERE, so a cancel that
+  // landed after the read above is not overwritten by this worker's own RUNNING.
+  const began = await prisma.job.updateMany({
+    where: { id: jobId, status: { not: MARK } },
+    data: startWrite(new Date()),
+  });
+  if (!began.count) return;
 
   const config = job.config as unknown as EnrichmentConfig;
   // A rule's `providers` is stored text: normalise the spelling once for the job,
@@ -91,8 +98,17 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
   let processed = 0;
   let enriched = 0;
   let failed = 0;
+  let stopped = false;
 
   for (const lead of leads) {
+    // The mark, at the boundary before a row. `?action=cancel` wrote this row's status
+    // and nothing read it back until now, so a cancelled job ran to COMPLETED over the
+    // mark: the door was a suggestion. A row already in flight is finished — abandoning
+    // one would leave a lead half-written and a record claiming nothing about it.
+    if (isMarked(await prisma.job.findUnique({ where: { id: jobId }, select: { status: true } }))) {
+      stopped = true;
+      break;
+    }
     try {
       const answer = await enrichLead(lead, config);
       if (answer) {
@@ -136,9 +152,14 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
       });
     }
 
-    await prisma.job.update({
-      where: { id: jobId },
+    // Counted as it goes — the denominator included, so a row read between two leads is
+    // a share of a crowd rather than a bare RUNNING — and written with the mark in its
+    // WHERE, because a cancel that lands while this lead is in flight must not be walked
+    // back to a status by the progress stamp that follows it.
+    await prisma.job.updateMany({
+      where: { id: jobId, status: { not: MARK } },
       data: {
+        totalItems: leads.length,
         progress: progressValue({ total: leads.length, processed, failed }),
         processedItems: processed,
         failedItems: failed,
@@ -146,29 +167,50 @@ export async function runEnrichmentJob(jobId: string): Promise<void> {
     });
   }
 
-  await prisma.job.update({
-    where: { id: jobId },
-    data: {
-      status: "COMPLETED", completedAt: new Date(),
-      // The denominator is written by the hand that computed it. `totalItems` used to
-      // exist only when a door stamped one at create time, so a job that visited 16
-      // rows reported `totalItems: 0` next to `progress: 100`.
-      totalItems: leads.length,
-      progress: progressValue({ total: leads.length, processed, failed }),
-      processedItems: processed,
-      failedItems: failed,
-    },
+  const counters = { total: leads.length, processed, failed };
+  const finish = await prisma.job.updateMany({
+    // A stop writes under the mark; a finish writes around it. Either way the operator's
+    // word is the one that survives.
+    where: { id: jobId, status: stopped ? MARK : { not: MARK } },
+    data: stopped
+      ? stoppedWrite(counters, new Date())
+      : {
+        status: "COMPLETED", completedAt: new Date(),
+        // The denominator is written by the hand that computed it. `totalItems` used to
+        // exist only when a door stamped one at create time, so a job that visited 16
+        // rows reported `totalItems: 0` next to `progress: 100`.
+        totalItems: leads.length,
+        progress: progressValue(counters),
+        processedItems: processed,
+        failedItems: failed,
+      },
   });
+  // The window between the last boundary check and that statement is one row's work wide,
+  // and a cancel landing inside it used to be answered with a COMPLETED nobody asked for.
+  // Matching nothing is the row saying the mark, so the stop is written with the counters
+  // this worker actually holds — the same arithmetic the loop would have stamped next.
+  if (!finish.count && !stopped) {
+    await prisma.job.updateMany({ where: { id: jobId, status: MARK }, data: stoppedWrite(counters, new Date()) });
+  }
 
   // After the write that makes the event true, and bounded: the dispatcher
   // never throws and each delivery carries a 5s abort, so a receiver that is
   // down cannot fail a job whose real work has committed.
-  await dispatchWebhookEvent(job.workspaceId, "enrichment.completed", {
-    jobId: job.id,
-    processed,
-    enriched,
-    failed,
-  });
+  //
+  // A job that obeyed the mark does not send it. `enrichment.completed` is the whole
+  // list of event names this application can dispatch, and the word in it is
+  // "completed": a stopped job that announced itself would teach every subscriber to
+  // expect leads that were never visited. The stop is on the row and in the records of
+  // the rows it did — an operator reading the job sees it, a caller polling the list
+  // sees it, and nothing downstream is told a finish that did not happen.
+  if (!stopped) {
+    await dispatchWebhookEvent(job.workspaceId, "enrichment.completed", {
+      jobId: job.id,
+      processed,
+      enriched,
+      failed,
+    });
+  }
 }
 
 async function getLeadsToEnrich(workspaceId: string, config: EnrichmentConfig): Promise<any[]> {
