@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
-import { asInputJson } from "@/lib/json";
 import { readJson, validateBody } from "@/lib/validate";
 import { JOB_PATCH } from "@/lib/fields";
 import { jobReport } from "@/lib/job-report";
+import { retryAsk, retryRow } from "@/lib/job-retry";
 import { enqueueJob, hasRunner, QueueUnavailableError } from "@/lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -48,17 +48,14 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
   await assertOwns(request, job.workspaceId);
 
   if (action === "retry") {
-    if (job.status !== "FAILED" && job.status !== "COMPLETED") {
-      return NextResponse.json({ error: "Can only retry failed or completed jobs" }, { status: 400 });
-    }
+    const ask = retryAsk(job.status);
+    if (!ask.ok) return NextResponse.json({ error: ask.error }, { status: ask.http });
     // Before the insert, so a type with no worker does not leave a second
     // PENDING row behind that nothing will ever pick up.
     if (!hasRunner(job.type)) {
       return NextResponse.json({ error: `nothing runs a job of type ${job.type}; it cannot be retried` }, { status: 409 });
     }
-    const newJob = await prisma.job.create({
-      data: { workspaceId: job.workspaceId, ...(job.sourceId && { sourceId: job.sourceId }), type: job.type, config: asInputJson(job.config), status: "PENDING" },
-    });
+    const newJob = await prisma.job.create({ data: retryRow(job) });
     try {
       await enqueueJob(job.type, newJob.id);
     } catch (error) {
