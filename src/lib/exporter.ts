@@ -1,7 +1,5 @@
 import { prisma } from "./db";
-import { queues, enqueue } from "./queue";
 import { dispatchWebhookEvent } from "./webhooks";
-import { asInputJson, asRecord } from "./json";
 import { stringify } from "csv-stringify/sync";
 import * as XLSX from "xlsx";
 import { csvSafeText, exportCell, pdfSafeText, readExportFilter } from "./export-format";
@@ -247,45 +245,4 @@ async function exportToPDF(leads: any[], fields: string[]): Promise<string> {
 
 function getNestedValue(obj: any, path: string): any {
   return path.split(".").reduce((obj, key) => obj?.[key], obj);
-}
-
-export async function runScheduledExports(): Promise<void> {
-  const now = new Date();
-  const profiles = await prisma.exportProfile.findMany({
-    where: { isActive: true, schedule: { not: null } },
-    include: { workspace: true },
-  });
-
-  for (const profile of profiles) {
-    if (!profile.schedule) continue;
-
-    const cronParts = profile.schedule.split(" ");
-    const currentHour = new Date().getHours();
-    if (cronParts[1] !== "*" && parseInt(cronParts[1]) !== currentHour) continue;
-
-    const job = await prisma.job.create({
-      data: {
-        workspaceId: profile.workspaceId,
-        type: "EXPORT",
-        status: "PENDING",
-        config: { format: profile.format, fields: asInputJson(profile.fields), filterJson: asInputJson(profile.filterJson ?? {}), exportId: "" },
-      },
-    });
-
-    const exportRecord = await prisma.export.create({
-      data: {
-        workspaceId: profile.workspaceId,
-        profileId: profile.id,
-        format: profile.format,
-        fields: asInputJson(profile.fields),
-        ...(profile.filterJson != null ? { filterJson: asInputJson(profile.filterJson) } : {}),
-        status: "PENDING",
-      },
-    });
-
-    await prisma.job.update({ where: { id: job.id }, data: { config: { ...asRecord(job.config), exportId: exportRecord.id } } });
-    await prisma.export.update({ where: { id: exportRecord.id }, data: { status: "PENDING" } });
-
-    await enqueue(queues.export, "run-export", { jobId: job.id });
-  }
 }

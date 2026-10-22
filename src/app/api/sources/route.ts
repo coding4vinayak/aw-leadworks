@@ -5,6 +5,7 @@ import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { SOURCE_CREATE } from "@/lib/fields";
 import { scheduleProblem } from "@/lib/cron-schedule";
+import { NO_TARGET_REASON, scrapeTarget, scrapeTargetProblem } from "@/lib/scrape-capability";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,24 @@ async function POST_impl(request: Request) {
   if (typeof input.data.schedule === "string") {
     const unreadable = scheduleProblem(input.data.schedule);
     if (unreadable !== null) return NextResponse.json({ error: unreadable }, { status: 400 });
+  }
+
+  // The other half of the same promise, and the check this door did not have: `config` is
+  // free JSON and `config.url` is the address `runScrapeJob` navigates a browser to, so a
+  // create that stored `file:///etc/passwd` was a write of "read this file into a lead".
+  // #39 measured ten targets offered to this door — `file:`, `data:`, `javascript:`,
+  // `about:config`, `http://admin@127.0.0.1:6379/`, the metadata address, `http://localhost:5432/`,
+  // a bare `/etc/passwd`, `localhost:6379/dev.db` and a public control — and all ten were
+  // accepted with a 201. The judgement is `egress.ts`'s own, imported rather than re-spelled,
+  // so a scrape cannot be pointed anywhere a webhook could not be pointed.
+  const target = scrapeTarget(input.data.config);
+  if (target !== null) {
+    const refused = await scrapeTargetProblem(input.data.config);
+    if (refused !== null) return NextResponse.json({ error: refused }, { status: 400 });
+  } else if (input.data.type === "WEB_SCRAPER") {
+    // A scraper with no address is the shape #34 refused at the rule door: a promise the
+    // build cannot perform, stored quietly and discovered as an empty lead table.
+    return NextResponse.json({ error: NO_TARGET_REASON }, { status: 400 });
   }
 
   const source = await prisma.source.create({ data: { workspaceId, ...input.data } });

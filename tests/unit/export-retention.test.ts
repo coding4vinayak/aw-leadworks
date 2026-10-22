@@ -337,8 +337,12 @@ describe("#35 the two refusals stay two sentences", () => {
 });
 
 describe("#35 the wiring, scanned from the source", () => {
-  it("the table is written from ten places and one of them owns the lifetime", () => {
-    assert.equal(everyWrite.length, 10, "the ten writes measured before the round: three creates, seven updates");
+  it("the table is written from eight places and one of them owns the lifetime", () => {
+    // Ten when #35 measured it. #39 deleted `runScheduledExports` — a scheduler no caller
+    // had, holding one of the three creates and one of the seven updates — so the count is
+    // retargeted rather than relaxed: the eight writes that remain are the eight that can
+    // actually run, and the deleted two are the reason this number moved.
+    assert.equal(everyWrite.length, 8, "the writes that are reachable: two creates, six updates");
     const stamped = everyWrite.filter((w) => w.body.includes("expiresAt"));
     assert.equal(stamped.length, 1, "one stamp site, no accidental second one");
     assert.equal(stamped[0].file.replace(src, "src"), "src/lib/exporter.ts");
