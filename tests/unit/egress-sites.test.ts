@@ -35,6 +35,14 @@
  * address that reaches `fetch` through a variable assigned from another function that
  * reads the environment is not recognised, and fails as unexplained, which is the safe
  * way to be wrong about that.
+ *
+ * The census covers navigation as well as `fetch`, which is the half #39 added; see
+ * `NAVIGATION_CALLEE` for the measured reason. What it still cannot see is a navigation
+ * the *page* decides: `nextBtn.click()` in `scraper.ts`'s `navigateToNextPage` moves the
+ * browser wherever the scraped document's own DOM points, and no check on `config.url` can
+ * name that address before it happens. The pagination legs that are judged are the ones
+ * that build an address out of the caller's string, because those are the ones a caller
+ * can move.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -74,7 +82,26 @@ function sourceFiles(dir: string): string[] {
  * it while measuring this: the site that needed checking most, because its address is
  * assembled out of run input, was the one the first version of this file could not see.
  */
-const CALLEE = /([A-Za-z_$][\w$]*)?[Ff]etch([A-Za-z_$][\w$]*)?\s*\(/g;
+const FETCH_CALLEE = /([A-Za-z_$][\w$]*)?[Ff]etch([A-Za-z_$][\w$]*)?\s*\(/g;
+
+/**
+ * Navigation — the other way this server opens a wire to an address something named.
+ *
+ * #39 measured the gap this line closes. The census below matches a callee whose name
+ * contains `fetch`, and this app's one browser navigation is `page.goto`, so the single
+ * site where a caller's `config.url` reaches a load the server itself performs was the one
+ * site the guard could not read: `file:///etc/passwd` and `https://example.com/` were both
+ * stored with a 201, both run, and both failed identically while this file reported zero
+ * offenders. A check whose failure mode is silence, in a file whose job is to notice
+ * missing checks, is the finding.
+ *
+ * `reload` and `setContent` are deliberately not in the list. Their first argument is not
+ * an address, so `classifyTarget` cannot judge one and a site that can never be covered by
+ * the only check this file knows would turn the guard's answer into an excuse.
+ */
+const NAVIGATION_CALLEE = /(?:([A-Za-z_$][\w$]*)\s*\.\s*)?(?:goto|navigate|loadURL)\s*\(/g;
+
+const CALLEE_PATTERNS = [FETCH_CALLEE, NAVIGATION_CALLEE];
 
 function rootIdentifier(arg: string): string | null {
   const inner = arg.replace(/^["'`]|["'`]$/g, "");
@@ -100,26 +127,28 @@ function classify(file: string): Site[] {
   const isClient = /^\s*"use client";/.test(raw);
   const sites: Site[] = [];
 
-  for (const match of code.matchAll(CALLEE)) {
-    const start = match.index ?? 0;
-    const open = start + match[0].length - 1;
-    const arg = (callArgs(code, open)[0] ?? "").trim();
-    const line = code.slice(0, start).split("\n").length;
-    const callee = match[0].trim().replace(/\($/, "");
-    const site = (kind: Site["kind"], why: string) => sites.push({ file, line, callee, arg, kind, why });
+  for (const pattern of CALLEE_PATTERNS) {
+    for (const match of code.matchAll(pattern)) {
+      const start = match.index ?? 0;
+      const open = start + match[0].length - 1;
+      const arg = (callArgs(code, open)[0] ?? "").trim();
+      const line = code.slice(0, start).split("\n").length;
+      const callee = match[0].trim().replace(/\($/, "");
+      const site = (kind: Site["kind"], why: string) => sites.push({ file, line, callee, arg, kind, why });
 
-    if (isClient) site("client", "a browser component: the visitor's own machine makes this request");
-    else if (/^["'`]https?:\/\//.test(arg)) site("literal", "the host is fixed in the source");
-    else {
-      const root = rootIdentifier(arg);
-      if (root && /\bprocess\.env\b/.test(declaredFrom(code, root))) {
-        site("env", `${root} comes from process.env, which is an operator's choice`);
-      } else {
-        const above = code.split("\n").slice(Math.max(0, line - 1 - BLOCK_LINES), line - 1).join("\n");
-        if (/\b(?:assertAllowedTarget|classifyTarget)\s*\(/.test(above)) {
-          site("policy", "the egress policy runs immediately before the request");
+      if (isClient) site("client", "a browser component: the visitor's own machine makes this request");
+      else if (/^["'`]https?:\/\//.test(arg)) site("literal", "the host is fixed in the source");
+      else {
+        const root = rootIdentifier(arg);
+        if (root && /\bprocess\.env\b/.test(declaredFrom(code, root))) {
+          site("env", `${root} comes from process.env, which is an operator's choice`);
         } else {
-          site("UNPROTECTED", root ? `${root} is not fixed in the source and not from the environment` : "no identifier in the address at all");
+          const above = code.split("\n").slice(Math.max(0, line - 1 - BLOCK_LINES), line - 1).join("\n");
+          if (/\b(?:assertAllowedTarget|classifyTarget)\s*\(/.test(above)) {
+            site("policy", "the egress policy runs immediately before the request");
+          } else {
+            site("UNPROTECTED", root ? `${root} is not fixed in the source and not from the environment` : "no identifier in the address at all");
+          }
         }
       }
     }
@@ -159,4 +188,18 @@ test("the exemptions are the ones this file claims, counted rather than trusted"
       "a site is covered by a policy call, but src/lib/egress.ts does not export it",
     );
   }
+});
+
+test("the browser navigation is one of the sites, and the policy is what covers it", () => {
+  // Seeing `page.goto` at all is the finding #39 added, so the extension is asserted and
+  // not leaned on: a pattern that stopped matching would leave the fetch count exactly as
+  // it was, and the app would be back to one navigation its own guard cannot read.
+  const navigations = SITES.filter((s) => /goto|loadURL|navigate/.test(s.callee));
+  assert.deepEqual(
+    navigations.map((s) => `${s.file} ${s.callee}`),
+    ["src/lib/scraper.ts page.goto"],
+    "exactly one navigation, in the worker that performs it",
+  );
+  assert.equal(navigations[0].kind, "policy", "covered by the assert sitting in the same block above it");
+  assert.equal(navigations[0].arg, "pageUrl", "and the address judged is the one the load actually receives");
 });
