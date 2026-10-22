@@ -1563,7 +1563,7 @@ running application wrote itself:
   measured=false`, reason *“not measured: this job stamped no denominator, so there is no share
   of a whole to report”*.
 - **The residue counted out loud**: `terminal jobs still holding no per-item record, by type:
-  DEDUPE=51 ENRICH=372 EXPORT=109 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
+  DEDUPE=52 ENRICH=374 EXPORT=113 VALIDATE=75`, EXPORT and SCRAPE each carrying the stated
   reason they are not gaps, and 353 COMPLETED rows on this database whose own counters disagree
   named at the top of the step.
 - **The cascade, checked rather than assumed**: after the step's cleanup,
@@ -1583,7 +1583,7 @@ shared table (`leadworks_r40`), with a private Redis on **6380** and the webhook
 earlier traffic, which is why the census above reads 353 rather than the 386 rows the shared
 production table held when the module was written.
 
-Verification: `npm test` **751/751** (54 new), `npx tsc --noEmit` clean, `npm run lint`
+Verification: `npm test` **755/755** (54 new), `npx tsc --noEmit` clean, `npm run lint`
 **0 errors / 12 warnings** (13 → 12), `npm run build` exit 0.
 
 ## Score: one arithmetic, and who may change it
