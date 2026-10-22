@@ -4,6 +4,8 @@ import { asInputJson, asRecord } from "./json";
 import { leadWhere, readStoredConditions } from "./rule-conditions";
 import { actionsProblem, readRuleActions } from "./rule-actions";
 import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
+import { planPurge, purgedExportLog } from "./export-retention";
+import { unlink } from "fs/promises";
 
 /**
  * One minute's worth of the schedule: every active source, export profile and SCHEDULED
@@ -26,11 +28,27 @@ import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
  * Without that walk the ranking decided nothing at all, whatever the query's `orderBy`
  * said, because the `enrich` worker runs five jobs at once and the column went to whichever
  * write landed first.
+ *
+ * One leg of the sweep queues nothing: it reclaims the bytes of exports whose `expiresAt`
+ * has passed, `purgeRetiredExports()` below. It rides the same minute because retention is a
+ * thing that has to happen even when nothing is due, it runs before the calendar so a disk
+ * that misbehaves cannot cost the minute's work, and it is the only `unlink` in `src/` — the
+ * decision over which paths qualify is `lib/export-retention.ts`'s `planPurge`, and this file
+ * only ever acts on what that returns.
  */
 export async function runScheduledJobs(): Promise<void> {
   const now = new Date();
   const currentHour = now.getHours();
   const currentDay = now.getDay(); // 0 = Sunday
+
+  // Its own error, its own line: a filesystem or a query that misbehaves here must not cost
+  // the sources, profiles and rules this minute is due for, and a retired export that is not
+  // reclaimed at 08:00 is reclaimed at 08:01.
+  try {
+    await purgeRetiredExports(now);
+  } catch (error) {
+    console.warn(`Retired export purge did not run this minute: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   // Find all active sources with schedules
   const sources = await prisma.source.findMany({
@@ -171,6 +189,47 @@ export async function runScheduledJobs(): Promise<void> {
       await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });
     }
   }
+}
+
+export type PurgeReport = { removed: number; alreadyGone: number; refused: number; failed: number; considered: number };
+
+/**
+ * The one `unlink` in this application. It reads the rows a retention could judge —
+ * finished, stamped, dated — hands them to `planPurge` and deletes only what that returns,
+ * so the path it removes has passed the date check and the `/tmp/export_<digits>.<ext>`
+ * shape check in the pure module first. `filePath`, `fileSize` and the `COMPLETED` status all
+ * stay on the row: it is the record of an export that happened, and the date on it is what
+ * says the bytes are gone.
+ *
+ * A file that is already absent is not a failure. `/tmp` is reclaimed by the operating
+ * system on its own schedule and the download door has always answered its own sentence when
+ * that happened; this sweep counts it separately rather than pretending it deleted something.
+ */
+export async function purgeRetiredExports(now: Date = new Date()): Promise<PurgeReport> {
+  const rows = await prisma.export.findMany({
+    where: { status: "COMPLETED", expiresAt: { not: null, lte: now } },
+    select: { id: true, filePath: true, expiresAt: true },
+  });
+  const plan = planPurge(rows, now);
+  const report: PurgeReport = { removed: 0, alreadyGone: 0, refused: plan.keep.length, failed: 0, considered: rows.length };
+
+  for (const target of plan.remove) {
+    try {
+      await unlink(target.filePath);
+      report.removed += 1;
+      console.info(purgedExportLog(target));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        report.alreadyGone += 1;
+        console.info(`Export ${target.id}: retired file at ${target.filePath} was already gone from this server`);
+      } else {
+        report.failed += 1;
+        console.warn(`Export ${target.id}: retired file at ${target.filePath} could not be removed — ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  return report;
 }
 
 function shouldRunNow(cronExpression: string, now: Date): boolean {
