@@ -57,5 +57,25 @@ test("every companion links to its own sign-up and says what it costs", () => {
       host.endsWith(".abetworks.in"),
       `${name} links to ${host}, which is not a home in the suite`,
     );
+    assert.ok(
+      entry.includes('href="https://'),
+      `${name} is linked over http — a pricing page that mixes content is a broken page`,
+    );
+    assert.ok(
+      entry.includes('href="https://'),
+      `${name} is linked over http — a pricing page that mixes content is a broken page`,
+    );
+    assert.ok(
+      entry.includes('href="https://'),
+      `${name} is linked over http — a pricing page that mixes content is a broken page`,
+    );
+    assert.ok(
+      entry.includes('href="https://'),
+      `${name} is linked over http — a pricing page that mixes content is a broken page`,
+    );
+    assert.ok(
+      entry.includes('href="https://'),
+      `${name} is linked over http — a pricing page that mixes content is a broken page`,
+    );
   }
 });
