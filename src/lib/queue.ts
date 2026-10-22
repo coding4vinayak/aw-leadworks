@@ -191,8 +191,10 @@ export const SCHEDULED_SWEEP_KEY = "leadworks-scheduled-sweep";
 export const SCHEDULED_SWEEP_NAME = "run-scheduled";
 
 /**
- * Every minute. `shouldRunNow` in `scheduler.ts` compares the cron *minute* field
- * against `now.getMinutes()`, so a coarser cadence silently drops matches. What the
+ * Every minute. The sweep has to be offered a tick for every minute the clock has,
+ * because a cadence in the database is coarser than the sweep on purpose: `matchesSchedule`
+ * in `cron-schedule.ts` decides which of those minutes mean anything, so a `0 9 * * *`
+ * waits for 09:00 and a step cadence now means every fifth minute rather than nothing. What the
  * data asks for, read off a copy of `dev.db`: three active sources on `0 9 * * *` and
  * three active export profiles on `0 9 * * 1`. Nothing in this app's rows wants a
  * sub-minute schedule, and nothing matches a sweep that misses the minute. The third leg

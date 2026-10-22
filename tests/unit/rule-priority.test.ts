@@ -353,7 +353,7 @@ describe("the wiring, from the source", () => {
     const body = functionBody(scheduler, "runScheduledJobs")!;
     const code = blankComments(body);
     assert.match(code, /orderBy: RULE_PRIORITY_ORDER/);
-    assert.match(code, /if \(!shouldRunNow\(declared\.schedule \?\? "", now\)\) continue;/, "a rule not due this minute is not in the running");
+    assert.match(code, /if \(!matchesSchedule\(declared\.schedule \?\? "", now\)\) continue;/, "a rule not due this minute is not in the running");
     assert.ok(code.indexOf("stored.problem !== null") < code.indexOf("due.push("), "unreadable conditions never claim a column");
     assert.ok(code.indexOf("performed !== null") < code.indexOf("due.push("), "and neither does an unperformable declaration");
     assert.ok(code.indexOf("planTick(due)") < code.indexOf("prisma.lead.findMany"), "the claims are settled before any crowd is read");
