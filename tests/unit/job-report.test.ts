@@ -196,10 +196,10 @@ describe("the verdict says what a status cannot", () => {
     assert.match(verdict.note ?? "", /not measurable from this row/);
   });
 
-  it("tells a cancelled job what it already wrote", () => {
+  it("tells a cancelled job what it reached and what it left", () => {
     const verdict = verdictFor("CANCELLED", { total: 16, processed: 4, failed: 0 });
-    assert.match(verdict.note ?? "", /4 row\(s\) were already written/);
-    assert.match(verdict.note ?? "", /nothing in this application stops a worker/);
+    assert.match(verdict.note ?? "", /stopped at the mark with 4 of 16 row\(s\) accounted for/);
+    assert.match(verdict.note ?? "", /12 row\(s\) after it were never reached/);
   });
 
   it("has nothing to add to a clean finish or a row still going", () => {
