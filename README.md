@@ -175,8 +175,8 @@ POST   /api/leads/{id}?action=enrich       # visit the one lead the URL names
 GET    /api/lead-lists?workspaceId=        # lists
 POST   /api/lead-lists/{id}?action=add-leads|remove-leads
 GET    /api/enrichment-rules?workspaceId=  # rules
-POST   /api/enrichment-rules               # create; `conditions` is required (see below)
-PATCH  /api/enrichment-rules/{id}          # change a rule, its conditions included
+POST   /api/enrichment-rules               # create; `conditions` and `actions` are both required, and both are read
+PATCH  /api/enrichment-rules/{id}          # change a rule; conditions and actions are re-checked as a pair
 POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appliesTo }
 GET    /api/exports?workspaceId=           # exports
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
@@ -387,6 +387,72 @@ same click used to walk 19 rows and stamp none. The same door opened on a
 `Head of Facilities` visits exactly one row again, stamps it, and invents nothing —
 `seniority` still empty, `status` still `NEW`, the score still the 47 it arrived with.
 
+### What a rule says to enrich, and when it says to run
+
+`schema.prisma` declares `EnrichmentRule.actions Json // What enrichment to perform`,
+and `POST /api/enrichment-rules` requires the field. Until this round nothing performed
+it: one column had two readers and honoured neither. `scheduler.ts` asked
+`shouldRunNow(typeof rule.actions === "string" ? rule.actions : "", now)` — the JSON
+object every door requires, coerced to `""` — and both run doors queued `fields: []`
+whatever the rule declared.
+
+Measured against the running app before the fix. A `SCHEDULED` rule whose actions held
+`{ fields: ["seniority"] }` queued **nothing across three sweep minutes**, while the
+same rule with a bare `"* * * * *"` in that column queued **one job a minute**: the only
+shape the sweep could act on was one the create door refuses. And two rules over
+identical `Chief Operating Officer` leads — one declaring `industry`, one declaring
+`seniority` — left identical rows, because the `derive` provider's answer filled
+`seniority` under both and the declaration was never consulted.
+
+`src/lib/rule-actions.ts` reads it now, and both halves are honoured.
+
+- **`fields` is the list the visit is narrowed to.** What a provider answered passes
+  through `restrictToDeclared` before the write plan sees it: the list can only remove
+  columns, never add one the provider did not give or reorder what stays. An absent list
+  is not "no columns" — it is the rule saying nothing about which columns, which is how
+  every job in this build was queued before the declaration was read, and it is what the
+  single-lead door still sends, so STEP 12's visit is untouched. What a visit may write
+  at all remains `enrich-plan.ts`'s decision; this narrows it further and never widens it.
+- **`schedule` is the cron the minute is matched against**, stored in the one
+  single-space form `shouldRunNow` splits.
+- **A declaration this build cannot honour is refused at the door that would store it,**
+  every problem in one 400, with the offending part quoted: a key nothing performs
+  (`enrich` was this repo's own demo spelling), a column no write knows — the refusal
+  quotes the list `ENRICH_WRITABLE` owns, which `rule-actions.ts` imports instead of
+  re-spelling — an empty list, a cadence holding a step (`*/5`) or a range (`9-17`),
+  which reads as a schedule and is never matched by this build, a number outside its
+  field's range, and the one pairing the blob cannot state about itself: a `SCHEDULED`
+  rule with no cadence is stored, active and never swept, and a cadence on any other
+  trigger is stored and never swept. Both halves of that are checked on the edit door
+  too, against whichever half the request left alone, so flipping `trigger` to
+  `SCHEDULED` cannot smuggle in the row the create door refuses.
+- **Junk already in the column contributes a log line and skips the rule**, the way
+  unreadable `conditions` already do, and `?action=run` answers 400 instead, because
+  that call has a caller to tell.
+- **A column is folded to the spelling the row uses.** `ENRICH_WRITABLE` is camelCase
+  because the columns are: the first cut of this module lower-cased every word and so
+  refused `{ fields: ["companySize"] }` as `"companysize"` — a bug this round's own demo
+  measured, then fixed by matching case-insensitively and storing the canonical name.
+
+Pinned offline by `tests/unit/rule-actions.test.ts` (35: the two keys and nothing else,
+every refusal's wording checked against the list it quotes, the cadence accepted field by
+field and refused by name, the trigger pairing in both directions, what a declared list
+does to an answer, and a source scan showing both doors refusing before they store, the
+sweep matching the declared cadence with the coercion gone from `src/`, the worker
+narrowing after its answered-guard, and the shipped seed still acceptable to the shipped
+door). The live proof is `demo/run-demo.sh leadworks` STEP 13: the six refusals above
+answered 400 by name; then two rules over the same title — the one asking for `seniority`
+writes `C_LEVEL`, `ENRICHED` and **47 → 53** with a `SUCCESS ["seniority"]` log, while the
+one asking for `industry` writes no seniority at all, is stamped as a visit all the same
+and logs `PARTIAL []`, because a provider's opinion about a column the rule did not ask
+for is not written into anybody's row. A `SCHEDULED` rule declaring
+`{ fields: ["seniority"], schedule: "* * * * *" }` queued its first job after **39 s** and
+wrote that column on the lead its conditions name — the same rule used to queue none at
+any hour; a cadence on a rule being demoted to `MANUAL`, and a cadence dropped from a
+scheduled rule, are both refused on the way out; and `" 30  9 * * 1 "` is accepted and
+stored as `"30 9 * * 1"` — 22 checks in this step, and the whole run against this build is
+**119 ✓ / 0 ✗**, exit 0.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
@@ -436,7 +502,7 @@ the stored ledger and `stale: lead.score !== live.score`, model or no model; the
 dashboard's top-leads table prints the earned terms under the number, and for an
 override, `typed 82 · the row earns 96`.
 
-Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 493 in the suite: the
+Pinned offline by `tests/unit/lead-score.test.ts` (64 of the 528 in the suite: the
 table against the schema's own columns and its migration, the group totals, known
 answers for four hand-added rows, the override and its `0`, the `-0` a Json column
 would swallow, the ledger's round-trip, the seven writers scanned from source, the
