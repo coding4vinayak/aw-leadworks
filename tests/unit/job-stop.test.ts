@@ -357,8 +357,18 @@ describe("a stopped job tells nobody a finish it did not have", () => {
 });
 
 describe("what this round left alone, pinned so it cannot drift silently", () => {
-  it("leaves exactly three files obeying the mark, by name", () => {
-    assert.deepEqual(mentioners("./job-stop"), ["src/lib/dedupe.ts", "src/lib/enrichment.ts", "src/lib/validator.ts"]);
+  it("leaves exactly three workers obeying the mark, and one door asking for its word", () => {
+    // #42 added a fourth importer of this module: `lib/job-retry.ts` takes `MARK` so the
+    // resume accepts the status rather than spelling it out again. It is not a fourth
+    // *worker* — it holds no query and no write — and the two files still left out of the
+    // obedience are still `lib/exporter.ts` and `lib/scraper.ts`, for the two reasons below.
+    assert.deepEqual(mentioners("./job-stop"), [
+      "src/lib/dedupe.ts",
+      "src/lib/enrichment.ts",
+      "src/lib/job-retry.ts",
+      "src/lib/validator.ts",
+    ]);
+    assert.ok(!at("../../src/lib/job-retry.ts").includes("prisma."), "the fourth importer decides, it does not run");
   });
 
   it("says why EXPORT is not one of them: no per-row loop, and no word for a cancelled file", () => {
@@ -390,13 +400,16 @@ describe("what this round left alone, pinned so it cannot drift silently", () =>
     );
   });
 
-  it("leaves a stopped row terminal: the door will not cancel it twice or retry it", () => {
+  it("leaves a stopped row terminal for a second cancel, and open for a resume", () => {
     assert.match(detailRoute, /if \(job\.status === "COMPLETED" \|\| job\.status === "FAILED" \|\| job\.status === "CANCELLED"\)/);
-    assert.match(detailRoute, /if \(job\.status !== "FAILED" && job\.status !== "COMPLETED"\)/);
     assert.match(
       blankComments(detailRoute),
-      /Can only retry failed or completed jobs/,
-      "so an operator who stops a job at row 4 of 200 restarts it as a new job, over the rows still standing — said here because the API list used to call this action a stop",
+      /retryAsk\(job\.status\)/,
+      "the retry guard is the module's decision now, so an operator who stops a job at row 4 of 200 can restart it as a new job over the crowd the config names — the sentence #41's table had to leave in the *unchanged* column because the door still refused it",
+    );
+    assert.ok(
+      !/Can only retry failed or completed jobs/.test(detailRoute),
+      "and the answer that made a stop irreversible is gone from the door",
     );
   });
 
