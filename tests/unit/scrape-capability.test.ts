@@ -332,6 +332,21 @@ describe("the wiring, from the source", () => {
     assert.ok(!/shouldRunNow|Simplified cron matching/.test(capability), "and this module did not grow a third");
   });
 
+  it("leaves the shipped seed acceptable to the door it now shares", () => {
+    // #42's precedent: a door that refuses a shape the repo's own seed writes is a broken
+    // seed, not a working guard. `prisma/seed.ts` creates one `WEB_SCRAPER` row, and it has
+    // to survive both halves of this round's refusal — an address, and an https one that
+    // names no credentials.
+    const seed = at("../../prisma/seed.ts");
+    const scraper = seed.slice(seed.indexOf('name: "LinkedIn Scraper"'), seed.indexOf('name: "LinkedIn Scraper"') + 900);
+    assert.match(scraper, /type: "WEB_SCRAPER"/, "the row this check is about");
+    const url = /url:\s*"([^"]+)"/.exec(scraper)?.[1];
+    assert.ok(url, "and it names the address a scrape navigates to");
+    assert.equal(scrapeTarget({ url }), url, "so the reader finds it");
+    assert.match(url, /^https:\/\//, `https, not a scheme this server will refuse: ${url}`);
+    assert.ok(!url.includes("@"), "with no userinfo for the policy to refuse");
+  });
+
   it("reports the capability at the health door without letting it decide the status", () => {
     assert.match(health, /scrape: await scrapeStatus\(\)/, "the field is there");
     assert.match(health, /await import\("@\/lib\/scraper"\)/, "asked lazily, so a build without the browser library still answers");
