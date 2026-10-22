@@ -1672,6 +1672,11 @@ What this does not claim, in the words the surfaces use:
   one row it is still working, for as long as that row takes. STEP 22 used to poll that way and the run before this one is how it was found: the step
   now reads the mark's snapshot and the worker's snapshot separately, waits for the row to agree
   with the records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
+  finishes. A reader that polls the *status* alone can therefore catch a row saying 3 accounted
+  for beside 4 records, short by exactly the one row it is still working, for as long as that row
+  takes. STEP 22 used to poll that way and this run is how it was found: the step now reads the
+  mark's snapshot and the worker's snapshot separately, waits for the row to agree with the
+  records it holds, and asserts the gap never exceeds one row. Closing it completely would mean
   abandoning a row mid-visit — the one thing a stop must not do — or writing each record and its
   counters in one transaction, which is a decision about every row rather than about the stop.
 - **`Job.status` still has no value between COMPLETED and FAILED**, so a stop that reached some
@@ -1700,13 +1705,20 @@ Live, in STEP 22 of the LeadWorks demo — **19 checks** on the same isolated bo
 Live, in STEP 22 of the LeadWorks demo — **17 checks** on the same isolated boot as STEP 21:
 
 - **A stop read between two leads is a measurable share.** 300 leads imported, an ENRICH job
-  over those named ids, found `RUNNING` with 2 of 300 already counted and `progress=1` — a
-  percentage stamped while the job is still walking, not only at its finish line.
-  `?action=cancel` answers 200, and the row settles **`CANCELLED` at 4 processed + 0 failed of
-  300 with `progress: 1`**: 4 reached, 296 never started, `results.recorded` 4 — one per row it
-  did and none for the crowd it did not — the leads themselves agreeing (4 rows carrying a
-  fresh `lastEnrichedAt`, 296 not), and `report.problem` null beside a note that names
-  reached, left, and the row that was already in flight.
+  over those named ids, found `RUNNING` with 1 of 300 already counted and `progress=0` — the
+  percentage is stamped while the job is still walking, not only at its finish line, and one row
+  out of three hundred is a third of a percent, which is what the arithmetic says rather than
+  what a typed number would. `?action=cancel` answers 200, and the row settles **`CANCELLED` at
+  3 processed + 0 failed of 300 with `progress: 1`**: 3 reached, 297 never started,
+  `results.recorded` 3 — one per row it did and none for the crowd it did not — the leads
+  themselves agreeing (3 rows carrying a fresh `lastEnrichedAt`, 297 not), and `report.problem`
+  null beside a note that names reached, left, and the row that was already in flight.
+- **A stop is two writes, and the demo reads both.** The door's mark and the worker's own
+  terminal stamp landed 3 rows apart from each other and 0 rows apart in this run's account — the
+  step snapshots the row as the mark arrives, waits for the row to agree with the records it
+  holds, and asserts the gap never exceeds the one row that was in flight. An earlier run of this
+  step polled the status alone and read 3 accounted for beside 4 records: that is the window, and
+  the check is now the proof of its size rather than an accident of timing.
 - **A stopped job tells nobody a finish it did not have — proved against a job that did.** A
   webhook subscribed to `enrichment.completed` receives **nothing** for the stopped job and
   **exactly one** delivery for a 3-lead control that finished, so the silence above means the
