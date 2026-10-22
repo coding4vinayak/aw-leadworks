@@ -357,26 +357,45 @@ describe("a stopped job tells nobody a finish it did not have", () => {
 });
 
 describe("what this round left alone, pinned so it cannot drift silently", () => {
-  it("leaves exactly three workers obeying the mark, and one door asking for its word", () => {
-    // #42 added a fourth importer of this module: `lib/job-retry.ts` takes `MARK` so the
-    // resume accepts the status rather than spelling it out again. It is not a fourth
-    // *worker* — it holds no query and no write — and the two files still left out of the
-    // obedience are still `lib/exporter.ts` and `lib/scraper.ts`, for the two reasons below.
+  it("leaves exactly four workers obeying the mark, and one door asking for its word", () => {
+    // #42 added an importer that is not a worker at all: `lib/job-retry.ts` takes `MARK` so the
+    // resume accepts the status rather than spelling it out again — it holds no query and no
+    // write. #43 adds the fourth *worker*: `lib/exporter.ts`, the file #41 named as left alone
+    // and #42's own honesty bullets named again, which stamped `RUNNING` and then `COMPLETED`
+    // over an operator's mark in the 139 ms between its two unconditional writes. One file is
+    // still out, for the reason the test below keeps.
     assert.deepEqual(mentioners("./job-stop"), [
       "src/lib/dedupe.ts",
       "src/lib/enrichment.ts",
+      "src/lib/exporter.ts",
       "src/lib/job-retry.ts",
       "src/lib/validator.ts",
     ]);
-    assert.ok(!at("../../src/lib/job-retry.ts").includes("prisma."), "the fourth importer decides, it does not run");
+    assert.ok(!at("../../src/lib/job-retry.ts").includes("prisma."), "the importer that decides, does not run");
   });
 
-  it("says why EXPORT is not one of them: no per-row loop, and no word for a cancelled file", () => {
-    assert.ok(!exporter.includes("isMarked("), "the export worker's work is one file write over the whole crowd");
+  it("says how EXPORT obeys a mark, and keeps its own column inside the four words it documents", () => {
+    // An export has no per-row loop to put a boundary inside — the crowd is one query, rendered
+    // in memory, written by one `writeFile` — so its boundaries are the ones its work actually
+    // has: the claim, before the bytes, after the bytes, and the finish. Four asks, and no new
+    // word invented for a cancelled file: the record goes down `FAILED` with the cancel quoted,
+    // which is the one status the export door's own retry already accepts.
+    const body = blankComments(exporter);
+    assert.match(body, /where: \{ id: jobId, status: \{ not: MARK \} \}/, "the claim carries the mark in its WHERE, like the other three");
+    assert.equal((body.match(/isMarked\(await prisma\.job\.findUnique/g) ?? []).length, 3,
+      "asked before the bytes, after the bytes, and inside the catch — a throw does not outrank a mark");
+    assert.match(body, /where: \{ id: job\.id, status: \{ not: MARK \} \}/, "a finish writes around the mark");
+    assert.match(body, /where: \{ id: jobId, status: MARK \}[\s\S]{0,120}stoppedWrite\(/,
+      "and a stop writes under it, with the arithmetic of the crowd it named");
+    assert.equal((body.match(/dispatchWebhookEvent\(/g) ?? []).length, 1, "one delivery site, as #41 left it");
+    assert.match(body, /if \(!finish\.count\) \{\s*await putDownStopped\([\s\S]{0,90}return;\s*\}/,
+      "a finish that lost the row puts both rows down and returns before the wire");
+    assert.match(body, /if \(!began\.count\) \{\s*await putDownStopped\([\s\S]{0,90}return;\s*\}/,
+      "and a job that never began does the same, claiming no denominator");
     assert.match(
       schema,
       /model Export \{[\s\S]*?status\s+String\s+@default\("PENDING"\)\s+\/\/ PENDING \| PROCESSING \| COMPLETED \| FAILED/,
-      "a fifth value on that column is a schema decision, not a reporting one",
+      "a fifth value on that column is a schema decision, not a reporting one — #43 did not make one",
     );
   });
 
