@@ -38,9 +38,11 @@ import {
  * and `Lead.validationResults` (the validator worker's), `Lead.lastEnrichedAt`
  * and `lastContactedAt` (the enrichment and the send's), `Job.progress` and its
  * four counters, `Source.lastRun*`, `Export.filePath`/`fileSize`/`recordCount`/
- * `expiresAt`/`completedAt`, `Webhook.secret`. Accepting one of those from a
+ * `completedAt` (the export worker's), `Webhook.secret`. Accepting one of those from a
  * request is a behaviour change and belongs in front of whoever owns that code,
- * not beside a type check.
+ * not beside a type check. `Export.expiresAt` is missing for a different reason and
+ * stays missing: the export worker stamps it from `EXPORT_RETENTION_MS` when the file
+ * is written (#35), and a lifetime the requester chooses is not a retention policy.
  */
 
 /** The columns `Export.fields` may name: what the exporter can actually render. */
