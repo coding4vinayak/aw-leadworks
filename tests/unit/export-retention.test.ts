@@ -337,12 +337,15 @@ describe("#35 the two refusals stay two sentences", () => {
 });
 
 describe("#35 the wiring, scanned from the source", () => {
-  it("the table is written from eight places and one of them owns the lifetime", () => {
+  it("the table is written from nine places and one of them owns the lifetime", () => {
     // Ten when #35 measured it. #39 deleted `runScheduledExports` — a scheduler no caller
     // had, holding one of the three creates and one of the seven updates — so the count is
     // retargeted rather than relaxed: the eight writes that remain are the eight that can
-    // actually run, and the deleted two are the reason this number moved.
-    assert.equal(everyWrite.length, 8, "the writes that are reachable: two creates, six updates");
+    // actually run, and the deleted two are the reason this number moved. #43 adds the ninth:
+    // the write that puts an export's record down when its worker obeyed a mark. It is pinned
+    // as the site that owns *neither* fact — no lifetime, and no file — because a stopped
+    // export is the one row on this table that must say it delivered nothing.
+    assert.equal(everyWrite.length, 9, "the writes that are reachable: two creates, seven updates");
     const stamped = everyWrite.filter((w) => w.body.includes("expiresAt"));
     assert.equal(stamped.length, 1, "one stamp site, no accidental second one");
     assert.equal(stamped[0].file.replace(src, "src"), "src/lib/exporter.ts");
@@ -350,6 +353,11 @@ describe("#35 the wiring, scanned from the source", () => {
     assert.match(stamped[0].body, /expiresAt: expiryFor\(finishedAt\)/);
     assert.match(stamped[0].body, /completedAt: finishedAt/, "one clock for both facts on the row");
     assert.doesNotMatch(stamped[0].body, /completedAt: new Date\(\)/, "the stamp and the finish are not two instants");
+    const putDown = everyWrite.filter((w) => w.body.includes("stoppedExportWrite"));
+    assert.equal(putDown.length, 1, "the stop has exactly one write on this table");
+    assert.equal(putDown[0].file.replace(src, "src"), "src/lib/exporter.ts", "made from the module's decision, not a second copy of it");
+    assert.match(putDown[0].body, /data: stoppedExportWrite\(\)/, "the word is the module's decision, not one spelled out at the write");
+    assert.doesNotMatch(putDown[0].body, /expiresAt|filePath/, "naming no bytes here, so naming no lifetime either");
   });
 
   it("the streaming door asks the verdict before it opens the file", () => {
@@ -381,14 +389,14 @@ describe("#35 the wiring, scanned from the source", () => {
     assert.match(exporter, /import \{ expiryFor \} from "\.\/export-retention"/);
   });
 
-  it("#35's limit was that serving an export never destroys it, and #37 kept that half", () => {
-    // The invariant was never "nothing in this app deletes" — it was "whatever hands a file back
-    // does not destroy it". #36 moved deletion to the sweep; #37 added it to the one export door
-    // that never serves anything. So the three places a download passes through still contain no
-    // deletion of any kind, and inside the detail door the deletion is confined to the branch
-    // that serves nothing: the two that hand bytes back do not touch them.
+  it("#35's limit was that serving an export never destroys it, and #43 kept that half", () => {
+    // The invariant was never "nothing in this app deletes" — it was "whatever hands a file
+    // back does not destroy it". #36 moved deletion to the sweep; #37 added it to the one
+    // export door that never serves anything; #43 gave the worker its first `unlink`, with the
+    // narrowest subject it could have: the bytes its own run wrote moments before it read the
+    // mark. So every place a download passes through still contains no deletion of any kind,
+    // and the worker's single removal is reached only through the plan a module hands back.
     const servers = [
-      ["the export worker", exporter],
       ["the streaming door", streamDoor],
       ["the list door", listDoor],
       ["the retention module, which only decides", retentionModule],
@@ -396,10 +404,19 @@ describe("#35 the wiring, scanned from the source", () => {
     for (const [name, file] of servers) {
       assert.doesNotMatch(blankComments(file), /unlink\s*\(|rmSync|\brm\s*\(|rmdir|execSync/, `${name} still deletes nothing`);
     }
+    const deletes = blankComments(exporter);
+    assert.equal((deletes.match(/\bunlink\(/g) ?? []).length, 1, "one removal in the worker, not one per format");
+    assert.match(deletes, /fs\.unlink\(bytes\.filePath\)/, "and it is on the plan's own path, never a re-read column");
+    assert.match(deletes, /stoppedExportBytes\(filePath\)/, "asked out of the module that owns the shape");
+    assert.match(deletes, /stopped run's file left on disk/, "a removal that failed is printed with the reason, not swallowed");
     // The module is held to more than "no deletion": it cannot even reach a filesystem. Its
     // `"unlink"` is a verb it hands to somebody else, which is the whole design of the round.
     const decides = blankComments(retentionModule);
     assert.doesNotMatch(decides, /from "fs|from "node:fs|require\("fs"/, "the retention module imports no filesystem at all");
+    const stopModule = blankComments(readFileSync(`${src}/lib/export-stop.ts`, "utf8"));
+    assert.doesNotMatch(stopModule, /from "fs|from "node:fs|\bunlink\s*\(|\brm\s*\(/,
+      "and neither does the module that decides a stopped run's bytes — it names an action, it does not perform one");
+    assert.match(stopModule, /return planRowDelete\(filePath\)/, "one shape rule in one file, so the two deleters cannot drift apart");
     for (const served of ["GET_impl", "POST_impl"]) {
       const body = blankComments(functionBody(detailDoor, served) ?? "");
       assert.ok(body.length > 0, `${served} exists`);
@@ -530,21 +547,25 @@ describe("#36 planPurge: the date first, then the shape, and never a guess", () 
 describe("#36 the sweep, scanned from the source", () => {
   const purge = () => blankComments(functionBody(schedulerSource, "purgeRetiredExports") ?? "");
 
-  it("the application deletes files in two places, and both do it by asking the module", () => {
-    // #36 pinned one deleter. #37 adds the second, and the claim worth keeping is not the count
-    // of files but the rule behind them: every `unlink` in `src/` sits in a function that got its
-    // path out of `planPurge` or `planRowDelete`, so there is no third way to delete a file.
+  it("the application deletes files in three places, and all three do it by asking the module", () => {
+    // #36 pinned one deleter. #37 added the second, and #43 the third: the worker putting back
+    // the bytes its own stopped run wrote. The claim worth keeping has never been the count of
+    // files but the rule behind them — every `unlink` in `src/` sits in a function that got its
+    // path out of `planPurge`, `planRowDelete`, or the stopped-export decision that delegates to
+    // `planRowDelete` — so there is no fourth way to delete a file, and a bug in a `where`
+    // clause or a stale column deletes nothing.
     const deletes = /unlink\s*\(|rmSync|\brm\s*\(|rmdir|execSync/;
     const files = srcFiles(src).filter((file) => deletes.test(blankComments(readFileSync(file, "utf8"))));
     assert.deepEqual(files.map((file) => file.replace(src, "src")).sort(), [
       "src/app/api/exports/[id]/route.ts",
+      "src/lib/exporter.ts",
       "src/lib/scheduler.ts",
-    ], "the minute sweep, and the delete door — a date and a caller who owns the row, and nobody else");
+    ], "the minute sweep, the delete door, and a stopped run's own file — a date, a caller who owns the row, and the bytes this worker just made; nobody else");
     for (const file of files) {
       const code = blankComments(readFileSync(file, "utf8"));
-      assert.equal((code.match(/await unlink\(/g) ?? []).length, 1, `${file} calls unlink from exactly one statement`);
-      assert.match(code, /planPurge\(|planRowDelete\(/, `${file} deletes only paths the pure module named`);
-      assert.match(code, /export-retention/, `and asks that module rather than keeping its own regex`);
+      assert.equal((code.match(/\bunlink\(/g) ?? []).length, 1, `${file} calls unlink from exactly one statement`);
+      assert.match(code, /planPurge\(|planRowDelete\(|stoppedExportBytes\(/, `${file} deletes only paths the pure module named`);
+      assert.match(code, /export-retention|export-stop/, `and asks that module rather than keeping its own regex`);
     }
   });
 

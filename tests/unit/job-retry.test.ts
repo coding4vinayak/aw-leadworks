@@ -315,10 +315,11 @@ describe("the door's order, and what it refuses to touch", () => {
       [
         "src/app/api/exports/[id]/route.ts",
         "src/app/api/jobs/[id]/route.ts",
+        "src/lib/export-stop.ts",
         "src/lib/job-retry.ts",
         "src/lib/queue.ts",
       ],
-      "the two doors that retry, the module that decides this one, and the queue that runs it — `support/page.tsx` spells the word about a ticket, not a job; `openapi.ts` names the doors and runs nothing",
+      "the two doors that retry, the module that decides this one, the queue that runs it, and #43's sentence telling a stopped export's caller to retry it — `support/page.tsx` spells the word about a ticket, not a job; `openapi.ts` names the doors and runs nothing",
     );
   });
 });

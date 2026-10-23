@@ -1,5 +1,7 @@
 import { prisma } from "./db";
 import { progressValue } from "./job-report";
+import { MARK, isMarked, startWrite, stoppedWrite } from "./job-stop";
+import { stoppedExportBytes, stoppedExportWrite } from "./export-stop";
 import { dispatchWebhookEvent } from "./webhooks";
 import { stringify } from "csv-stringify/sync";
 import * as XLSX from "xlsx";
@@ -18,21 +20,44 @@ export async function runExportJob(jobId: string): Promise<void> {
   const job = await prisma.job.findUnique({ where: { id: jobId } });
   if (!job) throw new Error(`Job ${jobId} not found`);
 
-  await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
-
   const config = job.config as unknown as ExportConfig;
   if (!config?.exportId) throw new Error("Export ID not found in job config");
   const exportRecord = await prisma.export.findUnique({ where: { id: config.exportId } });
 
   if (!exportRecord) throw new Error("Export record not found");
 
+  // The mark, obeyed before anything begins: `not: MARK` is in the WHERE, so a cancel that
+  // landed after the read above is not overwritten by this worker's own RUNNING. This is the
+  // same first write the other three workers make — and until #43 it was the one `grep` said
+  // this file did not have: `status: "RUNNING"` unconditionally, then `status: "COMPLETED"`
+  // unconditionally, with the operator's mark erased in the 139 ms between them.
+  const began = await prisma.job.updateMany({
+    where: { id: jobId, status: { not: MARK } },
+    data: startWrite(new Date()),
+  });
+  if (!began.count) {
+    await putDownStopped(job.id, exportRecord.id, 0, null);
+    return;
+  }
+
   await prisma.export.update({ where: { id: exportRecord.id }, data: { status: "PROCESSING" } });
+
+  // The file this run wrote, once it exists. An export's indivisible unit of work is not a
+  // lead — the crowd is one query, rendered in memory, written by one `writeFile` — so a stop
+  // here has two shapes, and the second leaves bytes on a disk no row will ever name.
+  let writtenFile: string | null = null;
 
   try {
     const leads = await getLeadsForExport(job.workspaceId, config);
-    let filePath: string;
-    let fileSize: number;
 
+    // The mark, at the boundary before the bytes are produced. Asking here costs one read and
+    // saves a file nobody is going to serve: this is the stop that leaves nothing to reclaim.
+    if (isMarked(await prisma.job.findUnique({ where: { id: job.id }, select: { status: true } }))) {
+      await putDownStopped(job.id, exportRecord.id, leads.length, null);
+      return;
+    }
+
+    let filePath: string;
     switch (config.format) {
       case "CSV":
         filePath = await exportToCSV(leads, config.fields);
@@ -49,14 +74,24 @@ export async function runExportJob(jobId: string): Promise<void> {
       default:
         throw new Error(`Unsupported format: ${config.format}`);
     }
+    writtenFile = filePath;
 
     const stats = await import("fs/promises").then(fs => fs.stat(filePath));
 
+    // Asked after the bytes exist and before any row names them: the mark may have landed
+    // while the file was being written. `stoppedExportBytes` is that case's answer — the worker
+    // takes back the file it made through the same guard that decides what
+    // `DELETE /api/exports/{id}` may remove, so it deletes nothing it cannot prove it wrote.
+    if (isMarked(await prisma.job.findUnique({ where: { id: job.id }, select: { status: true } }))) {
+      await putDownStopped(job.id, exportRecord.id, leads.length, writtenFile);
+      return;
+    }
+
+    const finishedAt = new Date();
     // One moment, both facts: the row that names the file is the row that says
     // how long it lives. `expiryFor` reads `EXPORT_RETENTION_MS` here rather
     // than at download time, so the lifetime belongs to the export and a
     // retention changed later cannot quietly retire files already written.
-    const finishedAt = new Date();
     await prisma.export.update({
       where: { id: exportRecord.id },
       data: {
@@ -69,20 +104,32 @@ export async function runExportJob(jobId: string): Promise<void> {
       },
     });
 
-    await prisma.job.update({
-      where: { id: job.id },
+    const counters = { total: leads.length, processed: leads.length, failed: 0 };
+    const finish = await prisma.job.updateMany({
+      // A finish writes around the mark, so a cancel that landed while the file was being
+      // written is not answered with a COMPLETED. `count: 0` here means the Export row has just
+      // been stamped for a file whose job the operator stopped, so both rows are put down again
+      // — the pointer included — and the bytes come back.
+      where: { id: job.id, status: { not: MARK } },
       data: {
         status: "COMPLETED", completedAt: new Date(),
         totalItems: leads.length,
-        progress: progressValue({ total: leads.length, processed: leads.length, failed: 0 }),
+        progress: progressValue(counters),
         processedItems: leads.length,
       },
     });
+    if (!finish.count) {
+      await putDownStopped(job.id, exportRecord.id, leads.length, writtenFile);
+      return;
+    }
 
     // Last, after both rows say COMPLETED — a receiver that fetches the export
     // on this event must find the file it names. Best-effort: the dispatcher
     // never throws, so a subscriber's outage is a log line, not a FAILED job
-    // for work that actually finished.
+    // for work that actually finished. A stopped run never reaches this line:
+    // an `export.completed` for a file its operator cancelled is a delivery of
+    // bytes that are on their way to the disk's trash, and the wire cannot tell
+    // that story from a finished one.
     await dispatchWebhookEvent(job.workspaceId, "export.completed", {
       exportId: exportRecord.id,
       format: config.format,
@@ -91,15 +138,57 @@ export async function runExportJob(jobId: string): Promise<void> {
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    // An error is this worker's own word, and it does not outrank the operator's: a run that
+    // threw after a mark landed puts its record down as stopped, not as broken, and still takes
+    // back the bytes it wrote before the throw.
+    if (isMarked(await prisma.job.findUnique({ where: { id: job.id }, select: { status: true } }))) {
+      await putDownStopped(job.id, exportRecord.id, 0, writtenFile);
+      return;
+    }
     await prisma.export.update({
       where: { id: exportRecord.id },
       data: { status: "FAILED", error: errorMessage },
     });
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: "FAILED", completedAt: new Date(), error: error instanceof Error ? error.message : "Unknown error" },
+    await prisma.job.updateMany({
+      where: { id: job.id, status: { not: MARK } },
+      data: { status: "FAILED", completedAt: new Date(), error: errorMessage },
     });
   }
+}
+
+/**
+ * Both rows of one export, put down because the operator said stop, and the bytes taken back
+ * if this run made them.
+ *
+ * The order is the only one that cannot lie: the disk first, then the record, then the job. If
+ * the `unlink` fails the file stays and the reason is printed — a stopped export whose residue
+ * is counted by #37's census is an honest accident, and a silent one is the bug that round was
+ * written to end. The job write carries `status: MARK` in its WHERE, so this puts a marked row
+ * down under its own mark and never walks a status back from anything else.
+ */
+async function putDownStopped(
+  jobId: string,
+  exportId: string,
+  total: number,
+  filePath: string | null,
+): Promise<void> {
+  const bytes = stoppedExportBytes(filePath);
+  if (bytes.action === "unlink") {
+    try {
+      await import("fs/promises").then(fs => fs.unlink(bytes.filePath));
+      console.log(`Export ${exportId}: stopped run's file removed at ${bytes.filePath}`);
+    } catch (error) {
+      console.log(`Export ${exportId}: stopped run's file left on disk at ${bytes.filePath} (${error instanceof Error ? error.message : String(error)})`);
+    }
+  } else if (filePath) {
+    console.log(`Export ${exportId}: bytes a stopped run wrote were left alone — ${bytes.reason}`);
+  }
+
+  await prisma.export.update({ where: { id: exportId }, data: stoppedExportWrite() });
+  await prisma.job.updateMany({
+    where: { id: jobId, status: MARK },
+    data: stoppedWrite({ total, processed: 0, failed: 0 }, new Date()),
+  });
 }
 
 async function getLeadsForExport(workspaceId: string, config: ExportConfig): Promise<any[]> {
