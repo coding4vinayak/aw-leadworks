@@ -84,7 +84,7 @@ function describe(value: unknown): string {
  * when it can. Every problem is reported — the fleet's rule for a boundary that
  * could be filled in from a dashboard: one call names every key it will refuse.
  */
-export function conditionsProblem(value: unknown): string | null {
+export function conditionsProblem(value: unknown, subject: string = "a rule"): string | null {
   // Absent and `{}` both mean "the rule declares nothing", which is the old
   // behavior. `null` used to be storable too, and selected the same crowd.
   if (value === undefined || value === null) return null;
@@ -96,7 +96,7 @@ export function conditionsProblem(value: unknown): string | null {
 
   for (const key of Object.keys(record)) {
     if (!(CONDITION_KEYS as readonly string[]).includes(key)) {
-      problems.push(`"${key}" is not an attribute a rule can condition on — the supported keys are ${CONDITION_KEYS.join(", ")}`);
+      problems.push(`"${key}" is not an attribute ${subject} can condition on — the supported keys are ${CONDITION_KEYS.join(", ")}`);
     }
   }
 

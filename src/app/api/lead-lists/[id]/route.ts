@@ -4,6 +4,9 @@ import { prisma } from "@/lib/db";
 import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
 import { readJson, validateBody } from "@/lib/validate";
 import { LEAD_LIST_PATCH } from "@/lib/fields";
+import { listRefreshAsk, planListRefresh, readListFilter } from "@/lib/dynamic-list";
+import { describeConditions, leadWhere } from "@/lib/rule-conditions";
+import { asInputJson } from "@/lib/json";
 
 export const dynamic = "force-dynamic";
 
@@ -23,13 +26,32 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   const parsed = await readJson(request);
   if (!parsed.ok) return parsed.error;
 
-  const _owned = await prisma.leadList.findUnique({ where: { id }, select: { workspaceId: true } });
+  const _owned = await prisma.leadList.findUnique({
+    where: { id },
+    select: { workspaceId: true, isDynamic: true, filterJson: true },
+  });
   if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, _owned.workspaceId);
 
   const input = validateBody(parsed.body, LEAD_LIST_PATCH, { requireWrite: true });
   if (!input.ok) return input.error;
-  const list = await prisma.leadList.update({ where: { id }, data: input.data });
+
+  // The edit door owes the same refusal as the create door, and one it does not: a filter is
+  // checked as it arrives, and a list that would end up dynamic — either because this request
+  // says so or because it already was — has to end up holding a filter that can be re-run.
+  // `{ isDynamic: true }` onto a list with no `filterJson` used to be a 200 and a dead row.
+  const declared = "filterJson" in input.data ? readListFilter(input.data.filterJson) : null;
+  if (declared?.problem) return NextResponse.json({ error: declared.problem }, { status: 400 });
+  const willBeDynamic = "isDynamic" in input.data ? input.data.isDynamic === true : _owned.isDynamic;
+  if (willBeDynamic) {
+    const effective = declared ?? readListFilter(_owned.filterJson);
+    if (effective.problem) return NextResponse.json({ error: effective.problem }, { status: 400 });
+  }
+
+  const list = await prisma.leadList.update({
+    where: { id },
+    data: declared === null ? input.data : { ...input.data, filterJson: asInputJson(declared.filter) },
+  });
   return NextResponse.json(list);
 }
 
@@ -41,7 +63,12 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
   if (!raw.ok) return raw.error;
   const body = raw.body as Record<string, unknown>;
 
-  const _owned = await prisma.leadList.findUnique({ where: { id }, select: { workspaceId: true } });
+  // The refresh branch asks this row what it is, so this read takes the two columns along with
+  // the workspace the ownership check needs.
+  const _owned = await prisma.leadList.findUnique({
+    where: { id },
+    select: { workspaceId: true, isDynamic: true, filterJson: true },
+  });
   if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, _owned.workspaceId);
 
@@ -84,10 +111,41 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     return NextResponse.json({ ok: true });
   }
 
-  if (action === "refresh" && body.isDynamic) {
-    // Re-evaluate dynamic list filter
-    // Implementation would re-run filterJson against all leads
-    return NextResponse.json({ ok: true, message: "Dynamic list refresh not fully implemented" });
+  if (action === "refresh") {
+    // The flag is read from the row. `body.isDynamic` used to decide this branch, so a dynamic
+    // list refreshed without typing the flag got `400 "Unknown action"` and a static one got the
+    // `ok` as soon as a caller typed it at a row that has no filter to re-run.
+    const stored = readListFilter(_owned.filterJson);
+    const ask = listRefreshAsk(_owned.isDynamic, stored.problem);
+    if (!ask.ok) return NextResponse.json({ error: ask.error }, { status: ask.http });
+
+    const [members, matched] = await Promise.all([
+      prisma.leadListMember.findMany({ where: { listId: id }, select: { leadId: true } }),
+      prisma.lead.findMany({ where: leadWhere(_owned.workspaceId, stored.filter), select: { id: true } }),
+    ]);
+    const plan = planListRefresh(members.map((m) => m.leadId), matched.map((m) => m.id));
+
+    // The membership set is the indivisible unit here, so the two writes go as one transaction,
+    // removal first: a reader between them would otherwise see a list that has lost its old
+    // crowd and not yet gained the new one, and a refresh of a filter nobody left is a no-op.
+    const writes = [];
+    if (plan.remove.length > 0) {
+      writes.push(prisma.leadListMember.deleteMany({ where: { listId: id, leadId: { in: plan.remove } } }));
+    }
+    if (plan.add.length > 0) {
+      writes.push(prisma.leadListMember.createMany({ data: plan.add.map((leadId) => ({ listId: id, leadId })) }));
+    }
+    if (writes.length > 0) await prisma.$transaction(writes);
+
+    return NextResponse.json({
+      ok: true,
+      filter: describeConditions(stored.filter),
+      matched: plan.matched,
+      added: plan.add.length,
+      removed: plan.remove.length,
+      kept: plan.keep.length,
+      members: plan.matched,
+    });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
