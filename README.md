@@ -2111,8 +2111,9 @@ What this does not claim:
   cannot drift apart; the cost is that a new attribute has to be added once, in `rule-conditions.ts`,
   for both.
 
-Verification: `npm test` **868/868** (34 new in `tests/unit/dynamic-list.test.ts` over 6 describes —
-no browser, no database, no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors / 14
+Verification: `npm test` **899/899** — this branch's 34 on top of `main`'s 865, which it does not
+touch (the 34 live in `tests/unit/dynamic-list.test.ts` over 6 describes —
+no browser, no database, no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors / 13
 warnings** (unchanged from `main`), `npm run build` exit 0. The 34 new tests answer `readListFilter`
 by hand for the shapes that used to be stored (`[]`, `42`, `"hello"`, `true`, `{department:"Ops"}`,
 `{status:[]}`, `{score:{gte:90,lte:40}}`, `{score:{gte:250}}`) and for the one place a list reads
@@ -2124,7 +2125,10 @@ the answers need: the row's flag asked before a single lead is selected, `delete
 `createMany` inside one `prisma.$transaction`, `asInputJson(declared.filter)` stored at both doors,
 `body.isDynamic` gone from the branch, the admission gone from the repository, and `LeadList`'s field
 set unchanged so no new column was invented to make the click countable. Live: `demo-leadworks.mjs`
-STEP 25, **335 ✓ / 0 ✗** across the run, exit 0.
+STEP 25, **39 checks**, whole run **353 ✓ / 0 ✗**, exit 0 (the same run re-verifies STEP 24, whose
+residue census was corrected in `aw-deploy` this round to blame only the format a stopped run writes
+and to wait out `IN_FLIGHT_GRACE_MS` before calling an unnamed file a leak — on a box running several
+LeadWorks instances into one `/tmp`, the sweep as first written accused a sibling export mid-write).
 
 ## Score: one arithmetic, and who may change it
 
