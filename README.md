@@ -213,6 +213,12 @@ POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appl
 GET    /api/exports?workspaceId=           # exports
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
 GET    /api/exports/{id}                   # status + download
+POST   /api/exports/{id}?action=retry      # the door's other half: `?action=download` answers a
+                                           # URL only while the row names bytes that are there,
+                                           # and `retry` takes a `FAILED` row — including one an
+                                           # operator stopped, whose record names no file and
+                                           # whose bytes its own worker took back — and makes a
+                                           # fresh export of the same crowd
 DELETE /api/exports/{id}                   # delete the record — and, when it named one, the file it wrote
 GET    /api/webhooks?workspaceId=          # subscriptions
 POST   /api/webhooks                       # subscribe; deliverable events are
@@ -1676,6 +1682,11 @@ What this does not claim, in the words the surfaces use:
   `lib/scraper.ts` is unreachable on an instance with no browser (STEP 20 is that fact) and is
   still the one file typing `progress: 100`. A test pins that exactly these two files are the
   ones left out, so a future round has to change the test rather than drift past it.
+  **#43 took the first of the two.** The export worker now obeys the mark, and the word it puts
+  its record down with is `FAILED` — one of the four `Export.status` already documents, so no
+  fifth word was invented. The census in `tests/unit/job-stop.test.ts` moved with it: four
+  workers obey and one door asks for the word, and `lib/scraper.ts` is now the only worker left
+  that drives through a stop.
 - **A cancel that lands after a worker's last boundary check still loses** — the door refuses to
   mark a row that has already finished, which is the right answer: the work is done, and a status
   that says otherwise would be the same lie in a different font. What #41 removed is the window
@@ -1763,7 +1774,8 @@ repairs, the dispatch proved to sit inside `if (!stopped)`, `WEBHOOK_EVENTS` sti
 three names, a census over `src/` proving that the literal `status: "CANCELLED"` is written in
 exactly one place — the door — that the mark-payload form is written in exactly one module, and
 that **exactly two** files still do not consult the mark (`lib/exporter.ts`, `lib/scraper.ts`,
-for the two stated reasons), plus the sentence #40 had to print proven gone from the tree and
+for the two stated reasons — #43 has since made the export worker obey, and that round's pins
+say so), plus the sentence #40 had to print proven gone from the tree and
 the API list proven to say the opposite now.
 
 Verification: `npm test` **799/799** (44 new in `tests/unit/job-stop.test.ts`, 38 `it(` blocks
@@ -1856,9 +1868,11 @@ What this does not claim:
   one sum.
 - **Nothing here is a scheduler.** The resume is a click on a door; no retry happens by itself,
   and nothing marks a stopped row as worth resuming.
-- **Two workers still do not consult the mark** — `lib/exporter.ts` and `lib/scraper.ts`, named
+- **Two workers still did not consult the mark** — `lib/exporter.ts` and `lib/scraper.ts`, named
   with their reasons in the section above. A door cannot undo a stop those workers never made:
-  their rows end `COMPLETED` or `FAILED` however an operator feels about it.
+  their rows end `COMPLETED` or `FAILED` however an operator feels about it. **#43 made the first
+  of them obey**, which is what turned this round's "left alone by name" bullet into a resumable
+  door: see the section below.
 - **No history was rewritten**, and there was no marked history to resume — the census that
   opened #41 counted 0 `CANCELLED` rows in 475 jobs, which is the other way of saying no
   operator could ever have used that door.
@@ -1876,6 +1890,120 @@ gate, every lead holding the one value; and pin the door by index arithmetic (st
 before insert before queue, no `job.update` anywhere in the retry branch), the census that the old
 sentence is gone from this door and the only inline retry guard left is the export one, and the
 fact that the module that decides all of this holds no query and no status code.
+
+### The file is the unit of work: a stopped export names no file, takes its bytes back, and can be run again
+
+#41 named this worker and left it alone. #42 named what leaving it alone made unresumable. This
+round is the worker.
+
+The trace #41 measured on the running app is still the clearest statement of the bug: an
+`?action=cancel` on a queued `EXPORT` job answered `200 {"ok":true}`, the `Job` row held the mark
+for **139 ms**, and the worker wrote over it twice — `RUNNING` the moment it took the job, then
+`COMPLETED` with the file's path, size, count and lifetime — with `export.completed` already on
+the wire beside a row that said its operator had stopped it. Two rows about one file, disagreeing,
+and no way back: `POST /api/exports/{id}?action=retry` accepts only `FAILED`.
+
+What makes an export different from the three row-wise workers is its indivisible unit. It reads
+the crowd in one query, renders it in memory and writes it with one `writeFile`; there is no "next
+row" to stop at. So the mark is asked at the boundaries this work actually has — before the bytes
+and after them — and the second half produces a residue the row-wise workers never do: bytes on a
+disk that no row will ever name.
+
+`src/lib/export-stop.ts` owns the two decisions, and holds no query, no `unlink` and no status
+code. The worker keeps the arithmetic it already had from `lib/job-stop.ts`.
+
+| the decision | what it is now |
+|---|---|
+| which word the record is put down with | `FAILED` — one of the four words `Export.status`'s own comment documents, so no fifth word was invented — beside `STOPPED_EXPORT_ERROR`, a sentence that names neither an expiry nor a loss. The word is also the door's: `?action=retry` refuses anything but `FAILED`, so a stopped export is resumable from the moment it stops. |
+| what the five file columns say | `filePath`, `fileSize`, `expiresAt`, `completedAt` nulled and `recordCount` 0 — written as nothing rather than omitted, because this put-down can land on a row the same run had already stamped `COMPLETED`. A row that says `FAILED` while still pointing at bytes that are being deleted is a door answering about a file the disk has not. |
+| what happens to bytes already written | `planRowDelete` — the same guard `DELETE /api/exports/{id}` asks, so "we only delete files we wrote" stays one rule with three callers instead of a second copy that can drift. `none` is an honest third answer: the file stays and is reported as staying. |
+| the order | disk, then record, then job — the row stops naming a path before the path stops existing. |
+| the claim | one `updateMany` with `status: { not: MARK }`; `count: 0` and the worker never begins, so a cancel that lands while the job sits in the queue is answered by the two put-downs and nothing else. |
+| the announcement | `dispatchWebhookEvent(... "export.completed")` is the last statement of the `try`, reached only when the guarded finish matched. Every stopped path returns out of the block before it. |
+
+Live, in STEP 24 of the LeadWorks demo — **18 checks** on the same isolated boot as STEPS 21-23,
+over a crowd the step imports for itself and deletes again: **12,000 leads through the CSV door in
+102,630 ms**, so the workspace holds 12,019 and a PDF run is long enough to stop inside.
+
+- **The denominator first.** An uninterrupted PDF over that crowd -> **`COMPLETED` in 4,221 ms**,
+  `/tmp/export_1792728790187.pdf`, **616,829 bytes over 12,019 rows**. Every aim below is a
+  fraction of that 4,221, and that is the state a stopped run is told apart from.
+- **A stop taken inside the run.** `POST /api/jobs/{id}?action=cancel` fired **3,545 ms** into the
+  ~4,221 ms run, its job read `RUNNING` — between the crowd and the file, which is the window the
+  export worker used to drive straight through. The door answered `200 {"ok":true}`, and this time
+  the answer was kept.
+- **The record it lands on.** `FAILED`, `filePath=null`, `fileSize=null`, `expiresAt=null`,
+  `recordCount=0`, `error` quoting the cancel as the reason. Its job row: `CANCELLED` 0+0 of
+  **12,019**, `progress=0` — the denominator it was told to walk, none of the work.
+- **The 139 ms is now just time.** The same two reads that measured the erasure, re-run
+  **+1,200 ms** later, say `Job[CANCELLED 0 12019] Export[FAILED null 0]`. Nothing wrote
+  `COMPLETED` over the mark afterwards, and `completedAt` stayed null.
+- **The wire says nothing about a file nobody asked for.** **0** `export.completed` deliveries for
+  the cancelled run.
+- **Both download doors refuse it.** `GET /api/exports/{id}/download` -> **404** `export is failed
+  — download unlocks when it completes`; `POST /api/exports/{id}?action=download` -> **404** `File
+  not found`. The second is a refusal rather than an advertised URL only because `filePath` was
+  nulled instead of left dangling.
+- **The bytes came back, and the worker says which path.** Its own line from the app's stdout:
+  `Export cmvkgfqbg0b00fvqcef0we3ig: stopped run's file removed at /tmp/export_1792728794392.pdf`
+  — and that path re-checked on the disk: gone. Then #37's question, asked of the same window:
+  **0** files that exist and are named by no export row.
+- **The stop is undoable through the door that already existed.** `POST /api/exports/{id}?action=retry`
+  -> **200** with a new job id, and the export settles **`COMPLETED`, 12,019 rows in 616,087
+  bytes**, `statSync(filePath).size` equal to the `fileSize` the row wrote, a lifetime of exactly
+  the **25,000 ms** this instance exports with, the file served at 200 for those bytes, and
+  **1** `export.completed`.
+- **The other shape: a stop before the worker ever claims the row.** Two exports take the worker's
+  two slots and a third is cancelled **1,728 ms** after it was created, its job provably read
+  `PENDING`. The claim is refused — no `RUNNING` is stamped over a mark — and the pair lands
+  `FAILED` beside `CANCELLED` 0+0 of 0. Its window holds **2** files on disk and **0** named by no
+  row (both belong to the two exports that finished, and their rows name them), no delivery, and
+  `DELETE /api/exports/{id}` answers `{"ok":true,"file":"no file"}`.
+- **Cleanup** takes 12,000 crowd leads, 5 exports and 5 jobs back out through the doors: **0** rows
+  and **0** files left from the step.
+
+What this does not claim:
+
+- **A stop that lands while the crowd query is open is only seen at the boundary after it.** That
+  is why the row's `totalItems` is the whole 12,019 with nothing processed: the denominator is
+  what the worker was told to walk, and the mark was obeyed before any of it was rendered.
+- **A stopped export has no partial arithmetic to keep.** The row-wise workers stop between rows
+  and can say 4 of 16; an export stopped between the crowd and the file can only say 0 of the
+  crowd, which is true and is the whole of what it knew.
+- **A file the guard will not name stays on the disk and says so.** `planRowDelete` answers `none`
+  for anything not shaped like this application's artifact; the run logs the refusal and #37's
+  census counts the file. Nothing here deletes a file it cannot attribute.
+- **`lib/scraper.ts` still drives through a stop**, by name: unreachable on an instance with no
+  browser, and still the one file typing `progress: 100`. The census in
+  `tests/unit/job-stop.test.ts` now reads *four workers obey the mark, one does not, and one door
+  asks for the word* — adding the fifth obeys means changing that test rather than drifting past it.
+- **Two rows about one file are still two rows.** No transaction, no two-phase anything: the order
+  (disk, record, job) and the guarded writes are what make a reader never see a row pointing at
+  bytes that have already gone.
+- **No history was rewritten.** The rows this round puts down are the ones its own run wrote; the
+  475 rows that predate #41 still carry the statuses their workers gave them.
+
+Verification: `npm test` **862/862** (31 of them new, in `tests/unit/export-stop.test.ts` over 7
+describes, with no browser, no database and no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors / 11
+warnings** — one *fewer* than #42's 12, because `lib/exporter.ts`'s `unlinkSync` import, unused
+ever since the export stopped deleting, is now used — and `npm run build` exit 0. The 31 new tests
+answer `stoppedExportWrite` key by key (exactly seven keys; every file fact `null`; `FAILED`
+checked against the `model Export` block sliced out of `prisma/schema.prisma`, so the word is the
+schema's and not this file's memory); keep the stopped sentence three separate facts apart from
+`retiredExportError` and `MISSING_EXPORT_FILE_ERROR`, and prove it names no path, no size and no
+digit; drive `stoppedExportBytes` over four artifact shapes and eight non-shapes, deep-equal to
+`planRowDelete` for every one, with its body pinned to that single delegation and holding no `/tmp`
+and no `export_` of its own; prove the module holds no disk, no database and no clock (one import
+line, and no `prisma`, `unlink`, `await`, `new Date(` or `process.env` anywhere in it); pin the
+worker's boundaries by index arithmetic — the claim before the crowd, the three mark asks in order
+around the format switch, the `fs.stat` and the finish, `expiresAt` written exactly once in the
+whole worker, the dispatch after all four in-`try` put-downs; assert the put-down's order is disk
+then record then job and that its job write is guarded by the mark; and check the export route's
+retry guard against the word the put-down writes, so "a stopped export is resumable" is a fact
+about two files rather than a hope.
+
+Live STEP 24 joins STEPS 21-23 in `aw-deploy/demo/demo-leadworks.mjs`; the whole LeadWorks demo is
+**314 checks, 0 failures**.
 
 ## Score: one arithmetic, and who may change it
 
