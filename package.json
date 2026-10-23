@@ -12,7 +12,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "test": "tsx --test tests/unit/*.test.ts",
-    "seed:key": "tsx prisma/seed-key.ts"
+    "seed:key": "tsx prisma/seed-key.ts",
+    "check:contract": "tsx scripts/check-contract.mts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",

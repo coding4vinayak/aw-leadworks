@@ -154,6 +154,20 @@ protocol), and `POST /api/billing/webhook` (Stripe signature).
 
 ## API
 
+The whole API is also described by one machine-readable document, in the
+OpenAPI 3.1 format every API tool probes first:
+
+- `/api/openapi` — the versioned home of the contract
+- `/openapi.json` — the conventional discovery path, the same document
+
+Read it without a key (a contract is a description, not data). It cannot
+drift from the product by hand: `npm run check:contract` compares every claim
+in it with the routes that serve it — every documented call has a route that
+answers it and vice versa, every request body is compared with the app's own
+declared field table (`src/lib/fields.ts`), the door a route enforces is the
+door the spec advertises, and the version is this app's own. It runs in CI,
+and it fails naming the lie.
+
 All routes below need the key from [Authentication](#authentication) —
 the snippets omit the header for width.
 

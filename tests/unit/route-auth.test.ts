@@ -45,6 +45,10 @@ const PUBLIC: Record<string, string[]> = {
   // Liveness for the process manager and the hub. Reads no tenant row:
   // `SELECT 1` and nothing else.
   "src/app/api/health/route.ts": ["GET"],
+  // The contract is a description, not data: an integrator should be able to
+  // read it before it has a key, and the document holds no workspace's rows.
+  "src/app/api/openapi/route.ts": ["GET"],
+  "src/app/openapi.json/route.ts": ["GET"],
 };
 
 /** Handlers that authenticate by calling something outside the body. */

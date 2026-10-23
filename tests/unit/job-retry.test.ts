@@ -301,14 +301,24 @@ describe("the door's order, and what it refuses to touch", () => {
 
   it("is the only new hand on the retry path, by census", () => {
     assert.deepEqual(
-      mentioners("retry").filter((f) => !f.includes("auth") && !f.includes("throttle") && !f.includes("tokens") && !f.includes("billing") && !f.endsWith("page.tsx")),
+      mentioners("retry")
+        .filter(
+          (f) =>
+            !f.includes("auth") &&
+            !f.includes("throttle") &&
+            !f.includes("tokens") &&
+            !f.includes("billing") &&
+            !f.endsWith("page.tsx") &&
+            // The contract *names* the two retry doors; it runs nothing.
+            !f.endsWith("openapi.ts"),
+        ),
       [
         "src/app/api/exports/[id]/route.ts",
         "src/app/api/jobs/[id]/route.ts",
         "src/lib/job-retry.ts",
         "src/lib/queue.ts",
       ],
-      "the two doors that retry, the module that decides this one, and the queue that runs it — `support/page.tsx` spells the word about a ticket, not a job",
+      "the two doors that retry, the module that decides this one, and the queue that runs it — `support/page.tsx` spells the word about a ticket, not a job; `openapi.ts` names the doors and runs nothing",
     );
   });
 });

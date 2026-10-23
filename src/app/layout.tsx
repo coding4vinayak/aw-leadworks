@@ -22,7 +22,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <a href="#main-content" className="skip-link">Skip to main content</a>
+        <div className="top-accent" aria-hidden="true" />
+        {children}
+      </body>
     </html>
   );
 }

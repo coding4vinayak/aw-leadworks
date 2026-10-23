@@ -16,6 +16,7 @@ Key pages (base: https://leadworks.abetworks.in):
 - /signup — start the free trial
 - /login — sign in
 - /api/health — service health (JSON)
+- /api/openapi — the API contract (OpenAPI 3.1; /openapi.json is the same document)
 
 What it does:
 - Intake for single and bulk leads; a duplicate is refused with HTTP 409
