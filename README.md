@@ -212,6 +212,11 @@ GET    /api/leads/{id}                     # detail + enrichment log
 PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below)
 POST   /api/leads/{id}?action=enrich       # visit the one lead the URL names
 GET    /api/lead-lists?workspaceId=        # lists
+GET    /api/lead-lists/{id}                # one list and its members; `?fields=` projects each
+                                           # member's lead onto the columns named — the same
+                                           # names `POST /api/exports` takes `fields` from — and
+                                           # a name that is not a Lead column is a 400, not the
+                                           # whole row
 POST   /api/lead-lists/{id}?action=add-leads|remove-leads
 GET    /api/enrichment-rules?workspaceId=  # rules
 POST   /api/enrichment-rules               # create; `conditions` and `actions` are both required, and both are read
@@ -2011,6 +2016,102 @@ about two files rather than a hope.
 
 Live STEP 24 joins STEPS 21-23 in `aw-deploy/demo/demo-leadworks.mjs`; the whole LeadWorks demo is
 **314 checks, 0 failures**.
+
+### `?fields=` on a list read: six columns is not thirty-three
+
+`GET /api/lead-lists/{id}` returned the list, its members, and the whole `Lead` row beside every
+member. Measured on the running app before this round — a static list filled through
+`?action=add-leads` with 100 imported leads, read with a real key (`/tmp/opencode/r46_probe.mjs`):
+
+```
+GET /api/lead-lists/{id}                      -> 200, 171,720 bytes, members=100, 33 keys per lead
+GET /api/lead-lists/{id}?fields=email,score   -> 200, 171,720 bytes, members=100, 33 keys per lead
+GET /api/lead-lists/{id}?fields=nonsense      -> 200, 171,720 bytes — the whole row, and no refusal
+GET /api/lead-lists/{id}?select=email         -> 200, 171,720 bytes
+GET /api/lead-lists/{id}?include=email        -> 200, 171,720 bytes
+GET /api/lead-lists/{id}?fields[]=email       -> 200, 171,720 bytes
+GET /api/lead-lists/{id}?fields=a&fields=b    -> 200, 171,720 bytes
+GET /api/lead-lists/{id}?fields=              -> 200, 171,720 bytes
+```
+
+Twelve spellings of "give me less than the row", and the door answered all of them with the same
+171,720 bytes, because it never read its own query string. The wire cost is the smaller half of the
+problem: a caller building a call list wants `email`, `score`, maybe `company`, and receives
+`validationResults`, `scoreBreakdown`, `customFields`, `socialProfiles` and the other 28 columns of
+every one of those 100 leads, while a caller who typo'd a column name received the whole row instead
+of being told. Now:
+
+```
+(no fields)                                   -> 200, 171,720 bytes, 33 keys per lead — unchanged
+?fields=email                                 -> 200,  19,565 bytes,  1 key
+?fields=email,score                           -> 200,  20,673 bytes,  2 keys
+?fields=id,email,score,status,company         -> 200,  28,097 bytes,  5 keys
+?fields=score,company,email                   -> 200,  23,283 bytes, keys in the order asked
+?fields=email&fields=score                    -> 200,  20,673 bytes — both names are taken
+?fields=email,email                           -> 200,  19,565 bytes — one column asked twice is one
+?fields=%20email%20                           -> 200,  19,565 bytes — padding is not part of the name
+?fields=                                      -> 400 "fields[0] must be a non-empty string"
+?fields=email,,score                          -> 400, naming the empty second entry
+?fields=Email                                 -> 400 — a column is not its own capitalisation
+?fields=nonsense                              -> 400, 676 bytes, naming fields[0] and the vocabulary
+?fields=(300 entries)                         -> 400 "fields holds 300 entries; at most 100"
+```
+
+Two columns of a hundred members is 20,673 bytes where it was 171,720: **8.3× less wire**, and the
+projection is decided *before* the read — `include.members.include.lead` becomes a Prisma `select`, so
+the database sends the named columns rather than the row arriving and being thinned afterwards.
+
+Where the names come from matters more than that they are honoured. `LEAD_FIELD_PICK.fields` is
+`{ kind: "strings", values: LEAD_EXPORT_FIELDS }` — the same array object `EXPORT_CREATE.fields`
+validates against, so the columns a read may be projected onto are exactly the columns the exporter
+can already render, and adding a `Lead` column means editing `LEAD_EXPORT_FIELDS` once and both doors
+following. The rules that come with `kind: "strings"` are the ones this API has been enforcing on
+arrays since #43: trim, refuse an empty entry, refuse a name that is not in the list, dedupe a
+repeat, cap at 100. `src/lib/list-fields.ts` holds the query-string half (`fieldsParam` reads every
+`fields` parameter with `getAll` and splits on commas, `leadSelect` turns the validated names into a
+select) and imports nothing at runtime.
+
+What this does not claim:
+
+* `?select=`, `?include=` and `?fields[]=` still return the whole row. The door reads the parameter
+  named `fields` and nothing else; three synonyms for one question is how a product ends up with
+  three doors that disagree.
+* The member's own keys — `addedAt`, `id`, `lead`, `leadId`, `listId` — are never projected away.
+  `fields` chooses the *lead*'s columns; a member without its `leadId` is a row nobody can remove.
+* The answer carries `memberFields` — the columns it handed back — only when the caller asked. The
+  unprojected response is byte-for-byte what it was: 171,720.
+* The name is judged before the row is read, so an unauthenticated `?fields=nonsense` answers 400
+  where it used to answer 401. That recites nothing new: `/api/openapi` is served without a key and
+  already prints every one of those column names.
+* The member cap is the door's, not the caller's: `take: 100` stays, and a projection does not widen
+  it. Paging that cap is a separate question (`memberPage`, #45), and this round does not answer it.
+
+Verification: `npm test` **894/894** (29 of them new, in `tests/unit/list-fields.test.ts` over 5
+describes, no browser, no database, no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors /
+13 warnings** — none of them on a line this round wrote (`openapi.ts`'s is the generator's unused
+`method` argument at line 52, which is main's) — `npm run check:contract` **8 passed, 0 failed**, and
+`npm run build` exit 0. The new tests pin `fieldsParam` against every query shape the probe
+tried and the two neighbouring parameters it must not read, prove
+`LEAD_FIELD_PICK.fields.values` is the *same array object* as
+`EXPORT_CREATE.fields.values` rather than a copy of it, drive the validator through trim, dedupe,
+empty-entry, wrong-capitalisation and over-cap, pin `leadSelect` to the named keys only (including
+that a name becomes an own key and not a prototype write), scan the *comment-stripped* `GET_impl` to
+assert the projection sits inside the `include`, that there is no serialization- or `delete`-based
+fake projection, that `memberFields` appears only on the projected branch, and that the 404 and the
+ownership check did not move.
+
+The contract says it too: `leadLists.get` now carries a `fields` query parameter and a `400`
+response, and the document the running app serves is the one that prints them — `GET /api/openapi` on
+this build answers `parameters: ["fields"]`, `responses: ["200", "400"]`, `info.version` still the
+app's own `1.3.0`.
+
+Live STEP 25 joins STEPS 21-24 in `aw-deploy/demo/demo-leadworks.mjs` and measures the same door on
+a crowd it builds itself: 120 imported leads on one static list, read through the page cap of 100.
+The whole row is 177,073 bytes, `?fields=email,score` is 20,476 on the same 100 members (**8.6×**
+less), one column is 19,368, the 25 names the refusal prints are checked against the 33 columns
+`information_schema` says the table has, `null` is told apart from absent, and the cleanup leaves 0
+members, 0 leads and a 404. The step is **30 checks**; the whole LeadWorks demo is **344 checks, 0
+failures, exit 0**.
 
 ## Score: one arithmetic, and who may change it
 
