@@ -277,16 +277,23 @@ const PATHS: Record<string, PathItem> = {
     },
     post: {
       id: "leadLists.members",
-      summary: "Move leads in or out — ?action=add-leads or ?action=remove-leads, each taking leadIds.",
+      summary: "Move leads in or out, or re-run the filter a dynamic list declares — ?action=add-leads, ?action=remove-leads, ?action=refresh.",
       auth: "key",
-      query: [["action", "add-leads — put the leads on the list; remove-leads — take them off."]],
+      query: [
+        ["action", "add-leads — put the leads on the list; remove-leads — take them off; refresh — re-run the `filterJson` this row stores, which adds the crowd it names and removes the members it no longer names. The refresh branch asks the **row** whether it is dynamic (`#44`), so an `isDynamic` in the body changes nothing: a static list is refused 400 and a dynamic one re-runs whatever column it holds."],
+      ],
       body: {
-        description: "The leads to move.",
+        description: "The leads to move. `refresh` asks for none — the crowd comes from the row's own filter.",
         properties: {
-          leadIds: { type: "array", description: "The lead ids; at least one.", required: true },
+          leadIds: { type: "array", description: "The lead ids; at least one, except for `refresh`, which takes none.", required: true },
         },
       },
-      responses: { "200": "The list as it now reads.", "422": "A leadId that does not exist, named." },
+      responses: {
+        "200": "The list as it now reads.",
+        "400": "A static list has no filter to re-run, or the `leadIds` a move needs are missing.",
+        "409": "`refresh` on a dynamic list whose stored filter cannot be read — the refusal quotes the row.",
+        "422": "A leadId that does not exist, named.",
+      },
     },
     delete: {
       id: "leadLists.delete",
