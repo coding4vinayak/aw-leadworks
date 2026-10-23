@@ -3,7 +3,7 @@ import Link from "next/link";
 export function SiteNav() {
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white/90 backdrop-blur">
-      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
+      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3" aria-label="Main navigation">
         <Link href="/" className="text-[15px] font-bold tracking-tight text-gray-900">
           LeadWorks
         </Link>
@@ -31,7 +31,7 @@ const COLS: [string, [string, string][]][] = [
 
 export function SiteFooter() {
   return (
-    <footer className="border-t border-gray-200 bg-gray-50">
+    <footer className="border-t border-gray-200 bg-gray-50" role="contentinfo">
       <div className="mx-auto grid max-w-6xl gap-8 px-6 py-10 sm:grid-cols-4">
         <div>
           <p className="text-[15px] font-bold text-gray-900">LeadWorks</p>

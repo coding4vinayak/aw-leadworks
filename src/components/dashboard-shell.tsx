@@ -111,7 +111,7 @@ export function DashboardShell({
         </div>
       </div>
 
-      <main className="max-w-6xl mx-auto px-6 py-10">
+      <main id="main-content" className="max-w-6xl mx-auto px-6 py-10">
         <div className="flex items-baseline justify-between mb-6">
           <div>
             {eyebrow && (
