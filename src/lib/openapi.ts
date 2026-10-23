@@ -255,9 +255,15 @@ const PATHS: Record<string, PathItem> = {
   "/api/lead-lists/{id}": {
     get: {
       id: "leadLists.get",
-      summary: "One list, with its members.",
+      summary: "One list, with a page of its members and what the whole membership counts.",
       auth: "key",
-      responses: { "200": "The list." },
+      query: [
+        ["page", "Which page of members, from 1. A mistyped or out-of-range value falls back to 1."],
+        ["limit", "Members per page, 1 to 100, default 100 — the number this door has always returned."],
+      ],
+      responses: {
+        "200": "The list, its `members` for this page, and `memberPage: { recorded, returned, page, limit, totalPages, truncated }` — `recorded` is counted in the database, so a 100-row answer says so when the membership is 150.",
+      },
     },
     patch: {
       id: "leadLists.update",
