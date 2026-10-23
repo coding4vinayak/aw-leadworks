@@ -2006,6 +2006,101 @@ about two files rather than a hope.
 Live STEP 24 joins STEPS 21-23 in `aw-deploy/demo/demo-leadworks.mjs`; the whole LeadWorks demo is
 **314 checks, 0 failures**.
 
+### A list of 150 members answers a page of them, and says which page
+
+The one-list door had a ceiling where it should have had a page.
+
+`GET /api/lead-lists/{id}` included `members: { include: { lead: true }, take: 100 }` — no
+`orderBy`, no total, and nobody reading the query string. Measured against the running app before
+this round, on a static list the import door had just filled with exactly 150 members:
+
+```
+GET /api/lead-lists/{id}                 -> 200, members.length 100, 163031 bytes
+GET /api/lead-lists/{id}?limit=5&page=3  -> 200, members.length 100, the same bytes
+GET /api/lead-lists/{id}?page=99         -> 200, members.length 100, the same bytes
+GET /api/lead-lists                      -> the same list, `_count: { members: 150 }`
+```
+
+Three sentences follow from those four lines. A caller who asks for five rows is handed a hundred,
+so `?page=` and `?limit=` are accepted and thrown away. The hundred have no order, so which hundred
+arrives is the heap's business and two calls of one URL can disagree. And the answer carries no
+total: the only number in the product that said 150 lives on the collection route, a door away. A
+buyer who reads their list once and posts it into a campaign sends a hundred people, and nothing on
+the wire tells them the other fifty exist. That is #40's finding — a report that quietly returned
+less than it recorded — at a second door, so it is answered with the same vocabulary rather than a
+new one.
+
+`src/lib/list-page.ts` (61 lines, importing nothing) is that vocabulary: `recorded`, `returned`,
+`truncated` — the three `lib/job-report.ts` already writes for a finished job — beside `page`,
+`limit` and `totalPages`, the three that make the rest of the answer reachable.
+
+```ts
+export function memberPage(recorded: number, returned: number, page: number, limit: number): MemberPage {
+  return { recorded, returned, page, limit,
+    totalPages: Math.ceil(recorded / limit),
+    truncated: page * limit < recorded };
+}
+```
+
+`truncated` is `page * limit < recorded` rather than `returned < limit`, because a short page can be
+the whole crowd and a full page can be the last one; those are two different sentences and the old
+door said neither. The door asks `pageParams(searchParams, 100)` — 100, the number it has always
+handed back, is now the size of a page instead of the ceiling on the answer — and cuts the
+membership on `orderBy: { leadId: "asc" }`, the key the schema makes unique per list
+(`@@unique([listId, leadId])`), so pages cannot overlap and a page past the end is empty rather than
+undefined. `recorded` comes from `leadListMember.count({ where: { listId: id } })` inside the same
+`Promise.all` as the read, so the total costs no second round trip after the body. The 404 and
+`assertOwns` stay exactly where they were: a list in another workspace still costs the same two
+queries and still answers the same way, and it is not counted first.
+
+Live STEP 25 fills a static list with 150 imported leads through the product's own doors and reads
+it back. The default answer is 100 members with
+`memberPage = {recorded:150, returned:100, page:1, limit:100, totalPages:2, truncated:true}`;
+`?limit=5&page=3` is 8,948 bytes holding the third through fifth rows of the table's own
+`ORDER BY id` and `totalPages: 30`, with `recorded` still 150; page 1 and page 2 tile the crowd
+(100 + 50, no member on two pages, none missed); `?page=99` is
+`{recorded:150, returned:0, truncated:false}` — the page ran out, the crowd did not; `?limit=999999`
+buys the same 100 rows and the same 172,416 bytes; seven malformed query strings (`?page=0`,
+`?page=-2`, `?page=abc`, `?page=1.7`, `?limit=0`, `?limit=-1`, `?limit=abc`) fall back to the door's
+own numbers instead of reaching Prisma as a negative `skip` or a NaN `take`; the detail door's
+`recorded` and the collection door's `_count.members` both say 150; and the key set the answer gained
+is exactly `memberPage` (`createdAt description filterJson id isDynamic memberPage members name
+updatedAt workspaceId`), with a member still `{addedAt, id, lead, leadId, listId}` so
+`members[i].lead.email` keeps working.
+
+What this does not claim:
+
+- **`truncated` is about the page, not about the crowd.** `recorded` is counted when the request
+  arrives; a member added while the page is in flight is in neither the page nor the count. The
+  field means *there is a next page*.
+- **The two totals are two reads of one table.** `memberPage.recorded` and the collection door's
+  `_count.members` are different queries at different moments and are not reconciled against how
+  many rows the page actually holds. Live agrees on 150; a member deleted between the count and the
+  page leaves `recorded` one row too high.
+- **A page is a ceiling on the count, not on the size.** `members[i].lead` is the whole lead row —
+  33 columns — so this round's hundred members answered 172,416 bytes, and the answer before it
+  answered 163,031. Paging does not make a row smaller; a caller who wants six columns still has to
+  ask for a door that can project them, which this is not.
+- **The write door keeps its own number.** One `?action=add-leads` request holds at most 100 ids
+  (live: `400 "leadIds holds 150 entries; at most 100"`), so a 150-member list is filled in two
+  calls. That cap is `asStrings`' rule for every list a caller sends, not this round's page size.
+
+Verification: `npm test` **884/884** (19 of them new, in `tests/unit/list-page.test.ts` over 5
+describes, with no browser, no database and no network), `npx tsc --noEmit` clean, `npm run lint`
+**0 errors / 13 warnings**, `npx tsx scripts/check-contract.mts` **8 passed / 0 failed**, and `npm
+run build` exit 0. The new tests pin the arithmetic on the cases a caller can argue with (a page
+beyond the end, a count of 0, an exact multiple, a caller-chosen `limit`) and the six keys in order;
+prove the module holds no database, no clock, no disk and no environment — `/^\s*import\s/m` is
+false in it — and check its field names against the words `lib/job-report.ts` writes, so the
+vocabulary is shared rather than invented; slice `@@unique([listId, leadId])` out of the
+`model LeadListMember` block to establish that `leadId` is a total order per list; and scan the door
+through the vendored route scanner for `pageParams`, the `orderBy`, the `skip`, the `take`, the count
+inside the `Promise.all`, `take: 100` gone, the bare `return NextResponse.json(list)` gone, and
+`assertOwns` still before a row is returned.
+
+Live STEP 25 joins STEPS 21-24 in `aw-deploy/demo/demo-leadworks.mjs`; the whole LeadWorks demo is
+**346 checks, 0 failures** (314 before this step, its own 32 of them here).
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
