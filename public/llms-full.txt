@@ -67,7 +67,7 @@ The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 
 - `POST /api/lead-lists` — Create a list — static, or dynamic with a filter the workspace re-evaluates. — needs the workspace's `x-api-key` key
 - `GET /api/lead-lists/{id}` — One list, with its members. — needs the workspace's `x-api-key` key
 - `PATCH /api/lead-lists/{id}` — Edit a list's name, filter or kind. — needs the workspace's `x-api-key` key
-- `POST /api/lead-lists/{id}` — Move leads in or out — ?action=add-leads or ?action=remove-leads, each taking leadIds. — needs the workspace's `x-api-key` key
+- `POST /api/lead-lists/{id}` — Move leads in or out, or re-run the filter a dynamic list declares — ?action=add-leads, ?action=remove-leads, ?action=refresh. — needs the workspace's `x-api-key` key
 - `DELETE /api/lead-lists/{id}` — Delete a list — the leads survive it. — needs the workspace's `x-api-key` key
 - `GET /api/sources` — The workspace's sources. — needs the workspace's `x-api-key` key
 - `POST /api/sources` — Register a source — where leads start, on a schedule if you name one. — needs the workspace's `x-api-key` key
