@@ -2086,7 +2086,7 @@ What this does not claim:
 * The member cap is the door's, not the caller's: `take: 100` stays, and a projection does not widen
   it. Paging that cap is a separate question (`memberPage`, #45), and this round does not answer it.
 
-Verification: `npm test` **894/894** (29 of them new, in `tests/unit/list-fields.test.ts` over 5
+Verification: `npm test` **900/900** (29 of them new, in `tests/unit/list-fields.test.ts` over 5
 describes, no browser, no database, no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors /
 13 warnings** — none of them on a line this round wrote (`openapi.ts`'s is the generator's unused
 `method` argument at line 52, which is main's) — `npm run check:contract` **8 passed, 0 failed**, and
