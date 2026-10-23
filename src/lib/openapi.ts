@@ -257,7 +257,10 @@ const PATHS: Record<string, PathItem> = {
       id: "leadLists.get",
       summary: "One list, with its members.",
       auth: "key",
-      responses: { "200": "The list." },
+      query: [
+        ["fields", "Comma-separated Lead columns to project each member's lead onto — the same names Export.fields takes. Absent means the whole row."],
+      ],
+      responses: { "200": "The list.", "400": "A `fields` entry that is not a Lead column, or names nothing." },
     },
     patch: {
       id: "leadLists.update",

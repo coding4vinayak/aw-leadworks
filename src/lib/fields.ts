@@ -74,6 +74,21 @@ export const LEAD_EXPORT_FIELDS = [
   "updatedAt",
 ] as const;
 
+/** A column a read may be projected onto: the one vocabulary `Export.fields` names. */
+export type LeadExportField = typeof LEAD_EXPORT_FIELDS[number];
+
+/**
+ * `?fields=` on `GET /api/lead-lists/{id}`, judged by the table above rather than
+ * by a second list of names: what a caller can ask a list read to hand back is
+ * exactly what the exporter can render, so adding a Lead column means editing
+ * `LEAD_EXPORT_FIELDS` once and both doors following. The `strings` rules are the
+ * ones the write door already uses — trim, refuse an empty entry, refuse a name
+ * that is not a column, and treat a repeat as the same column asked for twice.
+ */
+export const LEAD_FIELD_PICK = {
+  fields: { kind: "strings", required: true, min: 1, values: LEAD_EXPORT_FIELDS },
+} satisfies Schema;
+
 /**
  * `listIds` is not here: it names rows rather than filling a column, so the
  * route parses it with `asStrings` (the same array rule) and then checks each id
