@@ -3,19 +3,33 @@ import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
 import { readJson, validateBody } from "@/lib/validate";
-import { LEAD_LIST_PATCH } from "@/lib/fields";
+import { LEAD_FIELD_PICK, LEAD_LIST_PATCH, type LeadExportField } from "@/lib/fields";
+import { fieldsParam, leadSelect } from "@/lib/list-fields";
 
 export const dynamic = "force-dynamic";
 
 async function GET_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { searchParams } = new URL(request.url);
+  const asked = fieldsParam(searchParams);
+  let picked: LeadExportField[] | undefined;
+  if (asked !== null) {
+    const input = validateBody({ fields: asked }, LEAD_FIELD_PICK);
+    if (!input.ok) return input.error;
+    picked = input.data.fields as LeadExportField[];
+  }
   const list = await prisma.leadList.findUnique({
     where: { id },
-    include: { members: { include: { lead: true }, take: 100 } },
+    include: {
+      members: {
+        include: { lead: picked ? { select: leadSelect(picked) } : true },
+        take: 100,
+      },
+    },
   });
   if (!list) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, list.workspaceId);
-  return NextResponse.json(list);
+  return NextResponse.json(picked ? { ...list, memberFields: picked } : list);
 }
 
 async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
