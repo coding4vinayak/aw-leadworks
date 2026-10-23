@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { LEAD_LIST_CREATE } from "@/lib/fields";
+import { readListFilter } from "@/lib/dynamic-list";
+import { asInputJson } from "@/lib/json";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +40,18 @@ async function POST_impl(request: Request) {
   const input = validateBody(body, LEAD_LIST_CREATE);
   if (!input.ok) return input.error;
 
-  const list = await prisma.leadList.create({ data: { workspaceId, ...input.data } });
+  // The same argument `conditions` got for rules: `kind: "json"` proves the shape of a blob and
+  // nothing about whether a lead could ever be it. `{ a: 1 }` and `[]` were both 201, and
+  // `isDynamic: true` with no filter at all was a list that could never be refreshed.
+  const declared = "filterJson" in input.data ? readListFilter(input.data.filterJson) : null;
+  if (declared?.problem) return NextResponse.json({ error: declared.problem }, { status: 400 });
+  if (input.data.isDynamic === true && declared === null) {
+    return NextResponse.json({ error: "a dynamic list declares the filter it re-runs — `isDynamic: true` with no `filterJson` is a list nothing can refresh" }, { status: 400 });
+  }
+
+  const list = await prisma.leadList.create({
+    data: { workspaceId, ...(declared === null ? input.data : { ...input.data, filterJson: asInputJson(declared.filter) }) },
+  });
   return NextResponse.json(list, { status: 201 });
 }
 
