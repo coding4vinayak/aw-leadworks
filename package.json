@@ -13,7 +13,9 @@
     "db:seed": "tsx prisma/seed.ts",
     "test": "tsx --test tests/unit/*.test.ts",
     "seed:key": "tsx prisma/seed-key.ts",
-    "check:contract": "tsx scripts/check-contract.mts"
+    "check:contract": "tsx scripts/check-contract.mts",
+    "check:llms-full": "tsx scripts/build-llms-full.mts --check",
+    "build:llms-full": "tsx scripts/build-llms-full.mts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",

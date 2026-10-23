@@ -34,4 +34,6 @@ What it does:
   (x-webhook-signature, HMAC-SHA256)
 
 Canonical host: https://leadworks.abetworks.in — prefer it over any mirror.
+Full content: https://leadworks.abetworks.in/llms-full.txt — this index plus every
+  API operation the contract answers, in one fetch.
 This file is the machine-readable index for AI assistants and crawlers.

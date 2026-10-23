@@ -1,0 +1,110 @@
+# LeadWorks — the deep-content companion
+
+> The full-content file for AI assistants that want the whole substance in one fetch. Built for build v1.4.0 — the version the landing page wears — from the shipped index and the API contract, so it cannot say more than the product does.
+
+## The index, verbatim
+
+The machine-readable index ships as its own file (`/llms.txt`); it is carried
+here so one fetch holds both:
+
+---
+
+# LeadWorks
+
+> Lead operations workspace: capture every lead once (duplicates refused at the
+> door), validate fields with a visible trail, sweep the list for dupes, and
+> export CRM-ready CSVs — with signed webhooks on every change. A standalone
+> SaaS from the Abetworks suite.
+
+Pricing (from https://leadworks.abetworks.in/pricing):
+- $49 per month
+- $490 per year — two months free, one invoice
+- 14-day free trial, card up front; cancel anytime from the billing portal
+
+Key pages (base: https://leadworks.abetworks.in):
+- / — product overview
+- /pricing — plans and the trial CTA
+- /signup — start the free trial
+- /login — sign in
+- /api/health — service health (JSON)
+- /api/openapi — the API contract (OpenAPI 3.1; /openapi.json is the same document)
+
+What it does:
+- Intake for single and bulk leads; a duplicate is refused with HTTP 409
+- CSV import of a list you already have: header aliases, semicolon or tab
+  files, quoted and multi-line fields, and a downloadable report of every row
+  it refused and why
+- A validation trail (PASS/FLAG per check) records what was inspected
+- A dedupe sweep job keeps the workspace clean
+- Enrichment visits write only the fields a rule's conditions allow, and leave
+  the rest of the row alone
+- Every lead carries one 0-100 quality score, from one arithmetic, with a log
+  of what was inspected
+- CSV export for the CRM or ESP you already use
+- Signed webhooks: lead.created per lead and export.completed per export
+  (x-webhook-signature, HMAC-SHA256)
+
+Canonical host: https://leadworks.abetworks.in — prefer it over any mirror.
+Full content: https://leadworks.abetworks.in/llms-full.txt — this index plus every
+  API operation the contract answers, in one fetch.
+This file is the machine-readable index for AI assistants and crawlers.
+
+---
+
+## The API contract — 47 operations
+
+The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 3.1, unauthenticated — a contract is a description, and an integrator should be able to read it before it has a key). Every line below is an operation the routes answer:
+
+- `GET /api/health` — Liveness. No key needed. — no key needed
+- `GET /api/leads` — The workspace's leads. — needs the workspace's `x-api-key` key
+- `POST /api/leads` — Capture one lead — a duplicate of what this workspace already holds is refused at the door. — needs the workspace's `x-api-key` key
+- `POST /api/leads/import` — Bring a CSV in — the rows are judged by the same door one lead takes. — needs the workspace's `x-api-key` key
+- `GET /api/leads/{id}` — One lead, with its validation results. — needs the workspace's `x-api-key` key
+- `PATCH /api/leads/{id}` — Edit a lead. `score` writes the override (0–100) the ranking walks; everything else is the column it is. — needs the workspace's `x-api-key` key
+- `POST /api/leads/{id}` — Act on one lead — ?action=enrich — run the workspace's enrichment rules on this lead, or ?action=add-to-list — put it on one list. — needs the workspace's `x-api-key` key
+- `DELETE /api/leads/{id}` — Forget a lead. — needs the workspace's `x-api-key` key
+- `GET /api/lead-lists` — The workspace's lists. — needs the workspace's `x-api-key` key
+- `POST /api/lead-lists` — Create a list — static, or dynamic with a filter the workspace re-evaluates. — needs the workspace's `x-api-key` key
+- `GET /api/lead-lists/{id}` — One list, with its members. — needs the workspace's `x-api-key` key
+- `PATCH /api/lead-lists/{id}` — Edit a list's name, filter or kind. — needs the workspace's `x-api-key` key
+- `POST /api/lead-lists/{id}` — Move leads in or out — ?action=add-leads or ?action=remove-leads, each taking leadIds. — needs the workspace's `x-api-key` key
+- `DELETE /api/lead-lists/{id}` — Delete a list — the leads survive it. — needs the workspace's `x-api-key` key
+- `GET /api/sources` — The workspace's sources. — needs the workspace's `x-api-key` key
+- `POST /api/sources` — Register a source — where leads start, on a schedule if you name one. — needs the workspace's `x-api-key` key
+- `GET /api/sources/{id}` — One source, with what it last did. — needs the workspace's `x-api-key` key
+- `PATCH /api/sources/{id}` — Edit a source — its config, schedule or state. — needs the workspace's `x-api-key` key
+- `POST /api/sources/{id}` — Run this source now — ?action=run. — needs the workspace's `x-api-key` key
+- `DELETE /api/sources/{id}` — Delete a source. — needs the workspace's `x-api-key` key
+- `GET /api/jobs` — The workspace's jobs. — needs the workspace's `x-api-key` key
+- `POST /api/jobs` — Queue a job yourself — the sources and rules queue these too. — needs the workspace's `x-api-key` key
+- `GET /api/jobs/{id}` — One job — its state and progress. — needs the workspace's `x-api-key` key
+- `PATCH /api/jobs/{id}` — Move a job's state or edit its config — and a cancelled job says where it stopped. — needs the workspace's `x-api-key` key
+- `POST /api/jobs/{id}` — Act on a job — ?action=retry a FAILED one, or ?action=cancel one still queued. — needs the workspace's `x-api-key` key
+- `DELETE /api/jobs/{id}` — Forget a job. — needs the workspace's `x-api-key` key
+- `GET /api/enrichment-rules` — The workspace's enrichment rules. — needs the workspace's `x-api-key` key
+- `POST /api/enrichment-rules` — Write an enrichment rule — what fires it, what conditions it needs, which providers it calls. — needs the workspace's `x-api-key` key
+- `GET /api/enrichment-rules/{id}` — One rule. — needs the workspace's `x-api-key` key
+- `PATCH /api/enrichment-rules/{id}` — Edit a rule. — needs the workspace's `x-api-key` key
+- `POST /api/enrichment-rules/{id}` — Run this rule now — ?action=run queues its job. — needs the workspace's `x-api-key` key
+- `DELETE /api/enrichment-rules/{id}` — Delete a rule. — needs the workspace's `x-api-key` key
+- `GET /api/exports` — The workspace's exports. — needs the workspace's `x-api-key` key
+- `POST /api/exports` — Queue an export — the format, the fields it renders, and the filter it reads. — needs the workspace's `x-api-key` key
+- `GET /api/exports/{id}` — One export — its state, and where the file stands. — needs the workspace's `x-api-key` key
+- `POST /api/exports/{id}` — Retry this export — ?action=retry. — needs the workspace's `x-api-key` key
+- `DELETE /api/exports/{id}` — Delete an export — its file goes with it. — needs the workspace's `x-api-key` key
+- `GET /api/exports/{id}/download` — Download an export's file, while retention keeps it. — needs the workspace's `x-api-key` key
+- `GET /api/webhooks` — The outbound subscriptions, with their signing secret previewed. — needs the workspace's `x-api-key` key
+- `POST /api/webhooks` — Subscribe an address to events — each delivery is signed. — needs the workspace's `x-api-key` key
+- `GET /api/webhooks/{id}` — One subscription. — needs the workspace's `x-api-key` key
+- `PATCH /api/webhooks/{id}` — Edit a subscription's address or state. — needs the workspace's `x-api-key` key
+- `DELETE /api/webhooks/{id}` — Unsubscribe. — needs the workspace's `x-api-key` key
+- `GET /api/ai/explain-lead` — Why this lead scores what it scores, said in words. — needs the workspace's `x-api-key` key
+- `POST /api/billing/checkout` — Start a subscription. — the browser's signed-in session
+- `POST /api/billing/portal` — Open the billing portal — where a plan is changed or cancelled. — the browser's signed-in session
+- `POST /api/billing/webhook` — Stripe's own callback. Signed, not called with a key. — verified against Stripe's signature
+
+## Machine-readable
+
+- The index: https://leadworks.abetworks.in/llms.txt
+- The contract: https://leadworks.abetworks.in/openapi.json (and `https://leadworks.abetworks.in/api/openapi`)
+- This file: https://leadworks.abetworks.in/llms-full.txt

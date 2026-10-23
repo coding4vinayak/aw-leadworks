@@ -16,6 +16,14 @@ export default function Page() {
         <div className="mt-8 space-y-8 border-l-2 border-blue-600 pl-6">
           <div>
             <p className="text-sm text-muted">October 2026</p>
+            <h2 className="text-lg font-bold">v1.4.0 — The deep-content file</h2>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
+              <li><code>/llms-full.txt</code> serves the whole substance in one fetch for AI assistants: the shipped index carried verbatim, then every one of the contract&rsquo;s 47 operations with its own summary and the door it declares. Built from the index and the contract themselves, not from hand-written prose, so it cannot say more than the product does.</li>
+              <li>A test holds the generated file against the live sources — after the index or the contract changes, a stale full file fails the build naming the first line that moved.</li>
+            </ul>
+          </div>
+          <div>
+            <p className="text-sm text-muted">October 2026</p>
             <h2 className="text-lg font-bold">v1.3.0 — The OpenAPI contract, checked against the routes</h2>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
               <li>The whole API — leads, import, lists, sources, jobs, enrichment rules, exports and webhooks — is now described by one OpenAPI 3.1 document at <code>/api/openapi</code> and <code>/openapi.json</code>, readable without a key.</li>
