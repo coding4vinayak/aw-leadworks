@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
+import { pageParams } from "@/lib/pagination";
+import { memberPage } from "@/lib/list-page";
 import { readJson, validateBody } from "@/lib/validate";
 import { LEAD_LIST_PATCH } from "@/lib/fields";
 
@@ -9,13 +11,22 @@ export const dynamic = "force-dynamic";
 
 async function GET_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const list = await prisma.leadList.findUnique({
-    where: { id },
-    include: { members: { include: { lead: true }, take: 100 } },
-  });
+  const { searchParams } = new URL(request.url);
+  // 100 is the number this door has always handed back; it is now the page size, not the ceiling
+  // on the answer, and `pageParams` clamps what a caller may ask for.
+  const { page, limit } = pageParams(searchParams, 100);
+  const [list, recorded] = await Promise.all([
+    prisma.leadList.findUnique({
+      where: { id },
+      include: {
+        members: { include: { lead: true }, orderBy: { leadId: "asc" }, skip: (page - 1) * limit, take: limit },
+      },
+    }),
+    prisma.leadListMember.count({ where: { listId: id } }),
+  ]);
   if (!list) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, list.workspaceId);
-  return NextResponse.json(list);
+  return NextResponse.json({ ...list, memberPage: memberPage(recorded, list.members.length, page, limit) });
 }
 
 async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
