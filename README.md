@@ -168,6 +168,13 @@ declared field table (`src/lib/fields.ts`), the door a route enforces is the
 door the spec advertises, and the version is this app's own. It runs in CI,
 and it fails naming the lie.
 
+**The deep-content file**: `GET /llms-full.txt` carries the shipped index
+(`llms.txt`) verbatim and then every operation the contract answers, each with
+its own summary and the door it declares — built from those two sources, not
+from hand-written prose, so it cannot say more than the product does.
+`npm run check:llms-full` (in CI) fails naming the first line that moved
+against a stale index or contract; rebuild with `npm run build:llms-full`.
+
 All routes below need the key from [Authentication](#authentication) —
 the snippets omit the header for width.
 
