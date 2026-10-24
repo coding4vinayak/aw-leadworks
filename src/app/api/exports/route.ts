@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
+import { markExportNeverQueued, markNeverQueued } from "@/lib/queue-refusal";
 import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { EXPORT_CREATE } from "@/lib/fields";
@@ -80,7 +81,11 @@ async function POST_impl(request: Request) {
     await enqueue(queues.export, "run-export", { jobId: job.id });
   } catch (error) {
     if (error instanceof QueueUnavailableError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      // The queue refused this row, so the row says so: left at `PENDING` it is a job no
+      // worker will run and no door will resume — `retryAsk` answers 409 for it, "it will run".
+      await markNeverQueued(job.id);
+      await markExportNeverQueued(exportRecord.id);
+      return NextResponse.json({ error: error.message, jobId: job.id }, { status: error.status });
     }
     throw error;
   }

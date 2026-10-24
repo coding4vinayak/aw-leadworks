@@ -4,6 +4,7 @@ import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { asInputJson } from "@/lib/json";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
+import { markExportNeverQueued, markNeverQueued } from "@/lib/queue-refusal";
 import { planRowDelete, retentionVerdict, retiredExportError } from "@/lib/export-retention";
 
 export const dynamic = "force-dynamic";
@@ -67,7 +68,11 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
       await enqueueJob("EXPORT", job.id);
     } catch (error) {
       if (error instanceof QueueUnavailableError) {
-        return NextResponse.json({ error: error.message }, { status: error.status });
+        // The queue refused this row, so the row says so: left at `PENDING` it is a job no
+        // worker will run and no door will resume — `retryAsk` answers 409 for it, "it will run".
+        await markNeverQueued(job.id);
+        await markExportNeverQueued(id);
+        return NextResponse.json({ error: error.message, jobId: job.id }, { status: error.status });
       }
       throw error;
     }

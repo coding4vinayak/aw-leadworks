@@ -6,6 +6,7 @@ import { readJson, validateBody } from "@/lib/validate";
 import { JOB_CREATE } from "@/lib/fields";
 import { unknownIdError } from "@/lib/ids";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
+import { markNeverQueued } from "@/lib/queue-refusal";
 
 export const dynamic = "force-dynamic";
 
@@ -71,7 +72,10 @@ async function POST_impl(request: Request) {
     await enqueueJob(input.data.type, job.id);
   } catch (error) {
     if (error instanceof QueueUnavailableError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      // The queue refused this row, so the row says so: left at `PENDING` it is a job no
+      // worker will run and no door will resume — `retryAsk` answers 409 for it, "it will run".
+      await markNeverQueued(job.id);
+      return NextResponse.json({ error: error.message, jobId: job.id }, { status: error.status });
     }
     throw error;
   }

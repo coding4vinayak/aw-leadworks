@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, assertOwns } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
+import { markNeverQueued } from "@/lib/queue-refusal";
 import { readJson, validateBody } from "@/lib/validate";
 import { rowAfterWrite, scoredWriteData } from "@/lib/lead-score";
 import { LEAD_ADD_TO_LIST, LEAD_PATCH } from "@/lib/fields";
@@ -89,7 +90,10 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
       await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });
     } catch (error) {
       if (error instanceof QueueUnavailableError) {
-        return NextResponse.json({ error: error.message }, { status: error.status });
+        // The queue refused this row, so the row says so: left at `PENDING` it is a job no
+        // worker will run and no door will resume — `retryAsk` answers 409 for it, "it will run".
+        await markNeverQueued(job.id);
+        return NextResponse.json({ error: error.message, jobId: job.id }, { status: error.status });
       }
       throw error;
     }

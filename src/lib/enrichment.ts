@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { enrichmentVisit, jobResultRow, progressValue } from "./job-report";
 import { MARK, isMarked, startWrite, stoppedWrite } from "./job-stop";
 import { queues, enqueue } from "./queue";
+import { enqueueOrMark } from "./queue-refusal";
 import { dispatchWebhookEvent } from "./webhooks";
 import { leadMatches, leadWhere, readStoredConditions } from "./rule-conditions";
 import { normalizeProviders } from "./enrichment-providers";
@@ -341,7 +342,9 @@ export async function runBulkEnrichment(workspaceId: string, leadIds: string[], 
     },
   });
 
-  await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });
+  // A bulk run asked for a row on the spot; if the queue refuses it, the row says so rather
+  // than joining the `PENDING` rows nothing will ever run.
+  await enqueueOrMark(job.id, () => enqueue(queues.enrich, "run-enrichment", { jobId: job.id }));
 }
 
 export async function runScheduledEnrichment(): Promise<void> {
