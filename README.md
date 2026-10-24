@@ -212,7 +212,10 @@ GET    /api/leads/{id}                     # detail + enrichment log
 PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below)
 POST   /api/leads/{id}?action=enrich       # visit the one lead the URL names
 GET    /api/lead-lists?workspaceId=        # lists
-POST   /api/lead-lists/{id}?action=add-leads|remove-leads
+POST   /api/lead-lists/{id}?action=add-leads|remove-leads|refresh
+                                          # `refresh` asks the row, never the body: a list whose
+                                          # `isDynamic` is true re-runs the `filterJson` it stores
+                                          # and its members become the leads that filter names
 GET    /api/enrichment-rules?workspaceId=  # rules
 POST   /api/enrichment-rules               # create; `conditions` and `actions` are both required, and both are read
 PATCH  /api/enrichment-rules/{id}          # change a rule; conditions and actions are re-checked as a pair
@@ -2011,6 +2014,128 @@ about two files rather than a hope.
 
 Live STEP 24 joins STEPS 21-23 in `aw-deploy/demo/demo-leadworks.mjs`; the whole LeadWorks demo is
 **314 checks, 0 failures**.
+### A dynamic list is one that re-runs the filter it declares: `?action=refresh`, and the crowd it names becomes the membership
+
+`LeadList` has carried two columns since its first migration —
+
+```prisma
+isDynamic  Boolean  @default(false)
+filterJson Json?    // Filter criteria for dynamic lists
+```
+
+— and `LEAD_LIST_CREATE` and `LEAD_LIST_PATCH` both sold them. Nothing in `src/` read either one.
+The single door that could have acted on them answered, measured on the running app before this
+round:
+
+```
+POST /api/lead-lists/{id}?action=refresh   {isDynamic:true}
+  -> 200 {"ok":true,"message":"Dynamic list refresh not fully implemented"}
+```
+
+with the membership unchanged on both sides of it. Three more things were true of that door, and
+each is the shape of the fix rather than a detail of it: the branch was keyed on the *body*, so a
+dynamic list refreshed without typing the flag got `400 "Unknown action"` and a static one got an
+`ok` as soon as a caller typed it; `filterJson: { a: 1 }`, `filterJson: []` and `filterJson: 42`
+were all stored as 201, because `kind: "json"` proves the shape of a blob and nothing about whether
+a lead could ever be it; and `{isDynamic:true}` with no filter was a list that could never be
+refreshed by anything.
+
+The decisions, and who owns each:
+
+| question | answer | where it is decided |
+| --- | --- | --- |
+| May a list be dynamic with nothing to re-run? | no — `400` at the create door, `400` at the edit door | `readListFilter`, `listRefreshAsk` |
+| What may a filter say? | `status`, `seniority`, `score` bounds, `tags` — the vocabulary a rule already had | `src/lib/rule-conditions.ts`, one reader for both doors |
+| A filter that declares nothing? | refused. A rule defaults to `NEW`/`ENRICHED` when its conditions are empty; a list inherits nothing, because "every lead" is not a crowd anybody chose | `readListFilter` vs `readStoredConditions`, pinned as a contrast test |
+| Whose say-so decides whether a refresh runs? | the row's `isDynamic` — never the body's | `listRefreshAsk(_owned.isDynamic, …)` |
+| What is the membership afterwards? | exactly the leads the filter names: the ones it lost go, the ones it gained are added, the rest stay | `planListRefresh`, applied as one transaction |
+| A filter the column holds but no lead can be? | `409` quoting the row's own state, and nothing written | `listRefreshAsk` on `readListFilter(filterJson).problem` |
+| A lead an operator put in by hand? | stays until the next refresh, which takes it back | `?action=add-leads` does not police a dynamic list |
+| Does anything re-run on its own? | no | see "What this does not claim" |
+
+What the running application did after the wiring, printed by `demo/demo-leadworks.mjs` STEP 25
+against a crowd of six leads the step owns — three of them moved to `QUALIFIED` through the lead's
+own door, two of them `C_LEVEL`, all six carrying a tag nobody else in the workspace holds, so every
+number below is checked against `SELECT … FROM "Lead"` rather than against whatever the seed left
+behind:
+
+- **The admission is gone.** `refresh` on `{status:["QUALIFIED"], tags:[…tag…]}` answered
+  `200 {"ok":true,"filter":"status QUALIFIED, tagged dyn44-imhg8","matched":3,"added":3,"removed":0,"kept":0,"members":3}`,
+  and the three ids in `LeadListMember` were the three ids the filter's own words named, row for row.
+- **A list that declares a crowd holds none of it until the door is posted.** `GET` before the first
+  refresh: `members=0`, with the filter already stored.
+- **The stored filter is the normalized one.** A create with `status:["QUALIFIED"]` and a create with
+  `seniority:"c_level"` both come back as arrays; the answer quotes what was run, in words
+  (`"seniority C_LEVEL, tagged dyn44-imhg8"`), so a caller can see the crowd it asked for.
+- **A refresh over an unmoved crowd is a no-op**, and says so: `added=0 removed=0 kept=3`. Twice in a
+  row, same answer.
+- **The filter is the authority for a dynamic list.** `?action=add-leads` still lets an operator put
+  a `NEW` lead in by hand (the table went to 4 rows and the add door did not refuse it); the next
+  refresh returned `removed=1 kept=3`, and the ids were the filter's again.
+- **The list follows the crowd both ways.** With one lead qualified and one member moved to
+  `CONTACTED`, `refresh` answered `added=1 removed=1 kept=2 matched=3` — and the arithmetic of all
+  seven refreshes in the step closes: `matched = kept + added`, and the member count the answer
+  reports is the crowd size.
+- **Two lists over one workspace hold their own memberships.** A second list filtering the same crowd
+  by `seniority` matched 2 and left the first list's 3 rows untouched.
+- **A row re-runs the filter it now holds, not the one it was made with.** `PATCH`ing
+  `filterJson` on the live second list and refreshing answered `matched=3 added=2 removed=1 kept=1`.
+- **The flag is a column, so typing it in a body is not a write.** `refresh` on a static list
+  answered the same `400` — byte for byte, with and without `{isDynamic:true}` in the body:
+  `"this list is not dynamic — its isDynamic is false, so it has no filter to re-run and its members
+  are what an operator put in it"`.
+- **No row can be made un-refreshable.** `PATCH {isDynamic:true}` onto a filterless row is a `400`
+  (`"this list declares no filter to re-run — a dynamic list is one that says which leads belong in
+  it"`), as is `POST {isDynamic:true}` with no `filterJson`.
+- **A column a door would never write is still read as what it says.** `isDynamic=true` with
+  `filterJson={"department":"Ops"}` — forced through `UPDATE` so the row exists to be read — made the
+  refresh a `409`: `"this list's filter cannot be re-run as written: \"department\" is not an
+  attribute a dynamic list can condition on — the supported keys are status, seniority, score,
+  tags"`. Emptying the column on the same dynamic row is the same `409` for the other reason. Neither
+  refusal wrote a member.
+- **The create door refuses what the column can never run**, and refuses it before the write:
+  `{"department":"Ops"}`, `[]` and `42` are each a `400` with a sentence, and `SELECT count(*) FROM
+  "LeadList" WHERE name LIKE 'refuse44-%'` stayed `0`.
+- **Cleanup through the doors**: 3 lists and 6 crowd leads deleted, `0 → 0` lists, `0 → 0`
+  memberships, `0` crowd leads left.
+
+What this does not claim:
+
+- **Nothing re-runs by itself.** A lead's status moving does not touch a list until somebody posts
+  `?action=refresh` — there is no trigger, no scheduler entry and no queue message for it. This round
+  made the door mean the column; it did not make the column push.
+- **`GET /api/lead-lists/{id}` lists at most 100 members** (`take: 100`, unchanged since before this
+  round), so a crowd larger than that is not fully listed in the answer even though the table holds
+  every row.
+- **`score` bounds are exercised by the reader's refusals** (`gte` above the column's range, `gte`
+  above `lte`, both pinned offline) and by the same `leadWhere` the two attributes above go through —
+  the live step's headline numbers are `status` and `seniority`, because a score a caller cannot
+  predict makes a crowd size a claim rather than a check.
+- **A static list is untouched by any of this** except the refusal it now gets instead of an `ok`.
+  Its membership is still whatever an operator put there.
+- **One vocabulary, not two.** A list's filter is the reader a rule already used
+  (`conditionsProblem`, `normalizeConditions`, `leadWhere`, `describeConditions`), so the two doors
+  cannot drift apart; the cost is that a new attribute has to be added once, in `rule-conditions.ts`,
+  for both.
+
+Verification: `npm test` **899/899** — this branch's 34 on top of `main`'s 865, which it does not
+touch (the 34 live in `tests/unit/dynamic-list.test.ts` over 6 describes —
+no browser, no database, no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors / 13
+warnings** (unchanged from `main`), `npm run build` exit 0. The 34 new tests answer `readListFilter`
+by hand for the shapes that used to be stored (`[]`, `42`, `"hello"`, `true`, `{department:"Ops"}`,
+`{status:[]}`, `{score:{gte:90,lte:40}}`, `{score:{gte:250}}`) and for the one place a list reads
+differently from a rule; assert `planListRefresh` over added/removed/kept/idempotent/emptying/
+duplicate-row inputs and that its three lists come back sorted; pin the module's purity (no
+`prisma`, no `await`, no clock, no disk, exactly one import); and scan the two doors with the
+repository's own route scanner — `blankComments` over `functionBody(…, "POST_impl")` — for the order
+the answers need: the row's flag asked before a single lead is selected, `deleteMany` before
+`createMany` inside one `prisma.$transaction`, `asInputJson(declared.filter)` stored at both doors,
+`body.isDynamic` gone from the branch, the admission gone from the repository, and `LeadList`'s field
+set unchanged so no new column was invented to make the click countable. Live: `demo-leadworks.mjs`
+STEP 25, **39 checks**, whole run **353 ✓ / 0 ✗**, exit 0 (the same run re-verifies STEP 24, whose
+residue census was corrected in `aw-deploy` this round to blame only the format a stopped run writes
+and to wait out `IN_FLIGHT_GRACE_MS` before calling an unnamed file a leak — on a box running several
+LeadWorks instances into one `/tmp`, the sweep as first written accused a sibling export mid-write).
 
 ## Score: one arithmetic, and who may change it
 
