@@ -212,6 +212,7 @@ GET    /api/leads/{id}                     # detail + enrichment log
 PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below)
 POST   /api/leads/{id}?action=enrich       # visit the one lead the URL names
 GET    /api/lead-lists?workspaceId=        # lists
+GET    /api/lead-lists/{id}                # one list, a page of its members, and what the whole membership counts
 POST   /api/lead-lists/{id}?action=add-leads|remove-leads|refresh
                                           # `refresh` asks the row, never the body: a list whose
                                           # `isDynamic` is true re-runs the `filterJson` it stores
