@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db";
 import { intParam, pageParams } from "@/lib/pagination";
 import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
-import { LEAD_CREATE } from "@/lib/fields";
+import { LEAD_CREATE, LEAD_FIELD_PICK, type LeadExportField } from "@/lib/fields";
+import { fieldsParam, leadSelect } from "@/lib/list-fields";
 import { scoredWriteData } from "@/lib/lead-score";
 import { dispatchWebhookEvent } from "@/lib/webhooks";
 
@@ -19,25 +20,37 @@ async function GET_impl(request: Request) {
   const maxScore = intParam(searchParams, "maxScore", 100, 0, 100);
   const { page, limit } = pageParams(searchParams, 50);
 
-
   const where: any = { workspaceId };
   if (listId) where.listMemberships = { some: { listId } };
   if (status) where.status = status;
   if (minScore > 0) where.score = { ...where.score, gte: minScore };
   if (maxScore < 100) where.score = { ...where.score, lte: maxScore };
 
+  // Same parameter, same vocabulary, same refusal as `GET /api/lead-lists/{id}`:
+  // a projected page carries the named columns and nothing else, so the nested
+  // membership objects and their counts are not handed to a caller who named none.
+  const asked = fieldsParam(searchParams);
+  let picked: LeadExportField[] | undefined;
+  if (asked !== null) {
+    const input = validateBody({ fields: asked }, LEAD_FIELD_PICK);
+    if (!input.ok) return input.error;
+    picked = input.data.fields as LeadExportField[];
+  }
+
+  const pageWindow = { where, orderBy: { score: "desc" as const }, skip: (page - 1) * limit, take: limit };
+
   const [leads, total] = await Promise.all([
-    prisma.lead.findMany({
-      where,
-      include: { listMemberships: { include: { list: true } }, _count: { select: { activities: true, enrichmentLogs: true } } },
-      orderBy: { score: "desc" },
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
+    picked
+      ? prisma.lead.findMany({ ...pageWindow, select: leadSelect(picked) })
+      : prisma.lead.findMany({
+          ...pageWindow,
+          include: { listMemberships: { include: { list: true } }, _count: { select: { activities: true, enrichmentLogs: true } } },
+        }),
     prisma.lead.count({ where }),
   ]);
 
-  return NextResponse.json({ leads, total, page, limit, totalPages: Math.ceil(total / limit) });
+  const envelope = { leads, total, page, limit, totalPages: Math.ceil(total / limit) };
+  return NextResponse.json(picked ? { ...envelope, leadFields: picked } : envelope);
 }
 
 async function POST_impl(request: Request) {
