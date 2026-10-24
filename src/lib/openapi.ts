@@ -117,8 +117,9 @@ const PATHS: Record<string, PathItem> = {
         ["status", "One lead status."],
         ["page", "1-based page number."],
         ["limit", "Page size; it caps at 100."],
+        ["fields", "Comma-separated Lead columns to project each row onto — the same names Export.fields takes. Absent means the whole row, its list memberships and its counts."],
       ],
-      responses: { "200": "The leads, with a total." },
+      responses: { "200": "The leads, with a total.", "400": "A `fields` entry that is not a Lead column, or names nothing." },
     },
     post: {
       id: "leads.create",
