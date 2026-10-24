@@ -155,6 +155,13 @@ async function deliver(
         // and one that only knows the generic name now does too.
         "X-Webhook-Signature": `sha256=${signature}`,
         "X-Leadworks-Event": payload.event,
+        // NuCRM's plugin receiver honors `x-webhook-timestamp` with a 5-minute
+        // freshness window when the header is present and ignores it when
+        // absent, so the numeric spelling is free replay protection on the
+        // one door that checks it. `x-webhook-delivery` is the id NuCRM-side
+        // dedupe would key on; the payload `id` is the same value.
+        "X-Webhook-Timestamp": String(Date.now()),
+        "X-Webhook-Delivery": payload.id,
         "User-Agent": "Leadworks-Webhook/1.0",
       },
       body,
