@@ -1,14 +1,16 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 /**
  * Opens the Stripe billing portal for the signed-in workspace — where a
  * customer changes their card, downloads invoices or cancels. Session-gated for
- * the same reason checkout is: the portal manages *someone's* billing, so it can
- * only ever act on the workspace the current session belongs to.
+ * the same reason checkout is: the portal manages *someone's* billing, so it
+ * can only ever act on the workspace the current session belongs to.
  */
 export function ManageBillingButton({ label = "Manage billing" }: { label?: string }) {
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -22,7 +24,7 @@ export function ManageBillingButton({ label = "Manage billing" }: { label?: stri
         body: JSON.stringify({ returnUrl: `${window.location.origin}/dashboard?billing=portal` }),
       });
       if (res.status === 401) {
-        window.location.href = "/login";
+        router.push("/login");
         return;
       }
       const data = (await res.json()) as { url?: string; error?: string };

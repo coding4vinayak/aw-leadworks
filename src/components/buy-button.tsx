@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 /**
@@ -16,6 +17,7 @@ export function BuyButton({
   priceId: "FLAT_MONTHLY" | "FLAT_ANNUAL";
   label: string;
 }) {
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -32,7 +34,7 @@ export function BuyButton({
         }),
       });
       if (res.status === 401) {
-        window.location.href = "/login";
+        router.push("/login");
         return;
       }
       const data = (await res.json()) as { url?: string; error?: string };
