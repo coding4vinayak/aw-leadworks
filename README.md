@@ -2310,7 +2310,121 @@ appearing twice, a score bound and a projection agree on the table's own 12, the
 refuses with are the 25 the list door refuses with, a refusal costs 676 bytes against the 202,711 the
 same ask cost unanswered, and the cleanup leaves 0 crowd leads, 0 members and a 404. The step is
 **29 checks**; the whole LeadWorks demo reads **373 ✓ / 0 ✗, exit 0**.
+### The queue says no in two voices, and the row has to say which one it heard
 
+Seven doors in this app insert a `Job` row and then hand it to the queue. All seven caught
+`QueueUnavailableError` and answered 503 with the sentence "the work is saved, retry shortly",
+and `enqueueJob`'s own docblock said the class exists so the caller "answers 503 rather than
+leaving the row PENDING and reporting it as started". Measured on a running instance with its
+Redis turned off, both halves of that promise were false:
+
+| pressed with the queue down | the caller got | what the row said, minutes later |
+| --- | --- | --- |
+| `POST /api/jobs` | `500`, **0-byte body** | `PENDING`, `error: null`, nothing enqueued |
+| `POST /api/exports` | `500`, 0-byte body | a `PENDING` `Job` **and** a `PENDING` `Export` |
+| `POST /api/leads/{id}?action=enrich` | `500`, 0-byte body | `PENDING`, and `report.problem`: "a denominator of 1 and nothing accounted for — this job **finished** without saying it visited any row" |
+| `POST /api/enrichment-rules/{id}?action=run` | `500`, 0-byte body | `PENDING` |
+| `POST /api/jobs/{id}?action=retry` × 7 | `500`, 0-byte body | **seven more `PENDING` rows** |
+| `POST /api/sources/{id}?action=run` | `503` with the browser sentence | no row — this door refuses *before* it writes |
+
+Eleven rows, and after 150 seconds of a healthy queue exactly eleven of them were still
+`PENDING`. Worse, they were not merely stale: `retryAsk` refuses a `PENDING` row with 409 and the
+words "the worker has not reached it, **and it will run**" — a sentence #42 wrote to stop an
+operator resuming a crowd twice, and it is a trap for a row the queue refused. The only door that
+moved one was a raw `PATCH {status:"FAILED"}`, after which `?action=retry` answered 200 and the
+job ran; `POST /api/exports/{id}?action=retry` answered 400 "Can only retry failed exports" for the
+export the outage left behind.
+
+Why the 503 never arrived took a diagnostic printed from inside a door's own `catch` to see,
+because the queue refuses in two voices and only one of them is a rejection:
+
+```
+[r50-diag] Error "Stream isn't writeable and enableOfflineQueue options is false" status undefined instanceof false
+```
+
+A Redis that dies under a running process rejects in about a tenth of a second with *that*
+sentence. The classifier knew `connection is closed`, `connect ECONNREFUSED`, `stream
+disconnected`, `connection is not open`, `connect ETIMEDOUT` and `LOADING` — six shapes, none of
+them this one — so the rejection reached each door unclassified, the `instanceof` branch never
+ran, and the door re-threw. A process that *starts* while Redis is already gone does not reject at
+all: `queue.add` never settles, because BullMQ waits for a `ready` connection that never arrives.
+The row written at 09:15:27 was still `PENDING` three minutes later and the door had produced no
+response bytes at any code, while the driver's `AggregateError` — empty `message`, the two
+`connect ECONNREFUSED` lines on `.errors[]` — filled the log as an emitted error and never as a
+rejection anyone could classify.
+
+The decisions, and who owns each:
+
+| question | answer | where it is decided |
+| --- | --- | --- |
+| Is this rejection the queue being unreachable? | a walk into `errors[]` as well as the message, bounded at depth 4 | `isConnectionFailure`, `src/lib/queue.ts` |
+| And a hand-off that never answers? | the same refusal: `add` races a 3 s deadline, and the expiry is a `QueueUnavailableError` | `HANDOFF_DEADLINE_MS`, `enqueue` |
+| What does the refused row say? | `FAILED`, `completedAt` now, and `error` starting `never queued:` | `refusalWrite`, `src/lib/queue-refusal.ts` |
+| Which rows may it write? | only ones still `PENDING` — a worker that took the row wins | `updateMany` guarded on `status: "PENDING"`, no bare `update` |
+| Does the caller learn which row to retry? | the 503 body carries `jobId`, and the row is already truthful when the answer arrives | the seven doors, `await markNeverQueued(…)` before the return |
+| What about the export half? | moved by the two export doors, so its own retry door reads `FAILED` | `markExportNeverQueued` |
+| A hand-off with no caller in front of it? | the minute's three sweep legs and the bulk enrich run refuse through the same helper and keep going | `enqueueOrMark` |
+| Why not enqueue before inserting, the way #39's scrape door does? | the queue payload *names* the `Job` row a worker must read, so the id has to exist first; five doors would have to mint ids they do not own | disclosed in `src/lib/queue-refusal.ts` |
+
+What the same instance answered after the fix, with Redis killed under a running process — six
+presses, 0.60 s end to end:
+
+```
+POST /api/jobs (ENRICH)              -> 503 (172 B) {"error":"job queue unavailable — Redis is unreachable; …","jobId":"cmvm7o6wq000it8qchr5w8zq6"}
+POST /api/exports                    -> 503 (172 B) {…,"jobId":"cmvm7o6y0000kt8qc1npemno3"}
+POST /api/leads/{id}?action=enrich   -> 503 (172 B) {…,"jobId":"cmvm7o6z5000lt8qcgxsszr17"}
+POST /api/enrichment-rules/{id}?run  -> 503 (172 B) {…,"jobId":"cmvm7o700000mt8qcbm19j414"}
+POST /api/jobs/{id}?action=retry     -> 503 (172 B) {…,"jobId":"cmvm7o71h000nt8qcm13v1j8d"}
+POST /api/sources/{id}?action=run    -> 503 (179 B) the browser sentence, unchanged, and no row
+```
+
+and the rows they left, read out of the table: five `Job`s and the one `Export`, every one `FAILED`
+with `error` starting `never queued: the queue refused this row while Redis was unreachable`. With
+Redis back, those same five ids were ordinary retries — `?action=retry` answered 200 with a new
+`jobId` five times, and the work ran: `ENRICH` rows `COMPLETED` with 1 and 4 leads visited, the
+`EXPORT` row `COMPLETED` with 15 records and a file. The export's own door was pressed too and
+answered 400 "Can only retry failed exports" only because the job retry had already re-run it to
+`COMPLETED`. On a process that starts while Redis is already gone, the same five doors answer 503
+in just over 3 s each — the hand-off deadline, plus the door's own work — instead of never
+answering, and the rows read `FAILED` the same way. `aw-deploy`'s `demo-leadworks.mjs` STEP 27
+presses those five doors on a second instance booted against a port with nothing listening on it,
+reads the five rows back out of the table, and retries them through the instance that does have a
+queue: 50 checks, every one of them passing, the doors answering in 3.03–3.21 s.
+
+What this does not claim:
+
+- **A worker that never had a queue does not always come back.** On the instance that booted while
+  Redis was absent, the retried rows reached `bull:enrich:wait` and `active` stayed `0`: the hand-off
+  succeeds, the refusal is written correctly, and nothing runs until that process restarts. This
+  round bounds the *door*, not the worker's own reconnect.
+- **`GET /api/health` can keep saying `queues: {error: "redis unreachable"}`** after the queue is
+  reachable again — measured for 20 s on that same instance, while its `POST /api/jobs` hand-offs
+  were resolving. A different door, a different owner.
+- **A queue that loses its data after accepting leaves a `PENDING` row.** Five rows handed off
+  successfully at 09:28:31 were still `PENDING` when the queue was restarted without persistence;
+  the durable record is the `Job` table, and `removeOnComplete` has said so for a while. The refusal
+  this round writes is about the hand-off that *failed*, not the queue that forgot.
+- **A late success is possible.** If Redis returns inside the 3 s window but after the deadline
+  fires, the row reads `FAILED` and the job still runs; the worker's own write then replaces the
+  status. The window is disclosed rather than closed, because closing it means taking the job back
+  out of a queue that may not answer.
+- **The sweep's `countersProblem` wording** still calls a `PENDING` row's empty report "this job
+  finished". Left alone: the row this round writes is never `PENDING`, and that sentence belongs to
+  the report, not the queue.
+
+Verification: `npm test` **937/937** — this branch's 32 in `tests/unit/queue-refusal.test.ts` on top
+of `main`'s 905, plus the two census pins this fix moved (`export-retention` retargeted 9 writes →
+10 with the refusal site named as the owner of neither lifetime nor bytes; `job-retry`'s "retry"
+mentioners retargeted to the files that still spell the word in code). `npx tsc --noEmit` clean,
+`npm run check:contract` **8/8**, `npm run build` exit 0. The 32 answer `isConnectionFailure` against
+both measured shapes — the mid-run sentence built from the diagnostic, and the grouped one from the
+log — against four non-faults that must keep propagating, and against a fake queue that throws and a
+fake queue that *never answers*; they pin the 3 s deadline and the `clearTimeout` on the way out, the
+refusal write's shape and its `status: "PENDING"` guard, the order inside all seven doors (mark, then
+answer, with the id in the body), the two export doors, the minute's three legs and the bulk run's
+one hand-off, and a census that every hand-off in `src/` is named as data — seven doors, four wrapped
+sites, no eighth. Live: the outage measured above on this branch's own runtime, and
+`demo-leadworks.mjs` STEP 27.
 ### What the health door says about seven queues, when only one of them has stopped answering
 
 `GET /api/health` asks all seven queues for `waiting`/`active`/`failed` and has always done it in

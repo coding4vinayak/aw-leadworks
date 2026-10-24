@@ -120,15 +120,14 @@ describe("isQueueConnectionFailure — the one vocabulary for the two voices", (
 
   // Measured on this branch, against :3319 with its Redis killed under it: `POST /api/jobs`
   // answered 500 in 39 ms with an empty body, because the driver's rejection there is
-  // `Stream isn't writeable and enableOfflineQueue options is false` and `main` does not class
-  // that as a connection failure, so the route's 503 translation never ran. That wording
-  // belongs to PR #77 (`fix(#50)`, commit `c0209ab`), which adds it to `CONNECTION_FAILURE`
-  // from the other side of the same line; claiming it here would re-fix another round's defect
-  // and buy a merge conflict. What this file does pin is that once #77 lands there is exactly
-  // one place left to spell the pattern.
-  it("leaves the third driver wording to the branch that already owns it", () => {
-    assert.ok(!isQueueConnectionFailure(new Error("Stream isn't writeable and enableOfflineQueue options is false")),
-      "not claimed by this branch, and said so rather than quietly matched");
+  // `Stream isn't writeable and enableOfflineQueue options is false` and `main` did not class
+  // that as a connection failure until PR #77 (`fix(#50)`, commit `c0209ab`) added the wording
+  // to `CONNECTION_FAILURE` from the other side of the same line. This file deliberately
+  // deferred that wording so the two rounds would not re-fix each other's defect — once #77
+  // landed the pin flips, and the vocabulary ends up exactly one place, as intended.
+  it("the third driver wording is claimed where it belongs, now that #77 landed", () => {
+    assert.ok(isQueueConnectionFailure(new Error("Stream isn't writeable and enableOfflineQueue options is false")),
+      "the measured 500 refuser is classified by the one pattern, in the one place");
   });
 
   it("does not call a job's own failure a connection failure", () => {
