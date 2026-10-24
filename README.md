@@ -2145,31 +2145,32 @@ LeadWorks instances into one `/tmp`, the sweep as first written accused a siblin
 
 `GET /api/leads` is the door a caller who just learned `?fields=` at the list read tries next: the
 workspace's leads, filtered by list, status and score band, paged. It never read its own query
-string for that name. Measured on the running app before this round, on the commit this round is
-stacked on, against a database filled for the occasion — 300 leads through `POST /api/leads/import`,
-100 of them added to one static list, the workspace reading 319 (`/tmp/opencode/r47-ab-before.log`):
+string for that name. Measured on the running app before this round, on this PR's own base
+(`origin/main` at `4a88f17`, built in a throwaway worktree and served on a port of its own) against a
+database filled for the occasion — 300 leads through `POST /api/leads/import`, 100 of them added to
+one static list, the workspace reading 319 (`/tmp/opencode/r47-ab-before-main.log`):
 
 ```
-GET /api/leads?limit=50                         -> 200, 93,129 bytes, 35 keys per row
-           &fields=email,score,status           -> 200, 93,129 bytes, 35 keys
-           &fields=email                        -> 200, 93,129 bytes, 35 keys
-           &fields=id,email,score,status,company -> 200, 93,129 bytes, 35 keys
-           &fields=score,company,email          -> 200, 93,129 bytes, 35 keys
-           &fields=email&fields=score           -> 200, 93,129 bytes, 35 keys
-           &fields=email,email                  -> 200, 93,129 bytes, 35 keys
-           &fields=%20email%20                  -> 200, 93,129 bytes, 35 keys
-           &fields=nonsense                     -> 200, 93,129 bytes — a 200, not a refusal
-           &fields=(300 entries)                -> 200, 93,129 bytes
-           &select=email                        -> 200, 93,129 bytes
-           &include=email                       -> 200, 93,129 bytes
-           &fields[]=email                      -> 200, 93,129 bytes
+GET /api/leads?limit=50                         -> 200, 105,536 bytes, 35 keys per row
+           &fields=email,score,status           -> 200, 105,536 bytes, 35 keys
+           &fields=email                        -> 200, 105,536 bytes, 35 keys
+           &fields=id,email,score,status,company -> 200, 105,536 bytes, 35 keys
+           &fields=score,company,email          -> 200, 105,536 bytes, 35 keys
+           &fields=email&fields=score           -> 200, 105,536 bytes, 35 keys
+           &fields=email,email                  -> 200, 105,536 bytes, 35 keys
+           &fields=%20email%20                  -> 200, 105,536 bytes, 35 keys
+           &fields=nonsense                     -> 200, 105,536 bytes — a 200, not a refusal
+           &fields=(300 entries)                -> 200, 105,536 bytes
+           &select=email                        -> 200, 105,536 bytes
+           &include=email                       -> 200, 105,536 bytes
+           &fields[]=email                      -> 200, 105,536 bytes
 ```
 
-Thirteen spellings of "give me less than the row" and one 93,129-byte answer, and the row it hands
+Thirteen spellings of "give me less than the row" and one 105,536-byte answer, and the row it hands
 back is wider than the table: 35 keys where `information_schema` says `Lead` has 33 columns, because
-this door adds two joins of its own. What one of those pages is made of, measured value by value on
-a 50-row page of the same shape that cost 105,536 bytes (`/tmp/opencode/r47-compose2.log`, the
-values summing to 82,078 of them and the rest being key names and the envelope):
+this door adds two joins of its own. What that page is made of, measured value by value on the same
+database and the same import shape (`/tmp/opencode/r47-compose3.log`, the values summing to 82,078 of
+its 105,536 bytes and the rest being key names and the envelope):
 
 ```
 scoreBreakdown       45,480B  55.4%   the arithmetic that produced `score`, re-sent per row
@@ -2179,30 +2180,30 @@ the other 32 columns 15,979B  19.5%   combined
 ```
 
 Now the same door on this round's build, same database, same import shape, its own crowd
-(`/tmp/opencode/r47-ab-after.log`):
+(`/tmp/opencode/r47-ab-after2.log`, run minutes after the table above):
 
 ```
-(no fields)                                     -> 200, 93,517 bytes, 35 keys — the same page, the same joins
-?fields=email,score,status                      -> 200,  3,293 bytes,  3 keys, in the order asked
-?fields=email                                   -> 200,  1,966 bytes,  1 key
-?fields=id,email,score,status,company           -> 200,  6,596 bytes,  5 keys
-?fields=score,company,email                     -> 200,  4,172 bytes — the order is the caller's, not the table's
-?fields=email&fields=score                      -> 200,  2,524 bytes,  2 keys — both parameters are read
-?fields=email,email                             -> 200,  1,966 bytes — a column asked twice is one column
-?fields=%20email%20                             -> 200,  1,966 bytes — padding is not part of the name
+(no fields)                                     -> 200, 105,536 bytes, 35 keys — the same page, the same joins
+?fields=email,score,status                      -> 200,  3,346 bytes,  3 keys, in the order asked
+?fields=email                                   -> 200,  2,019 bytes,  1 key
+?fields=id,email,score,status,company           -> 200,  6,649 bytes,  5 keys
+?fields=score,company,email                     -> 200,  4,225 bytes — the order is the caller's, not the table's
+?fields=email&fields=score                      -> 200,  2,577 bytes,  2 keys — both parameters are read
+?fields=email,email                             -> 200,  2,019 bytes — a column asked twice is one column
+?fields=%20email%20                             -> 200,  2,019 bytes — padding is not part of the name
 ?fields=                                        -> 400   110B "fields[0] must be a non-empty string"
 ?fields=email,,score                            -> 400   110B "fields[1] must be a non-empty string"
 ?fields=Email                                   -> 400   670B — a column is not its own capitalisation
 ?fields=nonsense                                -> 400   676B, naming fields[0] and the 25-name vocabulary
 ?fields=(300 entries)                           -> 400   109B "fields holds 300 entries; at most 100"
-?select=email, ?include=email, ?fields[]=email  -> 200, 93,517 bytes — the synonyms stay unanswered
+?select=email, ?include=email, ?fields[]=email  -> 200, 105,536 bytes — the synonyms stay unanswered
 ```
 
-Three columns of fifty rows cost 3,293 where the page cost 93,517: **28.4× less wire**, one column
-**47.6×**, and on the run whose page cost 105,536 the same three names cost 3,346 (**31.5×**). The
+Three columns of fifty rows cost 3,346 where the base build cost 105,536 for the identical page:
+**31.5× less wire**, and one column **52.3×**. The
 projection is decided before the database answers — `include: { listMemberships … , _count … }`
 becomes a Prisma `select` over the named columns, so the row is never sent to be thinned afterwards.
-Asking for every name the vocabulary holds costs 28,096 of that 105,536-byte page (**3.8×**) and
+Asking for every name the vocabulary holds costs 28,096 of that same page (**3.8×**) and
 still hands back 25 keys rather than 35: the exporter's column set is eight columns narrower than
 the row and does not contain `scoreBreakdown`, so even the widest legal ask drops the column that
 was 55% of the page.
@@ -2215,9 +2216,10 @@ both branches, so the two cannot disagree about which page they are projecting �
 the count stay one question: `total=319, page=1, limit=50, totalPages=7` printed identically on the
 projected and unprojected answers, and 319 is what `count(*)` says the table holds. Filtering and
 projecting are independent claims and were checked together: `?listId=…&fields=email` answers 1,976
-bytes with `total` equal to the membership count, `?status=NEW&fields=email,score` 2,534 with
+bytes with `total` equal to the membership count, `?status=NEW&fields=email,score` 2,589 with
 `total=317`, `?minScore=50&fields=email` 145 bytes over the two rows the bound admits, and
-`?page=2&limit=5&fields=email,score` 331.
+`?page=2&limit=5&fields=email,score` 339 — the same four asks on the base build cost 105,843,
+105,843, 3,981 and 8,698 for the same rows.
 
 The names come from the place #46 argued they had to: `LEAD_FIELD_PICK.fields.values` **is**
 `LEAD_EXPORT_FIELDS` **is** `EXPORT_CREATE.fields.values` — the same array object, pinned by identity
@@ -2232,11 +2234,13 @@ What this does not claim:
   second synonym for it is a door that can answer them differently.
 * The order has no tiebreaker. `orderBy: { score: "desc" }` says nothing about rows that tie, and an
   imported crowd ties everywhere: three reads of one URL inside one run answered the identical
-  105,536 bytes, while three *independent* runs of this measurement over the same import shape
-  answered 93,129, 93,517 and 105,536 — which of the tied rows land on a page, and therefore how many
-  nested `listMemberships` it carries, moves. #45 found this at the list door and gave that door
-  `orderBy: { leadId: "asc" }`; picking a secondary key for the lead door changes which rows a caller
-  who asked for nothing sees, so it is a separate round's decision and this round only measured it.
+  105,536 bytes, and this round's matched pair happens to agree on that number on both sides, but
+  earlier independent runs of the same measurement over the same import shape answered 93,129 and
+  93,517 for the same page — which of the tied rows land on a page, and therefore how many nested
+  `listMemberships` it carries, moves. The ratios above are this pair's, not a property of every
+  page. #45 found this at the list door and gave that door `orderBy: { leadId: "asc" }`; picking a
+  secondary key for the lead door changes which rows a caller who asked for nothing sees, so it is a
+  separate round's decision and this round only measured it.
 * The unprojected page still embeds the whole `list` record inside every membership, `filterJson`
   included. Dropping that changes the shape of a documented response — the changelog's 30-days'-notice
   class of change — and this round only stops handing it to callers who named columns instead.
@@ -2249,21 +2253,42 @@ What this does not claim:
   row to learn whose list it is while this door's workspace comes from the key. Neither prints a name
   the other does not.
 
-Verification: `npm test` **918/918** (18 of them new, in `tests/unit/leads-fields.test.ts` over 3
-describes, no browser, no database, no network), `npx tsc --noEmit` clean, `npm run lint` **0 errors /
+Verification: `npm test` **978/978**, `npx tsc --noEmit` clean, `npm run lint` **0 errors /
 13 warnings** — none on a line this round wrote — `npm run check:contract` **8 passed, 0 failed**,
-`npm run check:llms-full` unchanged and `npm run build` exit 0. The new tests read the door's own
-source with its comments blanked and pin that the projection is a `select` on one branch with no
-`include:` beside it while the other branch keeps both include strings whole, that a `delete`- or
-reserialization-based fake would not pass, that both branches share one `pageWindow` and one
-`Promise.all` with exactly one `prisma.lead.count`, that `leadFields` is written only on the
-projected branch and no `memberFields` appears at this door, that `authedWorkspaceId` is awaited
-before `fieldsParam` is called and `findMany` after both, and that `POST_impl` was not touched. The
-second describe pins the vocabulary by object identity across the three doors, checks the askable
-set is under the table's 33, and reads `openapiSpec` to assert **both** read doors advertise `fields`
-and a `400` with the same description; the third drives the refusals through the same validator the
-door calls — empty entry by position, wrong capitalisation, the 100 cap, dedupe and padding, the
-parameters that must stay unread, and not asking versus asking for nothing.
+`npm run check:llms-full` unchanged and `npm run build` exit 0. Forty-four of that total are new, in
+`tests/unit/leads-fields.test.ts` over 7 describes, with no browser, no database and no network. The
+first reads the door's own source with its comments blanked and pins that the projection is a
+`select` on one branch with no `include:` beside it while the other branch keeps both include
+strings whole, that a `delete`- or reserialization-based fake would not pass, that both branches
+share one `pageWindow` and one `Promise.all` with exactly one `prisma.lead.count`, that `leadFields`
+is written only on the projected branch and no `memberFields` appears at this door, that
+`authedWorkspaceId` is awaited before `fieldsParam` and `findMany` after both, and that `POST_impl`
+was not touched. The next pins the vocabulary by *object identity* across the three doors and reads
+`openapiSpec` to assert both read doors advertise `fields` and a `400`. The third parses the
+`Lead` model out of `prisma/schema.prisma` — 33 scalar columns — and pins that every askable name is
+one of them, that the eight that are not are exactly `workspaceId`, `sourceRef`, `scoreOverride`,
+`scoreBreakdown`, `scoredAt`, `validationResults`, `lastEnrichedAt` and `lastContactedAt`, that a
+relation name (`listMemberships`, `_count`, `activities`) and a prototype key (`__proto__`) are
+refused rather than selected, and that `leadSelect` returns a plain object
+holding only the columns named. The fourth pins the count to `{ where }` with no `select` and no
+`take`, the `skip` arithmetic to one occurrence spread into both reads, the door's own `pageParams(…,
+50)` and score clamps to where they were, and the envelope's five keys to the same five either side
+of the projection. The fifth walks the neighbouring doors — detail, import, export, list — to prove
+this round reached one door and not the others, and that the shared module still exports exactly two
+helpers. The last two drive the refusals through the validator the door actually calls: empty entry
+by position, padding, a list of nothing but separators, wrong capitalisation, a hundred repeats of
+one column accepted and the hundred-and-first refused *before* dedupe, an encoded comma split like a
+literal one, three `fields` parameters merged in the order they arrive, and not asking held apart
+from asking for nothing.
+
+This branch also re-adds `tests/unit/list-fields.test.ts` — #46's 29 pins for the list door, which
+main lost when #72 landed through its rebase-proxy (`merge/72-onto-main` brought the route, the
+shared module and the README section but not the test file), leaving the shipped projection with no
+offline pins at all. Twenty-eight passed against main unchanged; one asserted that door's literal
+`take: 100`, and #70 has since turned that line into `pageParams(searchParams, 100)` with
+`take: limit`, so the pin now names the cap where it actually lives and adds the stronger claim —
+no literal page size survives beside a parameter that decides it. That is also why #46's own
+non-claim about the member cap reads as history rather than as the current door.
 
 The served contract says it too: `leads.list` now carries a `fields` query parameter and a `400`
 response, and `GET /api/openapi` on this build answers
@@ -2272,14 +2297,14 @@ response, and `GET /api/openapi` on this build answers
 
 Live STEP 26 joins STEPS 21-25 in `aw-deploy/demo/demo-leadworks.mjs` and measures this door on a
 crowd it builds itself — 240 imported leads in one request, 100 of them on one static list, read at
-the door's own page cap. The unprojected page is 193,020 bytes over 100 rows of 35 keys (50 of those
-rows sit in a list, which is why the page pays for the join), `?fields=email,score,status` is 6,542
-(**29.5×** less), one column is 3,915, all 25 names are 55,789 over exactly 25 keys, `total` is the
+the door's own page cap. The unprojected page is 202,711 bytes over 100 rows of 35 keys (50 of those
+rows sit in a list, which is why the page pays for the join), `?fields=email,score,status` is 6,520
+(**31.1×** less), one column is 3,888, all 25 names are 56,242 over exactly 25 keys, `total` is the
 table's own 259 on both sides of the projection, three pages of 100 tile those 259 rows with none
-appearing twice, the 25 names this door refuses with are the 25 the list door refuses with, a refusal
-costs 676 bytes against the 193,020 the same ask cost unanswered, and the cleanup leaves 0 crowd
-leads, 0 members and a 404. The step is **29 checks**; the whole LeadWorks demo reads **373 ✓ / 0 ✗,
-exit 0**.
+appearing twice, a score bound and a projection agree on the table's own 12, the 25 names this door
+refuses with are the 25 the list door refuses with, a refusal costs 676 bytes against the 202,711 the
+same ask cost unanswered, and the cleanup leaves 0 crowd leads, 0 members and a 404. The step is
+**29 checks**; the whole LeadWorks demo reads **373 ✓ / 0 ✗, exit 0**.
 
 ## Score: one arithmetic, and who may change it
 
