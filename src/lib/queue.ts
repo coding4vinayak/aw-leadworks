@@ -8,8 +8,10 @@ import { JOB_TYPES } from "./enums";
 const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
   lazyConnect: true,
-  // Fail fast when Redis is down: without this, commands buffer forever and
-  // every request that enqueues hangs instead of answering 503.
+  // Fail fast when Redis is down. It is not sufficient on its own: measured with the queue
+  // off *before this process started*, `queue.add` still never settled, because BullMQ waits
+  // for the connection to reach `ready` before it issues the command and the driver retries
+  // forever. The deadline in `enqueue` is what answers the caller.
   enableOfflineQueue: false,
 });
 
@@ -17,28 +19,84 @@ const connection = new IORedis(process.env.REDIS_URL || "redis://localhost:6379"
 export class QueueUnavailableError extends Error {
   readonly status = 503;
   constructor() {
-    super("job queue unavailable \u2014 Redis is unreachable; the work is saved, retry shortly");
+    // The old sentence promised "the work is saved, retry shortly", which was true of the
+    // row and false about its state: it sat at `PENDING`, no door would resume it, and the
+    // retry it pointed at was the 409 that says a `PENDING` job "will run". This says what
+    // the caller may actually do, and `lib/queue-refusal.ts` is the write that makes it so.
+    super("job queue unavailable — Redis is unreachable; the work is recorded as never queued and can be retried once the queue is back");
   }
 }
 
-const CONNECTION_FAILURE = /connection is closed|connection is not open|connect econnrefused|connect etimedout|stream disconnected|loading/i;
+const CONNECTION_FAILURE = /connection is closed|connection is not open|connect econnrefused|connect etimedout|stream disconnected|stream isn't writeable|loading/i;
+
+/**
+ * Whether a rejection from `queue.add` is the queue being unreachable.
+ *
+ * Both shapes are measured on a running instance, and they are not the same error:
+ *
+ *   · Redis dies while the process runs — `add` rejects in about a tenth of a second with
+ *     ioredis's own `Error: Stream isn't writeable and enableOfflineQueue options is false`.
+ *     That sentence is what the pattern had to learn; the file tested only `stream
+ *     disconnected`, so the rejection reached the doors unmatched and five of them answered
+ *     an unhandled `500` with a zero-byte body over a row they had already written.
+ *   · the process starts while Redis is already gone — `add` never settles at all, and the
+ *     `AggregateError` the driver emits (empty `message`, the two `connect ECONNREFUSED`
+ *     lines on `errors[]`) only ever reaches the log, never a rejection to classify. That
+ *     shape is the deadline's, not the pattern's.
+ *
+ * The walk into `errors[]` stays because a grouped rejection is what the driver hands back
+ * wherever it does reject as an `AggregateError`, and because a child that says
+ * `ECONNREFUSED` is the queue being unreachable whatever wrapped it.
+ */
+export function isConnectionFailure(error: unknown, depth = 0): boolean {
+  if (!(error instanceof Error) || depth > 4) return false;
+  if (CONNECTION_FAILURE.test(error.message)) return true;
+  const nested = (error as { errors?: unknown }).errors;
+  return Array.isArray(nested) && nested.some((child) => isConnectionFailure(child, depth + 1));
+}
 
 /**
  * queues.X.add that throws QueueUnavailableError (instead of hanging or
  * leaking driver errors) when Redis is down. Genuine job errors propagate
  * untouched. API routes translate QueueUnavailableError to 503.
+ *
+ * Two outage shapes were measured on a running instance, and this call answers both:
+ *
+ *   · Redis dies while the process runs — `add` rejects with ioredis's own sentence, which
+ *     `isConnectionFailure` classifies
+ *   · the process starts while Redis is already gone — `add` never settles. A door pressed at
+ *     09:15:27 had written its `PENDING` row and produced no response bytes three minutes
+ *     later, with the driver's `ECONNREFUSED` climbing the log all the while
+ *
+ * The first is a rejection to classify; the second is a wait to bound. The deadline is the
+ * hand-off's own: with the queue reachable, the six doors' `add` returned in single-digit
+ * milliseconds on the same instance minutes earlier, so 3 s is three orders of magnitude
+ * away from any hand-off that works. A late success is possible and disclosed here: if the
+ * queue comes back after the answer, the job runs and the worker writes its own status over
+ * the refusal.
  */
+const HANDOFF_DEADLINE_MS = 3000;
+
 export async function enqueue<T extends object>(
   queue: Queue,
   name: string,
   data: T,
   opts?: Parameters<Queue["add"]>[2],
 ): Promise<Job> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await queue.add(name, data, opts);
+    return await Promise.race([
+      queue.add(name, data, opts),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new QueueUnavailableError()), HANDOFF_DEADLINE_MS);
+      }),
+    ]);
   } catch (error) {
-    if (error instanceof Error && CONNECTION_FAILURE.test(error.message)) throw new QueueUnavailableError();
+    if (error instanceof QueueUnavailableError) throw error;
+    if (isConnectionFailure(error)) throw new QueueUnavailableError();
     throw error;
+  } finally {
+    if (deadline !== undefined) clearTimeout(deadline);
   }
 }
 

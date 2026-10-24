@@ -317,9 +317,15 @@ describe("the door's order, and what it refuses to touch", () => {
         "src/app/api/jobs/[id]/route.ts",
         "src/lib/export-stop.ts",
         "src/lib/job-retry.ts",
-        "src/lib/queue.ts",
+        // #50's sentence to the caller of a door the queue refused: "…can be retried once the
+        // queue is back". It names the retry the row is now eligible for; it runs nothing.
+        "src/lib/queue-refusal.ts",
       ],
-      "the two doors that retry, the module that decides this one, the queue that runs it, and #43's sentence telling a stopped export's caller to retry it — `support/page.tsx` spells the word about a ticket, not a job; `openapi.ts` names the doors and runs nothing",
+      // `src/lib/queue.ts` left this census in #50: the only code that spelled `retry` there was
+      // the 503 sentence "the work is saved, retry shortly", and #50 replaced that sentence with
+      // one describing what the caller may actually do. The word survives in that file only as
+      // prose quoting the old promise, which `mentioners` strips.
+      "the two doors that retry, the module that decides this one, and #43's sentence telling a stopped export's caller to retry it — `support/page.tsx` spells the word about a ticket, not a job; `openapi.ts` names the doors and runs nothing",
     );
   });
 });

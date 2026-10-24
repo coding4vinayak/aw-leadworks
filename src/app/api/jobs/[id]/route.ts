@@ -6,6 +6,7 @@ import { JOB_PATCH } from "@/lib/fields";
 import { jobReport } from "@/lib/job-report";
 import { retryAsk, retryRow } from "@/lib/job-retry";
 import { enqueueJob, hasRunner, QueueUnavailableError } from "@/lib/queue";
+import { markNeverQueued } from "@/lib/queue-refusal";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +61,10 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
       await enqueueJob(job.type, newJob.id);
     } catch (error) {
       if (error instanceof QueueUnavailableError) {
-        return NextResponse.json({ error: error.message }, { status: error.status });
+        // The queue refused this row, so the row says so: left at `PENDING` it is a job no
+        // worker will run and no door will resume — `retryAsk` answers 409 for it, "it will run".
+        await markNeverQueued(newJob.id);
+        return NextResponse.json({ error: error.message, jobId: newJob.id }, { status: error.status });
       }
       throw error;
     }

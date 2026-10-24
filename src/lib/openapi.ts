@@ -19,6 +19,15 @@ const API_KEY = [{ apiKey: [] }];
 const SESSION = [{ sessionCookie: [] }];
 const NONE: Record<string, string[]>[] = [];
 
+/**
+ * The 503 every door that hands a row to the queue can answer, said once because it is one
+ * behaviour. Measured with the queue turned off: the door writes its row, the queue refuses it,
+ * and the row is left saying `FAILED` with the reason rather than `PENDING` about a worker that
+ * will never arrive — so the id in the body is the ordinary retry, taken when the queue is back.
+ */
+const QUEUE_REFUSED =
+  "The queue refused the row this door just wrote: `{ error, jobId }`, and that row already reads `FAILED` with the reason. `?action=retry` on the id is an ordinary retry once the queue is back.";
+
 type Method = "get" | "post" | "patch" | "put" | "delete";
 
 interface Operation {
@@ -218,7 +227,7 @@ const PATHS: Record<string, PathItem> = {
           listId: { type: "string", description: "The list to add the lead to (action=add-to-list only)." },
         },
       },
-      responses: { "200": "What the action did.", "422": "The list does not exist." },
+      responses: { "200": "What the action did.", "422": "The list does not exist.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "leads.delete",
@@ -365,7 +374,12 @@ const PATHS: Record<string, PathItem> = {
       summary: "Run this source now — ?action=run.",
       auth: "key",
       query: [["action", "run — the only action."]],
-      responses: { "201": "The job, queued." },
+      // Two refusals share the code and are not the same news: the browser one arrives before
+      // any row exists, the queue one after a row that now says `FAILED`.
+      responses: {
+        "200": "The job, queued.",
+        "503": "Two refusals share this code, and they are not the same news: this instance has no browser to scrape with — nothing was written — or " + QUEUE_REFUSED,
+      },
     },
     delete: {
       id: "sources.delete",
@@ -402,7 +416,7 @@ const PATHS: Record<string, PathItem> = {
           sourceId: { type: "string", description: "The source it belongs to, if it has one." },
         },
       },
-      responses: { "201": "The job, PENDING." },
+      responses: { "201": "The job, PENDING.", "503": QUEUE_REFUSED },
     },
   },
   "/api/jobs/{id}": {
@@ -431,7 +445,7 @@ const PATHS: Record<string, PathItem> = {
       summary: "Act on a job — ?action=retry a FAILED one, or ?action=cancel one still queued.",
       auth: "key",
       query: [["action", "retry — queue it again; cancel — stop it where it stands."]],
-      responses: { "201": "The job the action produced.", "409": "The action is for a state this job is not in." },
+      responses: { "200": "The id of the job the action produced.", "409": "The action is for a state this job is not in.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "jobs.delete",
@@ -506,7 +520,7 @@ const PATHS: Record<string, PathItem> = {
       summary: "Run this rule now — ?action=run queues its job.",
       auth: "key",
       query: [["action", "run — the only action."]],
-      responses: { "201": "The job, queued." },
+      responses: { "200": "The job, queued, and what the rule applies to.", "400": "The rule cannot run: its conditions or its actions do not read.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "rules.delete",
@@ -543,7 +557,7 @@ const PATHS: Record<string, PathItem> = {
           profileId: { type: "string", description: "A saved export profile, if you keep one." },
         },
       },
-      responses: { "201": "The export job." },
+      responses: { "201": "The export, PENDING, with the id of the job that will fill it.", "503": QUEUE_REFUSED },
     },
   },
   "/api/exports/{id}": {
@@ -558,7 +572,7 @@ const PATHS: Record<string, PathItem> = {
       summary: "Retry this export — ?action=retry.",
       auth: "key",
       query: [["action", "retry — the only action."]],
-      responses: { "201": "The new export attempt.", "409": "This export has nothing to retry." },
+      responses: { "200": "The id of the new attempt.", "400": "This export is not a failed one.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "exports.delete",
