@@ -1,22 +1,25 @@
 // #47: `GET /api/leads` did not read `fields`, even though the sibling door two
 // routes away started obeying it in #46. Measured against the running app on this
-// round's base build (a crowd of 300 imported leads, 100 of them on one list;
-// /tmp/opencode/r47_probe_after.mjs run against :3313 holds the base-build run and
-// against :3314 the fixed one):
+// PR's own base (`origin/main` at `4a88f17`, built in a throwaway worktree) and on
+// this round's build, both against one database holding a crowd of 300 imported
+// leads, 100 of them on one list (/tmp/opencode/r47_probe_after.mjs against the
+// base on :3315 and against the fix on :3314):
 //
-//   ?limit=50                              -> 200, 93,129 bytes, 35 keys per row
-//   ?limit=50&fields=email,score,status    -> 200, 93,129 bytes, 35 keys
-//   ?limit=50&fields=email                 -> 200, 93,129 bytes, 35 keys
-//   ?limit=50&fields=nonsense              -> 200, 93,129 bytes — a 200, not a refusal
-//   ?limit=50&select=email                 -> 200, 93,129 bytes
+//   ?limit=50                              -> 200, 105,536 bytes, 35 keys per row
+//   ?limit=50&fields=email,score,status    -> 200, 105,536 bytes, 35 keys
+//   ?limit=50&fields=email                 -> 200, 105,536 bytes, 35 keys
+//   ?limit=50&fields=nonsense              -> 200, 105,536 bytes — a 200, not a refusal
+//   ?limit=50&select=email                 -> 200, 105,536 bytes
 //
-// Eleven spellings of "give me less than the row", and all eleven cost 93,129 bytes.
-// On the fix the same door over the same database answers `?fields=email,score,status`
-// with 3,293 bytes — 28.4× less, one column being 1,966 — because `scoreBreakdown`,
+// Eleven spellings of "give me less than the row", and all eleven cost 105,536
+// bytes. On the fix the same door over the same database still answers the page it
+// was asked not to project with 105,536, and answers `?fields=email,score,status`
+// with 3,346 bytes — 31.5× less, one column being 2,019 — because `scoreBreakdown`,
 // the nested `listMemberships` and `_count` are a column and two joins this caller
-// never named. The unprojected page is 93,517 there against 93,129 here, and the
-// difference is this door's tiebreaker-free order putting different tied rows on the
-// page, not a projection that leaks into the branch that asks for none.
+// never named. That the unprojected branch answers the identical number on both
+// builds is the check that no projection leaks into the branch that asks for none;
+// the page size itself is not guaranteed across runs, because `score desc` has no
+// tiebreaker and an imported crowd ties everywhere.
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
