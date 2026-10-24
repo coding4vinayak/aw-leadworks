@@ -2213,7 +2213,11 @@ Redis back, those same five ids were ordinary retries — `?action=retry` answer
 `EXPORT` row `COMPLETED` with 15 records and a file. The export's own door was pressed too and
 answered 400 "Can only retry failed exports" only because the job retry had already re-run it to
 `COMPLETED`. On a process that starts while Redis is already gone, the same five doors answer 503
-in about 2.6 s each instead of never answering, and the rows read `FAILED` the same way.
+in just over 3 s each — the hand-off deadline, plus the door's own work — instead of never
+answering, and the rows read `FAILED` the same way. `aw-deploy`'s `demo-leadworks.mjs` STEP 27
+presses those five doors on a second instance booted against a port with nothing listening on it,
+reads the five rows back out of the table, and retries them through the instance that does have a
+queue: 50 checks, every one of them passing, the doors answering in 3.03–3.21 s.
 
 What this does not claim:
 
