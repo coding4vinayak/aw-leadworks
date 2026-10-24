@@ -4,8 +4,9 @@ import { prisma } from "@/lib/db";
 import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
 import { pageParams } from "@/lib/pagination";
 import { memberPage } from "@/lib/list-page";
+import { fieldsParam, leadSelect } from "@/lib/list-fields";
 import { readJson, validateBody } from "@/lib/validate";
-import { LEAD_LIST_PATCH } from "@/lib/fields";
+import { LEAD_FIELD_PICK, LEAD_LIST_PATCH, type LeadExportField } from "@/lib/fields";
 import { listRefreshAsk, planListRefresh, readListFilter } from "@/lib/dynamic-list";
 import { describeConditions, leadWhere } from "@/lib/rule-conditions";
 import { asInputJson } from "@/lib/json";
@@ -15,21 +16,38 @@ export const dynamic = "force-dynamic";
 async function GET_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  // 100 is the number this door has always handed back; it is now the page size, not the ceiling
-  // on the answer, and `pageParams` clamps what a caller may ask for.
+
+  // ?fields= projection: ask which Lead columns to hand back per member.
+  const asked = fieldsParam(searchParams);
+  let picked: LeadExportField[] | undefined;
+  if (asked !== null) {
+    const input = validateBody({ fields: asked }, LEAD_FIELD_PICK);
+    if (!input.ok) return input.error;
+    picked = input.data.fields as LeadExportField[];
+  }
+
+  // Pagination: pageParams clamps what a caller may ask for (default 100).
   const { page, limit } = pageParams(searchParams, 100);
+
   const [list, recorded] = await Promise.all([
     prisma.leadList.findUnique({
       where: { id },
       include: {
-        members: { include: { lead: true }, orderBy: { leadId: "asc" }, skip: (page - 1) * limit, take: limit },
+        members: {
+          include: { lead: picked ? { select: leadSelect(picked) } : true },
+          orderBy: { leadId: "asc" },
+          skip: (page - 1) * limit,
+          take: limit,
+        },
       },
     }),
     prisma.leadListMember.count({ where: { listId: id } }),
   ]);
   if (!list) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, list.workspaceId);
-  return NextResponse.json({ ...list, memberPage: memberPage(recorded, list.members.length, page, limit) });
+
+  const base = picked ? { ...list, memberFields: picked } : list;
+  return NextResponse.json({ ...base, memberPage: memberPage(recorded, list.members.length, page, limit) });
 }
 
 async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
