@@ -270,8 +270,12 @@ The first row must be a header. Aliases such as `E-mail`, `Company Name`,
 email, phone or LinkedIn URL. Up to 1,000 rows / 5 MB per request. Duplicates —
 within the file or already in the workspace, matched case-insensitively by
 email — are skipped, never merged or silently overwritten. The response reports
-`imported`, `total`, `invalid`, `duplicatesInFile`, `duplicatesExisting` and up
-to 50 `problems`, each with the real file line. The dashboard shows the first
+`imported`, `total`, `invalid`, `duplicatesInFile`, `duplicatesExisting`, up to
+50 `problems` each with the real file line, and `webhooks` — the count of what
+the `lead.created` fan-out did for this file (`subscriptions`, `attempted`,
+`delivered`, `refused`, `noAnswer`, `blocked`, `lastError`), so a batch whose
+subscriber answered 500 is not reported the same way as a workspace that has no
+subscriber at all. The dashboard shows the first
 five and downloads the whole report as CSV (`line,field,message`); cells use the
 same formula-escaping rule as an export. Every created row emits `lead.created`,
 the same event `POST /api/leads` emits.
@@ -2392,11 +2396,95 @@ generic spelling a nuCRM plugin webhook verifies out of the box — point one at
 call with no adapter in between. `id` names the logical event; a receiver that
 deduplicates on it is already correct on the day delivery grows retries.
 
-Delivery is one attempt, best-effort and never throwing: a receiver that is
-down is logged and skipped, and never fails the lead create or the job whose
-work already committed. `tests/unit/webhook-dispatch.test.ts` pins the
-wiring — an event declared without an emitter, or an emitter that loses its
-call site, fails the suite.
+Delivery is one attempt per (row, subscription), best-effort and never throwing:
+a receiver that is down is counted and skipped, and never fails the lead create
+or the job whose work already committed. The attempts a batch owes are made
+**eight in flight per subscription** (`WEBHOOK_FANOUT`) inside one attempt budget
+of 5 s (`WEBHOOK_ATTEMPT_BUDGET_MS`), so a door pays
+`⌈rows / 8⌉ × 5 s` for a receiver that never answers and `⌈rows / 8⌉ × its
+latency` for one that answers slowly — not the row count times either. See
+*Who waits for the subscriber* below for the measured numbers behind that rule.
+`tests/unit/webhook-dispatch.test.ts` pins the wiring — an
+event declared without an emitter, or an emitter that loses its
+call site, fails the suite; `tests/unit/webhook-fanout.test.ts` pins the pool,
+the counts and the three kinds of failure.
+
+### Who waits for the subscriber
+
+A webhook subscription is an operator's decision that turns a third party's
+latency into this API's response time. That was measured on `origin/main` at
+`65bd942` — this session's own instance (`:3331`, database `leadworks_r53`,
+booted with `ABET_ALLOW_PRIVATE_TARGETS=1` so a subscription could name a
+receiver on this box) against a receiver with four behaviours, every number
+`curl`'s own time for the door call (`/tmp/opencode/r53_measure.log`):
+
+| subscription | `POST /api/leads` (1 row) | import of 20 fresh rows | import of 40 |
+|---|---|---|---|
+| none | 0.043 s | 0.166 s | — |
+| answers 200 at once | 0.072 s | 0.226 s | — |
+| answers 200 after 300 ms | 0.317 s | 6.222 s | — |
+| answers 500 | 0.018 s | — | — |
+| accepts and never answers | 5.037 s | **100.190 s** | **200.275 s** |
+
+The last row is the defect stated exactly: 20 × 5.009 = 100.19 and 40 × 5.006 =
+200.27. The importer awaited one delivery per row, so #17's 5 s attempt budget —
+the reason a reader of that code believed "a hung receiver cannot pin the
+caller" — bounded a single attempt while the door paid the crowd. The receiver's
+own count for those runs was 72 hits for 66 rows and 6 for the second
+subscription, so no attempt was extra and none was lost: the contract of one
+`lead.created` per row is not what could be shed, only the order they were made
+in. And the `answers 500` row is the other half: **0.018 s, and nothing said.**
+The door returned the same `201` with the same body it returns when the
+subscriber says yes; `GET /api/webhooks/{id}` afterwards prints the row — url,
+events, `isActive: true`, the signing secret — and no fact about a delivery,
+because no delivery is recorded. The only place the 500 was written down is this
+instance's stdout: `webhook cmvo1su82… -> lead.created: 500 Internal Server
+Error`.
+
+`src/lib/webhook-fanout.ts` is the arithmetic, with no fetch and no database in
+it, which is what makes it testable at all. `fanOut(items, width, run)` claims
+items by an index that only advances — so an item cannot be lost or run twice, a
+task that throws still costs the pool nothing but itself, and a width above the
+item count costs one wave rather than a promise per item. `tallyDeliveries`
+counts what was attempted from the outcomes it was handed, never from a number
+the caller supplied, and keeps the three kinds of failure apart because they are
+three parties: **`refused`** is a receiver that was reachable and answered 500,
+**`no-answer`** is a socket that produced no HTTP response (the budget expiring,
+a connection refused), **`blocked`** is an address this instance's own egress
+policy refused before it was attempted. Collapsing them is what made a
+subscriber's application bug and a typo in its URL look identical from outside.
+
+The width is spent **per subscription**, not across the batch, and that is a
+deliberate asymmetry: nine endpoints watching one event are nine independent
+receivers, so a single `POST /api/leads` still answers in one attempt budget
+(measured: 5.018 s with two silent subscriptions, the same as with one) while the
+one receiver with 240 events waiting for it is posted to eight at a time instead
+of having 240 sockets opened at it.
+
+What the caller is told changed in one place and not in the other. The import
+report now carries `webhooks`, because the import already answers with a report
+and a report that omits 720 failed deliveries is a report that omits the point.
+`POST /api/leads` still answers with the lead row and nothing else — #17 pinned
+that as "webhooks are best-effort on top of a successful create, not a
+replacement for it", and the lead body is the one `?fields=` projects, so an
+extra key there is a key the projection has to be taught about. A single create
+whose subscriber is down is therefore still visible only in stdout; the count is
+in the file import, where the crowd makes the difference measurable.
+
+Said rather than implied: **the door still waits.** The fan-out is inline —
+`src/lib/queue.ts` has no `webhook` arm and adding one is a change to a vendored
+module, so the attempts are made in the request, and a 400-row import against a
+receiver that never answers still costs `⌈400/8⌉ × 5 s` = 250 s. What changed is
+the multiplier: the row count is divided by the width instead of being the
+width. **Nothing is recorded per delivery** — `webhooks` is the outcome of the
+fan-out the caller's own request performed, not a delivery log; an event emitted
+by a scheduled job is still counted only in that worker's stdout, and an
+operator who wants "did my subscriber get yesterday's leads" needs a deliveries
+table, which is a different round's decision. **`attempted` is a count of
+sockets, not of acknowledgements**: a receiver that answers 200 and drops the
+body is `delivered`. And the failure is now *displayed*, not *fixed*: a 500 from
+a subscriber is still one attempt, and retries would break the "deduplicate on
+`id`" promise the section above makes.
 
 ## AI (optional)
 
