@@ -136,7 +136,7 @@ describe("what a stop leaves behind", () => {
 
 describe("a row the operator stopped is not a row that contradicts itself", () => {
   it("forgives the one shape a stop produces legitimately", () => {
-    assert.equal(countersProblem(STOPPED_BEFORE_START, true), null);
+    assert.equal(countersProblem(STOPPED_BEFORE_START, "stopped"), null);
     assert.match(
       countersProblem(STOPPED_BEFORE_START) ?? "",
       /finished without saying it visited any row/,
@@ -146,7 +146,7 @@ describe("a row the operator stopped is not a row that contradicts itself", () =
 
   it("forgives nothing about over-reporting", () => {
     assert.match(
-      countersProblem({ total: 10, processed: 14, failed: 0 }, true) ?? "",
+      countersProblem({ total: 10, processed: 14, failed: 0 }, "stopped") ?? "",
       /against a denominator of 10/,
       "a mark is not a licence to smooth a contradiction away",
     );
