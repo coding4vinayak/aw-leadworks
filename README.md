@@ -234,7 +234,8 @@ POST   /api/exports/{id}?action=retry      # the door's other half: `?action=dow
                                            # whose bytes its own worker took back — and makes a
                                            # fresh export of the same crowd
 DELETE /api/exports/{id}                   # delete the record — and, when it named one, the file it wrote
-GET    /api/webhooks?workspaceId=          # subscriptions
+GET    /api/webhooks?workspaceId=          # subscriptions, not their signing
+                                           # secrets — see *Webhooks (outbound)*
 POST   /api/webhooks                       # subscribe; deliverable events are
                                            # the three the product emits
                                            # (see *Webhooks (outbound)*)
@@ -2372,7 +2373,20 @@ company and title written later lift the thin row from 20 to 36; and one `VALIDA
 ## Webhooks (outbound)
 
 `POST /api/webhooks` takes `{ workspaceId, url, events }` and answers `201`
-with the created subscription and its `secret`. A subscription can name only
+with the created subscription and its `secret` — the one door that prints that
+secret, and the one moment it can be shown to anyone. `GET /api/webhooks`,
+`GET /api/webhooks/{id}` and the reply to a `PATCH` carry every other column of
+the row without it: the value a caller can read again is a value nothing can
+retire, and this is the key a subscriber verifies deliveries with, so re-issuing
+it on every press turns a read credential into the ability to forge this
+product's deliveries into someone else's endpoint. A secret lost is replaced by
+`DELETE` then `POST` — a new row, a new id, a new secret — the same shape the
+terms page already states for API keys ("Plaintext keys are shown once") and
+`src/lib/apikeys.ts` ships ("returned once and never persisted"). The column
+itself cannot be hashed away the way a key is: verification of a bearer token
+needs only its digest, while an HMAC delivery is signed with the value itself, so
+`src/lib/webhooks.ts` keeps reading it straight from the table. A subscription
+can name only
 the events this product emits — an unknown name is refused with the list
 rather than stored, because a subscription filtered on a name nothing sends
 is the same silence as no subscription at all:
