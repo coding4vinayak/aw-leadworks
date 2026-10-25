@@ -2306,6 +2306,116 @@ refuses with are the 25 the list door refuses with, a refusal costs 676 bytes ag
 same ask cost unanswered, and the cleanup leaves 0 crowd leads, 0 members and a 404. The step is
 **29 checks**; the whole LeadWorks demo reads **373 ✓ / 0 ✗, exit 0**.
 
+### What the health door says about seven queues, when only one of them has stopped answering
+
+`GET /api/health` asks all seven queues for `waiting`/`active`/`failed` and has always done it in
+one `try` — so the door had exactly two things it could say: the map, or `{"error":"redis
+unreachable"}`. Measured on `origin/main` at `65bd942`, on instances of this session's own (ports
+3319-3321, redises 6388/6397, database `leadworks_r51`), those two words cover four different
+situations and get three of them wrong:
+
+```
+:3319  booted with its queue up, then lost it      200, 16-38 ms, queues:{"error":"redis unreachable"}
+                                                    — right answer, and it recovers: numbers on the
+                                                      second press after the port came back (~2 s)
+:3320  booted against a port nothing was on; that  200, 14-47 ms, queues:{"error":"redis unreachable"}
+       port came up 32 s later                      …for the next 150 presses over 12.5 minutes, while
+                                                    POST /api/jobs beside it handed off in 20-64 ms
+                                                    and left 36 rows in the queue it called down
+:3321  the first cut of the fix: per-queue asks    http=000 — `curl -m 12` timed out. The door that
+       with no deadline, pressed blind            replaced a 29 ms answer answered nothing at all
+:3319  the second cut: nothing asked while the     200, 0/7 numeric on six presses over 18 s, while
+       shared client is not `ready`                its Redis was up and answering
+```
+
+`:3320` is the one that made this a round. A `Queue`'s client in bullmq 6.3.15 is a one-shot
+promise — `RedisConnection` sets `this.initializing = this.init()` in its constructor and its
+`client` getter hands back that same promise forever — so the queue that is first touched while the
+shared lazy client is still failing rejects `Connection is closed.` for the life of the process,
+after the socket is long back up. Probed off the app (`/tmp/opencode/r51_heal.out`): the poisoned
+instance threw on its next twelve asks *and on `add()`* with the shared client `ready`, while a
+`Queue` built after the recovery counted on the same connection in 7 ms. Two consequences, both
+fixed here: the door's word for that queue was a lie about Redis, and because the old probe
+returned from its `catch` at the first throw, that one client erased the six sets of numbers its
+neighbours had just handed back.
+
+The judgement is now `src/lib/queue-snapshot.ts` and it says one thing per queue, always arriving:
+
+```
+healthy  {"ok":true,"db":"up","queues":{"scrape":{"waiting":0,"active":0,"failed":0},"enrich":{…},
+          …seven…},"queueConnection":"ready","scrape":{…},"time":"…"}                 16-29 ms
+blind    {"ok":true,"db":"up","queues":{"scrape":{"error":"unreachable"},"enrich":{…},
+          …seven…},"queueConnection":"connecting"}                                    24-33 ms
+```
+
+Four rules, each one a row of the table above. **A queue that answers keeps its numbers** whatever
+the others did, so a broken client is a cell and not a verdict. **The press is bounded** — 1 s per
+ask, ~300× a healthy 2-4 ms one, cleared on every path — because an unbounded health door is the
+defect this app has already paid for twice, at the boot (`SWEEP_REGISTER_TIMEOUT_MS`) and at the
+hand-off. **The socket is opened before the door calls it dead**, through the raw ioredis client
+(`queueWake`) and never through a `Queue`, which is the only difference between waking a lazy
+client and poisoning one; and while the client is demonstrably down nothing is asked of it at all,
+which is what an outage costs: `connecting`/`reconnecting` beside seven honest cells, 15-45 ms.
+**A queue that refuses while the socket is up gets its client dropped and re-asked inside the same
+press**, once, so the door reports the recovery rather than waiting for the next boot.
+
+Re-measured on the shipped build, both instances booted blind and both given their queue back:
+
+```
+15:06:41 FIX  blind-booted          http=200   24ms conn=reconnecting  7 cells, 0 numeric
+15:06:41 FIX   after recovery        http=200   19ms conn=ready        7 cells, 7 numeric
+…            a second cycle on the same process, 6 blind presses + 14 after the port came up:
+              15-21 ms each, the first numeric answer 1 s after the port, and the count of
+              "Connection is closed." lines in its log stayed at exactly the 8 its boot wrote.
+```
+
+That last count is the no-storm half of the design: an outage press asks nothing and replaces
+nothing, so a 30-second outage does not leave seven latched clients rebuilt on every press. The
+hand-off is untouched by all of this — `POST /api/jobs` on the fixed build answered 201 in 199 ms
+and its row read `COMPLETED` 152 ms later (test row deleted, `Job` PENDING count 0), and a clean
+healthy boot still registers the sweep: `bull:scheduled:repeat:leadworks-scheduled-sweep:…` in that
+instance's own Redis.
+
+What this does not claim:
+
+* **The `queues` failure body changed shape.** It was `{"error":"redis unreachable"}`, now it is a
+  cell per queue plus `queueConnection`. `src/lib/openapi.ts` gives `health.get` a `200: "ok."` and
+  no body schema, `scripts/smoke.sh` reads `db` only, and `public/llms-full.txt` never spelled the
+  queue body — which is why `check:llms-full` still reports the file unchanged. #49's section quotes
+  the old words as what it measured on the base it booted on, and stays its measurement.
+* **The door does not hasten the socket.** It reports `reconnecting` until ioredis says otherwise —
+  1 s after the port in one run, 8 s in another. Nothing here changes `retryStrategy`.
+* **The boot's sweep registration is not re-run by the door.** `:3321` booted blind, printed #49's
+  timeout line and built clients that refused; after its queue came back the door reported seven
+  sets of numbers while its own Redis still held no scheduler key. The queue is answering; the
+  schedule waits for a boot that reaches Redis.
+* **One replacement per queue per press.** A queue that stays broken after its client is rebuilt
+  says `unreachable after rebuilding this process's client for it` and stops, rather than becoming a
+  retry loop. A refusal that is *not* about the socket is passed through in the driver's own words,
+  cut at 120 characters; an outage cell never carries `host:port`, because this door needs no key.
+* **`Stream isn't writeable and enableOfflineQueue options is false` is still not classed as a
+  connection failure on this branch**, so a hand-off during an outage still answers 500 with an
+  empty body. PR #77 owns that line (`fix(#50)`, commit `c0209ab`); re-classing it here would
+  re-fix another round's defect and buy a conflict. Pinned as a non-claim in the test file rather
+  than left implicit.
+* `503` is still decided by the database alone, and `queues` still counts only
+  `waiting`/`active`/`failed`.
+
+Verification: `npm test` **1001/1001**, `npx tsc --noEmit` clean, `npm run lint` **0 errors / 13
+warnings** (none on a line this round wrote), `npm run check:contract` **8 passed, 0 failed**,
+`npm run check:llms-full` unchanged, `npm run build` exit 0. Twenty-three of that total are new, in
+`tests/unit/queue-snapshot.test.ts` over 4 describes, with no Redis: the four shapes driven as
+arguments (a refusal that keeps its neighbours' numbers, a never-settling ask that must still come
+back inside six deadlines and at least two, a wake that opens a lazy socket, a wake that never
+settles), the census that every queue the module can build gets its own cell without the door
+naming one, and the wiring read off source — that the door imports the judgement and not the
+queues, that no `queues.<name>` read survives at import, that `forgetQueue` closes the instance it
+drops and never quits the shared connection, and that the wake touches the client and never a
+`Queue`. `tests/unit/scrape-capability.test.ts`'s four body pins were retargeted, with the reason
+written beside them: two of the strings moved (`queues: await queueDepth()` → `queues:
+report.cells`, plus the new `queueConnection`); `ok: true`, `db: "up"` and `time: new Date()` are
+the same claim about the same lines.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
