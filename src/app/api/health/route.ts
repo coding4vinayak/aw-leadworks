@@ -1,25 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { queues } from "@/lib/queue";
+import { queueSnapshot } from "@/lib/queue-snapshot";
 
 export const dynamic = "force-dynamic";
 
-/** Queue depth snapshot. Best-effort: Redis down reports, it never 503s. */
-async function queueDepth(): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = {};
-  try {
-    for (const [name, queue] of Object.entries(queues)) {
-      const c = await queue.getJobCounts("waiting", "active", "failed");
-      out[name] = { waiting: c.waiting, active: c.active, failed: c.failed };
-    }
-  } catch {
-    return { error: "redis unreachable" };
-  }
-  return out;
-}
-
 /**
- * Whether this instance can run a scrape, in the same best-effort shape as the queue depth.
+ * Whether this instance can run a scrape, in the same best-effort shape as the queue cells.
  *
  * It is a fact about the deployment, not a health check: a box with no browser is a healthy
  * box that cannot scrape, so this rides alongside `db` and `queues` without touching `ok`.
@@ -45,10 +31,12 @@ async function scrapeStatus(): Promise<Record<string, unknown>> {
 export async function GET() {
   try {
     await prisma.$queryRaw`SELECT 1`;
+    const report = await queueSnapshot();
     return NextResponse.json({
       ok: true,
       db: "up",
-      queues: await queueDepth(),
+      queues: report.cells,
+      queueConnection: report.connection,
       scrape: await scrapeStatus(),
       time: new Date().toISOString(),
     });

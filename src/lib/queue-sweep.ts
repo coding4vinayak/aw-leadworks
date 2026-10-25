@@ -13,7 +13,8 @@ export type RegistrationOutcome = "registered" | "failed" | "timed-out";
  * the command is never issued because bullmq is still waiting on readiness. 5s is ~25× the
  * healthy latency, so it never false-times a working registration, and it is the whole
  * difference between a boot that hangs forever and one that reaches its "workers started"
- * line and lets `GET /api/health` answer (`queues:{"error":"redis unreachable"}`).
+ * line and lets `GET /api/health` answer (`queueConnection:"reconnecting"`, one
+ * `{"error":"unreachable"}` cell per queue — the shape `src/lib/queue-snapshot.ts` vends).
  */
 export const SWEEP_REGISTER_TIMEOUT_MS = 5_000;
 
