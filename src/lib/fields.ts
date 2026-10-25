@@ -43,6 +43,11 @@ import {
  * not beside a type check. `Export.expiresAt` is missing for a different reason and
  * stays missing: the export worker stamps it from `EXPORT_RETENTION_MS` when the file
  * is written (#35), and a lifetime the requester chooses is not a retention policy.
+ *
+ * One output list lives here too, `WEBHOOK_READ_COLUMNS`: the same fact as the
+ * paragraph above, read from the other side. `Webhook.secret` is neither an input
+ * nor something a read door prints — it is handed out once, by the door that mints
+ * it, and `secret` is exactly the column the two lists agree to leave out.
  */
 
 /** The columns `Export.fields` may name: what the exporter can actually render. */
@@ -262,6 +267,50 @@ export const WEBHOOK_PATCH = {
   url: { kind: "text", format: "url", max: 2000 },
   isActive: { kind: "bool" },
 } satisfies Schema;
+
+/**
+ * Every column of `model Webhook` except `secret` — the one list a webhook read
+ * may hand back.
+ *
+ * `secret` is the HMAC key for deliveries, and before this it was printed by the
+ * create door once (right) and by three more doors forever (wrong). Measured on
+ * `main` before the change: `POST /api/webhooks` answered 201 with a 64-char
+ * plaintext secret, and `GET /api/webhooks`, `GET /api/webhooks/{id}` and the
+ * response of an unrelated `PATCH {isActive:false}` each printed the same value
+ * again — 285 bytes for one subscription, 1,734 bytes with six, because the list
+ * door prints one secret per row on every press. Three reads in a row returned one
+ * distinct value, and no door could move it: `PATCH {secret:"…"}` was refused and
+ * `POST` with a chosen secret stored its own. So the credential a subscriber
+ * verifies a delivery with was re-issued by every read, with nothing that could
+ * retire it short of deleting the row.
+ *
+ * This is the mouth, not the column. An API key is stored as its sha256 because
+ * verification never needs the plaintext back; a signing secret cannot be, because
+ * `webhooks.ts` HMACs the body with the value itself. What can be decided is which
+ * door says it out loud, and the answer is one: the door that mints it.
+ *
+ * The list is written as what the row *is* rather than as a subtraction, so the
+ * test can compare it against `model Webhook` itself: a column added to that model
+ * is printed by the read doors by default, and only `secret` is withheld.
+ */
+export const WEBHOOK_READ_COLUMNS = [
+  "id",
+  "workspaceId",
+  "url",
+  "events",
+  "isActive",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+export type WebhookReadColumn = typeof WEBHOOK_READ_COLUMNS[number];
+
+/** The Prisma `select` that reads a subscription without its signing secret. */
+export function webhookReadSelect(): Partial<Record<WebhookReadColumn, true>> {
+  return Object.fromEntries(WEBHOOK_READ_COLUMNS.map((column) => [column, true])) as Partial<
+    Record<WebhookReadColumn, true>
+  >;
+}
 
 /**
  * The JSON envelope for `POST /api/leads/import`. The rows inside the CSV are
