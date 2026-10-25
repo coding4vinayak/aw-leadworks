@@ -1,6 +1,16 @@
 import { prisma } from "./db";
 import { assertAllowedTarget } from "./egress";
 import crypto from "crypto";
+import {
+  WEBHOOK_ATTEMPT_BUDGET_MS,
+  WEBHOOK_FANOUT,
+  classifyDeliveryFailure,
+  emptyTally,
+  fanOut,
+  tallyDeliveries,
+  type DeliveryOutcome,
+  type DeliveryTally,
+} from "./webhook-fanout";
 
 /**
  * The events this product emits, and the only events a subscription may name.
@@ -25,6 +35,15 @@ export function unknownEventsProblem(requested: string[]): string | null {
   return `Unknown events: ${invalid.join(", ")}. Valid events: ${WEBHOOK_EVENTS.join(", ")}`;
 }
 
+export {
+  WEBHOOK_ATTEMPT_BUDGET_MS,
+  WEBHOOK_FANOUT,
+  emptyTally,
+  tallyDeliveries,
+  type DeliveryOutcome,
+  type DeliveryTally,
+};
+
 /**
  * Best-effort outbound delivery for leadworks Webhook rows.
  *
@@ -44,32 +63,74 @@ export function unknownEventsProblem(requested: string[]): string | null {
  * scheduled and no `webhook` arm; adding one is a change to the vendored queue
  * module, and a delivery that is best-effort does not need a queue to be best-
  * effort. What it does need is a caller that awaits and never throws, so a webhook
- * outage is a `console.error` and not a 500 the API caller has to reason about.
- * That's `dispatchWebhookEvent`: `Promise.allSettled` over the matching hooks,
- * every per-hook error swallowed here. Retry / dead-letter semantics belong with
- * whoever first needs them; the row set is already the "did the operator ask for
- * this" record.
+ * outage is a tally in the response and not a 500 the API caller has to reason
+ * about.
+ *
+ * #53 is the half that was missing: `dispatchWebhookEvent` was awaited by the
+ * import once per row, so a batch paid its receiver's latency the row count times
+ * — measured at 100.19 s for 20 rows against a socket that never answered, and
+ * 6.22 s for the same 20 rows against one that answers in 300 ms. One attempt per
+ * row is still the contract; one row at a time never was.
  */
-export async function dispatchWebhookEvent(
+export async function dispatchWebhookBatch(
   workspaceId: string,
   event: WebhookEvent,
-  data: unknown,
-): Promise<void> {
+  rows: readonly unknown[],
+): Promise<DeliveryTally> {
   const hooks = await prisma.webhook.findMany({
     where: { workspaceId, isActive: true },
   });
   const matching = hooks.filter((hook) =>
     hook.events.split(",").map((name) => name.trim()).includes(event),
   );
-  if (matching.length === 0) return;
+  if (matching.length === 0 || rows.length === 0) return tallyDeliveries(matching.length, []);
 
-  const payload = {
+  // One payload per row, shared by every subscription that row fans out to. The
+  // event id is per *event*, so a receiver that deduplicates on `id` collapses the
+  // same row's deliveries to its own endpoints and never collapses two rows that
+  // arrived in one batch.
+  const payloads = rows.map((data) => ({
     id: `evt_${crypto.randomBytes(12).toString("base64url")}`,
     event,
     timestamp: new Date().toISOString(),
     data,
-  };
-  await Promise.allSettled(matching.map((hook) => deliver(hook.id, hook.url, hook.secret, payload)));
+  }));
+
+  // The width is spent per subscription, not across the batch: nine endpoints
+  // watching one event are nine independent receivers and should not make a single
+  // POST cost two attempt budgets, while the one receiver with 240 events waiting
+  // for it is the party whose load the width exists to cap.
+  const groups = await Promise.allSettled(
+    matching.map(async (hook) => {
+      const made: DeliveryOutcome[] = new Array(payloads.length);
+      await fanOut(
+        payloads.map((payload, index) => ({ index, payload })),
+        WEBHOOK_FANOUT,
+        async (attempt) => {
+          made[attempt.index] = await deliver(hook.id, hook.url, hook.secret, attempt.payload);
+        },
+      );
+      return made;
+    }),
+  );
+  // `deliver` is total — every failure it can see comes back as an outcome — so a
+  // group settles as rejected only if the pool itself threw, and then the rows that
+  // subscription was owed are reported as never attempted rather than dropped from
+  // the count the caller reads.
+  const outcomes = groups.flatMap((group) =>
+    group.status === "fulfilled"
+      ? group.value
+      : payloads.map<DeliveryOutcome>(() => ({ ok: false, kind: "no-answer", reason: "no delivery was attempted for this subscription" })),
+  );
+  return tallyDeliveries(matching.length, outcomes);
+}
+
+export async function dispatchWebhookEvent(
+  workspaceId: string,
+  event: WebhookEvent,
+  data: unknown,
+): Promise<DeliveryTally> {
+  return dispatchWebhookBatch(workspaceId, event, [data]);
 }
 
 async function deliver(
@@ -77,7 +138,7 @@ async function deliver(
   rawUrl: string,
   secret: string,
   payload: { id: string; event: string; timestamp: string; data: unknown },
-): Promise<void> {
+): Promise<DeliveryOutcome> {
   const body = JSON.stringify(payload);
   const signature = crypto.createHmac("sha256", secret).update(body).digest("hex");
   try {
@@ -97,12 +158,17 @@ async function deliver(
         "User-Agent": "Leadworks-Webhook/1.0",
       },
       body,
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(WEBHOOK_ATTEMPT_BUDGET_MS),
     });
     if (!response.ok) {
+      // Reachable, and it said no. That is the receiver's answer, not a failure to
+      // reach it, and the difference is the reason the two are counted apart.
       console.error(`webhook ${hookId} -> ${payload.event}: ${response.status} ${response.statusText}`);
+      return { ok: false, kind: "refused", reason: `${response.status} ${response.statusText}` };
     }
+    return { ok: true };
   } catch (error) {
     console.error(`webhook ${hookId} -> ${payload.event} failed:`, error);
+    return classifyDeliveryFailure(error);
   }
 }
