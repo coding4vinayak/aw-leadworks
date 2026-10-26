@@ -2443,10 +2443,10 @@ untouched, by hash rather than by eye: `?isActive=false` (740 B), `?isActive=tru
 (781 B, `total=3 page=1 limit=2 totalPages=2`), the rules door's `?isActive=true` (749 B) and
 both doors with no parameter at all (1,826 B and 1,096 B) are byte-identical on the two
 builds, the five keys and their order are the same five, and `PATCH /api/sources/{id}` is
-unchanged on both builds for `"1"`, `1`, `"yes"` and `true` — the one body that differs is
-the accepted `{"isActive":false}`, whose two answers differ only in `updatedAt`, which is
-what a write does (`{name, isActive, type}` compared equal, and the row was put back through
-the same door).
+unchanged on both builds for `"1"`, `1` and `"yes"` — refused, byte for byte, by the door this
+round did not edit — and the accepted `{"isActive":false}` differs between the two answers only
+in `updatedAt`, which is what a write does (`{name, isActive, type}` compared equal, and the row
+was put back through the same door).
 
 Pinned offline: **1003/1003** — **25 new** in `tests/unit/bool-word.test.ts` over 6 describes,
 no browser, no database, no network. The set is pinned as two words; twenty measured
