@@ -360,25 +360,45 @@ describe("the wiring, from the source", () => {
   const ruleEdit = at("../../src/app/api/enrichment-rules/[id]/route.ts");
 
   it("asks the matcher three times in the minute, once per leg that stores a schedule", () => {
+    // #59 moved the profile leg's question into `lib/export-profile.ts`, because the door
+    // that prints the verdict has to print the one the minute acted on. Counted across both
+    // files it is still three, and no leg asks the clock itself.
     const body = blankComments(functionBody(scheduler, "runScheduledJobs")!);
-    assert.equal((body.match(/matchesSchedule\(/g) ?? []).length, 3, "source, profile, rule");
+    const sweep = blankComments(at("../../src/lib/export-profile.ts"));
+    const asked = (body.match(/matchesSchedule\(/g) ?? []).length + (sweep.match(/matchesSchedule\(/g) ?? []).length;
+    assert.equal(asked, 3, "source, profile, rule — one per leg that stores a schedule");
     assert.match(body, /matchesSchedule\(source\.schedule, now\)/);
-    assert.match(body, /matchesSchedule\(profile\.schedule, now\)/);
+    assert.match(sweep, /matchesSchedule\(profile\.schedule, now\)/, "the profile leg, through the verdict the door reads");
     assert.match(body, /if \(!matchesSchedule\(declared\.schedule \?\? "", now\)\) continue;/, "the rule leg asks the reader's cadence");
-    assert.ok(!/getMinutes|getHours|getDate\(\)|getDay\(\)/.test(body), "the sweep never reads the clock to compare it itself");
+    assert.ok(!/getMinutes|getHours|getDate\(\)|getDay\(\)/.test(body + sweep), "the sweep never reads the clock to compare it itself");
   });
 
   it("checks a stored column before matching it, and says which row is quiet", () => {
     const body = blankComments(functionBody(scheduler, "runScheduledJobs")!);
-    for (const [leg, label] of [["source", "Source"], ["profile", "Export profile"]] as const) {
-      const checked = body.indexOf(`scheduleProblem(${leg}.schedule)`);
-      const matched = body.indexOf(`matchesSchedule(${leg}.schedule, now)`);
-      assert.ok(checked > -1, `the ${leg} leg asks the grammar`);
-      assert.ok(matched > checked, `and only matches what the grammar accepted`);
-      const warned = body.indexOf(`console.warn(\`${label}`);
-      assert.ok(warned > checked && warned < matched, `an unreadable ${leg} cadence is named in the log before it is skipped`);
-      assert.ok(body.indexOf("continue;", warned) < matched, "and skipped, not matched by luck");
-    }
+
+    const sourceChecked = body.indexOf("scheduleProblem(source.schedule)");
+    const sourceMatched = body.indexOf("matchesSchedule(source.schedule, now)");
+    assert.ok(sourceChecked > -1, "the source leg asks the grammar");
+    assert.ok(sourceMatched > sourceChecked, "and only matches what the grammar accepted");
+    const sourceWarned = body.indexOf("console.warn(`Source");
+    assert.ok(sourceWarned > sourceChecked && sourceWarned < sourceMatched, "an unreadable source cadence is named in the log before it is skipped");
+    assert.ok(body.indexOf("continue;", sourceWarned) < sourceMatched, "and skipped, not matched by luck");
+
+    // The profile leg's grammar is `export-profile.ts`'s now. The order is pinned where it
+    // happens, and the leg is pinned to go through it rather than beside it.
+    const sweep = blankComments(functionBody(at("../../src/lib/export-profile.ts"), "profileSweep")!);
+    const profileChecked = sweep.indexOf("scheduleProblem(profile.schedule)");
+    const profileMatched = sweep.indexOf("matchesSchedule(profile.schedule, now)");
+    assert.ok(profileChecked > -1, "the profile leg asks the grammar");
+    assert.ok(profileMatched > profileChecked, "and only matches what the grammar accepted");
+    assert.ok(sweep.indexOf('take: "unreadable"') < profileMatched, "the unreadable row returns before the matcher is asked");
+    const verdict = body.indexOf("profileSweep(profile, now)");
+    const warned = body.indexOf("profileSkipWarning(profile.id, verdict)");
+    const skipped = body.indexOf("continue;", verdict);
+    assert.ok(verdict > -1, "the minute takes the verdict the door prints");
+    assert.ok(warned > verdict && warned < skipped, "and names the quiet row in the log before it skips it");
+    assert.match(at("../../src/lib/export-profile.ts"), /Export profile \$\{id\} is /, "in the sentence this runtime has always printed");
+
     assert.match(body, /const plan = planTick\(due\)/, "the rule leg still claims columns after the cadence question");
   });
 
