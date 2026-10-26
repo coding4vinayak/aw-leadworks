@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { JOB_CREATE } from "@/lib/fields";
-import { unknownIdError } from "@/lib/ids";
+import { idFilterParam, unknownIdError } from "@/lib/ids";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -12,14 +12,18 @@ export const dynamic = "force-dynamic";
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
-  const sourceId = searchParams.get("sourceId");
   const type = searchParams.get("type");
   const status = searchParams.get("status");
   const { page, limit } = pageParams(searchParams, 20);
 
+  // Resolved the way `POST /api/jobs` resolves it: an unknown `sourceId` there is a 422
+  // naming the id, and here it was a page that looked like a source with no jobs.
+  const source = await idFilterParam(searchParams, "sourceId", (id) =>
+    prisma.source.count({ where: { workspaceId, id } }).then((n) => n > 0));
+  if (source.error) return source.error;
 
   const where: any = { workspaceId };
-  if (sourceId) where.sourceId = sourceId;
+  if (source.id) where.sourceId = source.id;
   if (type) where.type = type;
   if (status) where.status = status;
 

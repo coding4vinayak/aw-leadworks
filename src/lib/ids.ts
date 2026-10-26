@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { stringList } from "./validate";
+import { short } from "./validation-engine";
 
 /**
  * A caller-supplied list is input, not a fact, and it has to be checked before
@@ -89,4 +90,69 @@ export function unknownIdError(name: string, id: string): NextResponse {
 export function missingIds(wanted: string[], found: { id: string }[]): string[] {
   const have = new Set(found.map((f) => f.id));
   return wanted.filter((id) => !have.has(id));
+}
+
+/**
+ * A read door that filters on a row the caller names has to resolve that name before it
+ * filters, or "no rows" stops meaning "this crowd is empty" and starts meaning "I could
+ * not read your filter". Measured on `origin/main` (`65bd942`, `:3381` over `leadworks_r58`,
+ * three leads on `list-alpha`, two jobs on `src-alpha`, two exports on `profile-alpha`, a
+ * second tenant holding `list-foreign` / `src-foreign` / `profile-foreign`):
+ *
+ *   GET /api/leads?listId=<list-beta, which is real and empty>   200 total=0   honest
+ *   GET /api/leads?listId=nope                                    200 total=0   indistinguishable
+ *   GET /api/leads?listId=<another tenant's list>                 200 total=0   indistinguishable
+ *   GET /api/leads?listId=%20<real id>                            200 total=0   the padding became the id
+ *   GET /api/leads?listId=<a>&listId=<b>                          200 total=3   one of the two, silently
+ *
+ * `jobs?sourceId=` and `exports?profileId=` answered the same way on their own columns, and
+ * every one of those typos is a 422 at the matching write door on the same build:
+ * `sourceId is not an id this workspace has: nope`. So the door that writes the reference
+ * checks it and the door that reads by it does not.
+ */
+export interface IdFilter {
+  /** The one id to filter by, or null when the caller named none. */
+  id: string | null;
+  error: null;
+}
+export interface IdFilterError {
+  id: null;
+  error: NextResponse;
+}
+
+/**
+ * One caller-named id, trimmed, and resolved against this workspace before the route
+ * builds its `where`. The three decisions, each taken to match a rule the app already runs:
+ *
+ * - **absent or empty names nothing** — `?listId=` is a form field the user left alone, the
+ *   same reading `GET /api/exports?status=` and `POST /api/jobs {sourceId: null}` already get.
+ * - **padding is not part of the id** — `stringList` trims the entries of `listIds`, and the
+ *   write door that takes a scalar takes the trimmed value; a read door that did not trim
+ *   would answer an empty table for an id that exists.
+ * - **a name given twice is a question with two answers** — `getAll` is read, deduplicated and
+ *   refused above one, so the page a caller gets is the page they asked for.
+ *
+ * An id that does not resolve here gets `unknownIdError` — the write door's own 422, same
+ * sentence and same `unknownIds`, so one client handles a typo in a query string and a typo
+ * in a body identically. Another tenant's row answers through the same branch as a row that
+ * exists nowhere: the lookup is scoped, so a foreign id names nothing about its owner.
+ */
+export async function idFilterParam(
+  searchParams: URLSearchParams,
+  name: string,
+  exists: (id: string) => Promise<boolean>,
+): Promise<IdFilter | IdFilterError> {
+  const asked = [...new Set(searchParams.getAll(name).map((one) => one.trim()).filter((one) => one !== ""))];
+  if (asked.length === 0) return { id: null, error: null };
+  if (asked.length > 1) {
+    return {
+      id: null,
+      error: NextResponse.json(
+        { error: `${name} was given ${asked.length} ids (${asked.map(short).join(", ")}); this filter compares ${name} to one of them` },
+        { status: 400 },
+      ),
+    };
+  }
+  if (!(await exists(asked[0]))) return { id: null, error: unknownIdError(name, asked[0]) };
+  return { id: asked[0], error: null };
 }
