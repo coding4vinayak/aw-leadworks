@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
+import { boolParam } from "@/lib/bool-word";
 import { prisma } from "@/lib/db";
 import { pageParams } from "@/lib/pagination";
 import { asInputJson } from "@/lib/json";
@@ -15,12 +16,13 @@ export const dynamic = "force-dynamic";
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
-  const isActive = searchParams.get("isActive");
+  const active = boolParam(searchParams, "isActive");
+  if (active.error) return active.error;
   const { page, limit } = pageParams(searchParams, 20);
 
 
   const where: any = { workspaceId };
-  if (isActive !== null) where.isActive = isActive === "true";
+  if (active.value !== null) where.isActive = active.value;
 
   const [rules, total] = await Promise.all([
     prisma.enrichmentRule.findMany({
