@@ -6,7 +6,7 @@ import { markExportNeverQueued, markNeverQueued } from "@/lib/queue-refusal";
 import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { EXPORT_CREATE } from "@/lib/fields";
-import { unknownIdError } from "@/lib/ids";
+import { idFilterParam, unknownIdError } from "@/lib/ids";
 import { filterParam } from "@/lib/list-filter";
 import { exportFilterProblem } from "@/lib/export-format";
 import { EXPORT_STATUSES } from "@/lib/enums";
@@ -16,7 +16,6 @@ export const dynamic = "force-dynamic";
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
-  const profileId = searchParams.get("profileId");
   // `EXPORT_STATUSES` is the set the schema comment gives this column and the set
   // `exporter.ts` writes — including PROCESSING, which no table in `enums.ts`
   // declared until now. `RUNNING` is a Job word; asked of this door it used to be
@@ -25,9 +24,15 @@ async function GET_impl(request: Request) {
   if (status.error) return status.error;
   const { page, limit } = pageParams(searchParams, 20);
 
+  // `POST /api/exports` already answers an unresolvable `profileId` with a 422 naming it —
+  // a profile the caller does not have used to reach Prisma as a foreign key and come back
+  // as a 500. This door took the same id and returned the page of a profile with no exports.
+  const profile = await idFilterParam(searchParams, "profileId", (id) =>
+    prisma.exportProfile.count({ where: { workspaceId, id } }).then((n) => n > 0));
+  if (profile.error) return profile.error;
 
   const where: any = { workspaceId };
-  if (profileId) where.profileId = profileId;
+  if (profile.id) where.profileId = profile.id;
   if (status.value) where.status = status.value;
 
   const [exports, total] = await Promise.all([

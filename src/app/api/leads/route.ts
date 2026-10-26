@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { intParam, pageParams } from "@/lib/pagination";
-import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
+import { asStrings, idFilterParam, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
 import { LEAD_CREATE, LEAD_FIELD_PICK, type LeadExportField } from "@/lib/fields";
 import { fieldsParam, leadSelect } from "@/lib/list-fields";
@@ -16,7 +16,6 @@ export const dynamic = "force-dynamic";
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
-  const listId = searchParams.get("listId");
   // The same door already refuses `?fields=nonsense` by name and accepts
   // `?status=nonsense` as a filter that matches nothing. `status` is the column
   // `PATCH /api/leads/{id}` validates against `LEAD_STATUSES`, so the filter is
@@ -27,8 +26,15 @@ async function GET_impl(request: Request) {
   const maxScore = intParam(searchParams, "maxScore", 100, 0, 100);
   const { page, limit } = pageParams(searchParams, 50);
 
+  // The list to filter by is resolved before it filters: `POST /api/leads` already
+  // refuses an unknown `listIds` entry with a 422 naming it, and this door answered the
+  // same typo with `200 total=0` — the shape of "this list is empty".
+  const list = await idFilterParam(searchParams, "listId", (id) =>
+    prisma.leadList.count({ where: { workspaceId, id } }).then((n) => n > 0));
+  if (list.error) return list.error;
+
   const where: any = { workspaceId };
-  if (listId) where.listMemberships = { some: { listId } };
+  if (list.id) where.listMemberships = { some: { listId: list.id } };
   if (status.value) where.status = status.value;
   if (minScore > 0) where.score = { ...where.score, gte: minScore };
   if (maxScore < 100) where.score = { ...where.score, lte: maxScore };
