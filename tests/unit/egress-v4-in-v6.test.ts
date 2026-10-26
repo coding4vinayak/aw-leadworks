@@ -141,7 +141,8 @@ test("a coat around a public IPv4 stays public — this is not a ban on the form
     ["::ffff:8.8.8.8", "8.8.8.8"],
     ["64:ff9b::0808:0808", "8.8.8.8"],
     ["2002:0808:0808::", "8.8.8.8"],
-    ["::ffff:5d9b:d822", "93.184.216.34"],
+    ["::ffff:5d9b:d822", "93.155.216.34"],
+    ["::ffff:5db8:d822", "93.184.216.34"], // the dotted control egress.test.ts already uses
   ] as const) {
     assert.equal(isInternalAddress(host), false, `${host} carries ${addr}, which is public`);
   }
