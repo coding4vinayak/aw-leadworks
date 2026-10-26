@@ -51,7 +51,7 @@ This file is the machine-readable index for AI assistants and crawlers.
 
 ---
 
-## The API contract — 47 operations
+## The API contract — 49 operations
 
 The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 3.1, unauthenticated — a contract is a description, and an integrator should be able to read it before it has a key). Every line below is an operation the routes answer:
 
@@ -87,6 +87,8 @@ The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 
 - `PATCH /api/enrichment-rules/{id}` — Edit a rule. — needs the workspace's `x-api-key` key
 - `POST /api/enrichment-rules/{id}` — Run this rule now — ?action=run queues its job. — needs the workspace's `x-api-key` key
 - `DELETE /api/enrichment-rules/{id}` — Delete a rule. — needs the workspace's `x-api-key` key
+- `GET /api/export-profiles` — The workspace's saved export profiles — the rows the weekly sweep reads. — needs the workspace's `x-api-key` key
+- `GET /api/export-profiles/{id}` — One profile, its sweep verdict, and the exports it has run. — needs the workspace's `x-api-key` key
 - `GET /api/exports` — The workspace's exports. — needs the workspace's `x-api-key` key
 - `POST /api/exports` — Queue an export — the format, the fields it renders, and the filter it reads. — needs the workspace's `x-api-key` key
 - `GET /api/exports/{id}` — One export — its state, and where the file stands. — needs the workspace's `x-api-key` key
