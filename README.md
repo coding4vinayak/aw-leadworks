@@ -209,10 +209,14 @@ POST   /api/jobs/{id}?action=retry|cancel  # stop it, or restart it: a worker th
                                            # row carrying that mark is one `?action=retry` may
                                            # be taken from, which makes a new job over the
                                            # crowd the stopped one's config names
-GET    /api/leads?workspaceId=             # list, filter status/minScore; `?status=` is one
+GET    /api/leads?workspaceId=             # list, filter status/minScore/maxScore; `?status=` is one
                                            # `LEAD_STATUSES` word and a wrong one is a 400 that
-                                           # names the set; `?fields=` projects each
-                                           # row onto the columns named, the same names
+                                           # names the set; both score bounds are judged by the rule
+                                           # the export filter already uses — a whole number from 0
+                                           # to 100, or a 400 naming it, never a default substituted
+                                           # in its place (see *one score, three grammars*).
+                                           # `?fields=` projects each row onto the columns named,
+                                           # the same names
                                            # `POST /api/exports` takes `fields` from, and a name
                                            # that is not a Lead column is a 400, not the page
 POST   /api/leads                          # create — one address is one row, in this case or another (see *One address, one row*)
@@ -3921,6 +3925,168 @@ What this does not claim:
 * **No demo step this round**, for the reason #51 through #66 recorded: `aw-deploy`'s open
   pair (#96, STEP 27) is still `CONFLICTING` and `DIRTY` — re-checked this round — so a step
   stacked on it is not a direct child of that repo's `main`.
+
+### One score, three grammars: `?minScore=` and `?maxScore=` now ask the rule the other doors already use
+
+`Lead.score` is 0–100 by arithmetic — `lead-score.ts` sums 17 terms to exactly 100 — and four
+places in this API filter on it. Three of them check the number. The busiest one checked nothing,
+and the machine-readable contract did not mention either parameter. Measured on `origin/main`
+(`65bd942`) on the running app first, in this session's own runtime (`:3401`, database
+`leadworks_r60`, Redis 6399, throwaway worktree) over eight leads put at 0, 5, 49, 50, 51, 72, 90
+and 100 through `PATCH /api/leads/{id} {"score":N}` — so every number below is one the product
+wrote (`/tmp/opencode/r60_measure_b.log`, `r60_measure_c.log`):
+
+```
+GET  /api/leads?minScore=50            200 total=5  [100,90,72,51,50]   the honest one
+GET  /api/leads?minScore=101           200 total=1  [100]               a bound that cannot hold
+GET  /api/leads?minScore=500           200 total=1  [100]               became a clamp
+GET  /api/leads?minScore=51.5          200 total=4  […,51]              the fraction dropped
+GET  /api/leads?minScore=1e2           200 total=7  [100…5]             asked 100, read as 1
+GET  /api/leads?minScore=0x32          200 total=8                       asked 50, got everybody
+GET  /api/leads?minScore=abc           200 total=8                       a word became no filter
+GET  /api/leads?minScore=-5            200 total=8                       below the floor, ignored
+GET  /api/leads?minScore=90&minScore=10 200 total=2                       the second word dropped
+GET  /api/leads?maxScore=1e2           200 total=1  [0]                 asked everything, got the
+                                                                        worst lead in the table
+GET  /api/leads?minScore=80&maxScore=20 200 total=0                      a contradiction, answered
+                                                                        as an empty crowd
+```
+
+Each of those was `intParam` doing its job: the page-size rule — *an unparseable value, or one
+below the legal minimum, falls back to the default; anything above the maximum is clamped* — is
+right for `page` and `limit`, because a page size changes how many rows arrive per page and the
+crowd is the same crowd. Applied to a **bound** it is a different question answered silently: the
+answer carried no trace of the number the door had substituted, and `?maxScore=1e2` narrowed eight
+leads to the one at zero.
+
+The same two keys are judged differently in the two doors that *store* them. `POST /api/exports`
+accepted every one of these and the worker spoke afterwards:
+
+```
+POST /api/exports {"filterJson":{"minScore":101}}  201 → FAILED  filterJson.minScore must be a whole number from 0 to 100
+POST /api/exports {"filterJson":{"minScore":51.5}} 201 → FAILED  the same sentence
+POST /api/exports {"filterJson":{"maxScore":"50"}} 201 → FAILED  the same sentence
+POST /api/exports {"filterJson":{"minScore":-1}}   201 → FAILED  the same sentence
+POST /api/exports {"filterJson":{"minScore":50,"maxScore":20}}
+                                                   201 → COMPLETED records=0   a delivered empty
+                                                                               file for an
+                                                                               impossible range
+```
+
+and `POST /api/enrichment-rules` refuses the same shape a third way, at the door, in its own
+words: `score asks for at least 80 and at most 20 — no number is both`, `score.gte must be a whole
+number — it is 60.5`, `score.gte is 120 and the column is 0-100`. One number, three grammars, and
+the lead read door had none — while `export-format.ts` called its own key list *"the lead list
+route's own vocabulary"*.
+
+`src/lib/score-range.ts` is that vocabulary now. `wholeScoreProblem(name, value)` is the stored
+filter's existing sentence, unchanged byte for byte (`tests/unit/export-format.test.ts:58` pins it,
+and `readExportFilter` calls this instead of its own `typeof` test); `scoreParam(searchParams,
+name)` is the query side, with three decisions each matching a rule the other read doors already
+make about a filter they honour — **absent or empty names nothing**, **padding is not part of the
+number** (`%2050` and `50%20` are 50, which the base door got by accident through `parseInt` and
+this states on purpose), and **a name given twice is a question with two answers**, refused by name
+and count rather than answered by whichever value `get()` returned first. Anything else — `1e2`,
+`0x32`, `51.5`, `abc`, `101`, `-5` — is a 400 that names the range and echoes the word back.
+`scoreRangeProblem(min, max)` refuses a floor above a ceiling by both numbers, because answered as
+`total=0` that question is indistinguishable from a crowd that really is empty. `page` and `limit`
+still go through `intParam`, unchanged: the fallback rule is right for them, and it is asserted so.
+
+Both bounds are in the contract now — `GET /api/openapi` on this build lists
+`workspaceId, listId, status, minScore, maxScore, page, limit, fields` where the base instance on
+the same rows listed six and contained **zero strings mentioning a score bound** — each saying it
+takes *a whole number from 0 to 100*, and the door's `400` pricing all three ways a bound can be
+wrong.
+
+## Checked against the base build, over the same leads
+
+`:3402` runs the tree carrying these commits; `:3401` still answers from `65bd942` (`r60_after.log`):
+
+```
+minScore=50 / 51 / 0 / 100       200 total=5 / 4 / 8 / 1   →   unchanged, same scores in the same order
+minScore=101 / 500               200 total=1 [100]         →   400 «must be a whole number from 0 to 100, got "101"»
+minScore=51.5                    200 total=4 (51 included) →   400 got "51.5"
+minScore=1e2                     200 total=7               →   400 got "1e2"
+minScore=0x32 / abc / -5         200 total=8               →   400 got "0x32" / "abc" / "-5"
+minScore=%2050 / 50%20 / +50     200 total=5               →   200 total=5, padding and sign read
+minScore=                        200 total=8               →   200 total=8, still no opinion
+minScore=90&minScore=10          200 total=2               →   400 «was given 2 numbers ("90", "10")…»
+maxScore=1e2                     200 total=1 [0]           →   400 got "1e2"
+maxScore=500 / abc / -1          200 total=8               →   400 each
+minScore=50&maxScore=90          200 total=4               →   200 total=4
+minScore=49&maxScore=51          200 total=3               →   200 total=3
+minScore=100&maxScore=100        200 total=1               →   200 total=1 (one lead at exactly 100)
+minScore=80&maxScore=20          200 total=0               →   400 «minScore 80 is above maxScore 20…»
+```
+
+Thirteen legs this round must not have moved are byte-identical across the two builds by md5 over
+canonical JSON: the whole page with no filter, `?status=NEW`, `?fields=email,score`,
+`?page=2&limit=3`, the four page-size fallbacks (`limit=abc`, `limit=10.9`, `limit=1000`, `page=0`,
+`page=abc`), the other tenant's own page, and the sources, jobs and exports lists. The two write
+doors were pressed with the same values on the fix build and answered as before it:
+`{"filterJson":{"minScore":101}}` is still a `201` (its job fails later), and
+`{"minScore":50,"maxScore":20}` is still a `201` that will complete with `records=0`, while
+`POST /api/enrichment-rules` with `conditions.score = {"gte":80,"lte":20}` is the `400` this round
+gave the read door — `score asks for at least 80 and at most 20 — no number is both`.
+
+## Pins
+
+`tests/unit/score-range.test.ts` — 23 tests, offline: the range as the arithmetic's own bounds;
+every whole number in it accepted and every measured value outside it refused; a JSON bound that
+arrives as text refused (the stored filter may not widen: the exporter reads
+`typeof … === "number"`, so a saved `"50"` would be a silently *wider* file); the eight query words
+this door used to read as something else, each with the exact sentence and the word echoed; the
+sign cases (`+50` is 50, `-0` is 0 — the column holds one zero, not two); absent, empty and
+padding-only as *no opinion*; the same number twice as one number; two numbers refused by name and
+count; `scoreRangeProblem` quiet for `100/100` and `0/0` and loud for `80/20`; the stored filter's
+sentence pinned **byte for byte** through `readExportFilter`, so the shared rule cannot reword it;
+both doors' source read back (the door calls `scoreParam` for each bound and `scoreRangeProblem`
+for the pair, returns the refusal before the query, and no longer calls `intParam` on a bound); and
+a census over `src/` — every file naming a score bound either asks this rule (`leads/route.ts`,
+`export-format.ts`, `score-range.ts`) or only obeys what it stored (`exporter.ts`) or is prose
+(`openapi.ts`), with comments stripped first, and any *new* file naming a bound fails the census by
+name.
+
+One existing pin was **retargeted rather than relaxed**: `tests/unit/leads-fields.test.ts` asserted
+`intParam(searchParams, "minScore", 0, 0, 100)` inside this door. The reason is this round's whole
+argument, so the pin now asserts the replacement — `scoreParam` on both bounds and no `intParam`
+fallback on either — while the page-size assertions above it in the same test (`pageParams(searchParams, 50)`,
+one paging decision in the file) are untouched, because that rule stays right for page sizes.
+
+`npm test` **1001/1001** (main's 978 + 23) · `tsc --noEmit` clean · `npm run lint` 0 errors / the 13
+pre-existing warnings · `npm run check:contract` 8/8 · `npm run check:llms-full` unchanged (the deep
+file prints each operation's summary and auth, not its query prose) · build exit 0.
+
+## Said rather than smoothed
+
+- **`POST /api/exports` still stores a bound the worker will refuse.** Measured on the fix build:
+  `{"minScore":101}` is a `201`, then a `FAILED` job. Moving that refusal to the door is #56's open
+  work on the same `filterJson` (it does it for `status`), and this round did not half-do the same
+  lines twice.
+- **A stored contradiction still completes empty.** `{"minScore":50,"maxScore":20}` → `201` →
+  `COMPLETED records=0`. The read door refuses that question; the file door does not yet, for the
+  same reason.
+- **`enrichment-rules` keeps its own three sentences.** They predate this module, they are pinned
+  by name in `rule-conditions.test.ts`, and they are not wrong — a second grammar is worse than a
+  third one nobody asked for. What this round fixed is the door with no grammar at all.
+- **A bound is now refused rather than substituted, which is a breaking change for a caller who
+  sent `1e2`.** On `main`, `git grep minScore` across `src`, `demo`, `docs`, `public` and `README.md`
+  finds five files and no caller: this door, `export-format.ts`, `exporter.ts` (which applies what a
+  stored filter said), `lead-score.ts` (the arithmetic that makes the column 0-100) and the README's
+  endpoint line. Nothing in the repository spells a bound in scientific notation, so the behaviour that
+  changes belongs to an integration that was being handed the wrong crowd and now gets a 400 saying
+  which word.
+  the wrong crowd and now gets a 400 saying which word.
+- **`?minScore=0` is now a real bound (`gte 0`) rather than "no filter"**, which answers the same
+  eight leads either way; `?maxScore=100` likewise. Recorded because a future `score` column that
+  could hold 101 would make those two cases differ.
+- **`listId` and `status` at this door are untouched** — the id belongs to #58 and the enum word to
+  #56, both open, and `?fields=` keeps its own refusal.
+- **Nothing was migrated.** A lead already at 0 or 100 is unaffected; this is about a caller's
+  question.
+- **Published contract copies keep the old document** until rebuilt: the base instance on this box
+  still lists six parameters and no score bound at all.
+- **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
 
 ## Score: one arithmetic, and who may change it
 
