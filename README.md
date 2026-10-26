@@ -1465,6 +1465,98 @@ still refuse the six cadences. The one footprint this round leaves on an earlier
 scheduler named — the same treatment #38 gave STEP 13's refusal list, and for the same reason: a
 pin that agrees with code it no longer describes is quieter than the bug it replaced.
 
+### The same address, in the spelling the caller did not choose
+
+`src/lib/egress.ts` judges an **address**, and every door in this product hands it one through
+`new URL(...)`. That parser rewrites an IPv6 literal into compressed hex on the way, and the
+rewrite is the whole story of #55. Measured on a built `main` with the policy at its documented
+default (no `ABET_ALLOW_PRIVATE_TARGETS`), the same loopback listener was offered to
+`POST /api/webhooks` in eight notations: `http://127.0.0.1:8097/ok` → **400** and
+`http://[::1]:8097/ok` → **400**, while six IPv6 coats of it — `[::ffff:127.0.0.1]`,
+`[::ffff:7f00:1]`, `[0:0:0:0:0:ffff:7f00:1]`, `[::7f00:1]`, `[64:ff9b::7f00:1]`,
+`[2002:7f00:1::]` — were each **stored with 201**. The first of those is the caller's own spelling,
+and what the door kept was the second: the guard's v4-in-v6 branch tested the text of a
+`::ffff:`-prefixed *dotted* tail, and the parser had already turned that tail into two hex groups.
+Four more internal targets arrived coated the same way and were stored the same way — the metadata
+address as `[::ffff:a9fe:a9fe]`, this box's own `10.0.0.82` at `:6379` as `[::ffff:0a00:0052]`, a
+`192.168.4.5` as `[::ffff:c0a8:0405]`, a `100.64.0.1` mesh address as `[::ffff:6440:0001]`, each of
+them a plain internal address the same door refuses written without the coat — and
+`POST /api/sources` took the identical press in its `config.url` with a **201**. The
+metadata row was deleted before a single lead existed, so nothing was ever delivered there; what
+this section claims about it is the door's verdict, not a socket.
+
+Three of the six accepted spellings then put a real signed `lead.created` on the loopback listener
+— an address every write door refuses when it is written the ordinary way — and the other three
+failed at the connect (`TypeError: fetch failed`, `ENETUNREACH` for `2002:7f00:1::`), which is the
+box's routing and not the policy's opinion.
+
+`isInternalV6` now parses the literal into its eight 16-bit groups and judges the IPv4 four forms
+carry inside them: v4-mapped (`::ffff:x:y`, dotted or hex, compressed or expanded), v4-compatible
+(`::x:y`), the NAT64 well-known prefix (`64:ff9b::x:y`) and 6to4 (`2002:x:y::`). A literal that
+does not parse is refused rather than guessed at, in either family. A coat around a *public* IPv4
+stays public — `::ffff:808:808`, `64:ff9b::0808:0808` and `2002:0808:0808::` are 8.8.8.8, and the
+door still stores them — so this is the range table read in the second notation, not a ban on the
+notation. The refusal names both halves, `url must not be an internal address (::ffff:7f00:1 carries
+127.0.0.1)`, because a message that quotes only one of the two strings is a message about a URL the
+caller did not write — and names neither for an address that is internal without carrying anything:
+`http://[::1]:8097/ok` is refused as `(::1)`, not as the `0.0.0.1` the same eight groups also read
+as, because the reason an operator is told has to be the reason the door acted on.
+
+Every press above went through the same doors on the fixed build. The ten coated addresses the base
+run stored are **400** each, the four extra forms the base run never reached (`[::ffff:0a00:0001]`
+for a private-network Redis, `[::ffff:c0a8:0101]`, and the metadata address in the 6to4 and NAT64
+coats) are 400, `[fe80::1]` and `[fd12::1]` are 400 as the ranges they are, and the five public
+coats are **201** with the URL stored verbatim — the same door, the same list, ten rows flipped and
+none of the admissible ones moved. `POST /api/sources` now refuses its `config.url` coated the same
+way, naming `config.url` and both halves. The redirect leg had to be retaken under the documented
+hatch, because after this fix every address reachable on this box is internal and hop 1 can only be
+admitted by saying so: the redirector logged **1 hit `POST` with `Location:
+http://127.0.0.1:8096/stolen`**, the listener behind that Location logged **no hit at all**, and the
+delivery is one line in the app's stdout — `webhook … -> lead.created: 302 Found`. The same boot
+delivered one ordinary signed event to a loopback subscriber and the receiver verified it under
+**both** header spellings (`signatureMatches: true, genericMatches: true`), which is the check that
+the redirect change did not disturb the path that still works; and the hatch said what it let
+through, `allowed despite internal addresses ::ffff:7f00:1`.
+
+The second measured press is the one that did not need a parser to be tricked. A subscription whose
+endpoint answers **302** was pointed at a redirector on `:8097` whose `Location` was
+`http://127.0.0.1:8096/stolen` — the dotted form no door in this product will store, refused in the
+list above. The delivery followed it: the listener on `:8096` logged **1 hit, `GET`, 0 bytes**, the
+body and event id dropped at the hop by the redirect's method change and the `X-Leadworks-Event`
+header carried through. One ask per delivery, and a second address on the wire. The scrape path had
+already learned this — `src/lib/scraper.ts` calls `assertAllowedTarget` once for `config.url` and
+again for every page URL it builds — so the delivery fetch now says `redirect: "manual"` and a 3xx
+is left as the response it is, which is a non-2xx and lands in the same log line a 500 does.
+
+**What that costs a subscriber**: an endpoint that answers a webhook with a redirect no longer
+receives it. Nothing in this family's contract, or nuCRM's `x-webhook-signature` convention, asks
+for a redirectable receiver, and a receiver that needs one is given a `302` in this instance's
+stdout rather than a silent delivery to wherever it points. **What is still owed, and stated in the
+module header**: `classifyTarget` resolves a name, judges every answer, and hands the *name* to
+`fetch`, which resolves again — DNS rebinding across the two lookups is closed only by connecting
+to the address that was checked, which needs a custom agent; and a `page.goto` follows whatever the
+document it loads tells the browser to do, which no check on `config.url` can name in advance.
+**And this module is a copy.** Its header says the family vendors it from `shared/sync-auth.sh`
+into every app, and the shared tree is not on this box, so the five other copies — abetapi's
+dispatch and SSO doors, abetanalytics' alerts, leadgenius' webhooks, abetagent's `http_fetch`,
+abetflow's `http_request` node — carry the same v4-in-v6 hole until the fix is synced back up.
+What is claimed here is one app's door, not the fleet's.
+
+Pinned offline by `tests/unit/egress-v4-in-v6.test.ts` (**20** tests, in a suite of 978 before the
+round and 998 now): the parser's rewrite asserted as the reason a bare-string case was not enough
+(`new URL("http://[::ffff:127.0.0.1]/").hostname` is `[::ffff:7f00:1]`); the ten coated addresses
+above refused through `classifyTarget` in the caller's own label; each of the four carrying forms; a
+cross-check that every v4 range the dotted table refuses is refused in hex too, with the two
+one-past-the-edge addresses (`172.32.0.1`, `100.128.0.1`) staying public on both sides; the
+metadata coat refused at the boundary; unparseable literals refused rather than decoded; a `[::1]`
+refusal that names the v6 loopback rather than the `0.0.0.1` the same eight groups also read as,
+because the decision and the explanation come out of one function and `carries` is printed only when
+the wrapped IPv4 is what made the answer internal; the
+development hatch still carrying a coated address through *and* reporting itself; `assertAllowedTarget`
+throwing with `egressCode: "internal"` so a coated refusal and a dotted one reach a log identically;
+and the delivery source read for its redirect decision — exactly one `fetch`, exactly one
+`redirect:`, the ask before the connect, and the scraper's two asks pinned beside it.
+
 ### What a finished job says it did: the percentage, the denominator, and a record per row
 
 `README`'s own API list has read `GET /api/jobs/{id}  # detail + results` since the first
