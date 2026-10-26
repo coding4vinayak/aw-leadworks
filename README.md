@@ -194,7 +194,9 @@ GET    /api/sources/{id}                   # detail + recent jobs
 POST   /api/sources/{id}?action=run        # launch a scrape now — 400 for an address this
                                            # server will not open, 503 when this instance
                                            # has no browser, and no `Job` row in either case
-GET    /api/jobs?workspaceId=              # list, filter by type/status
+GET    /api/jobs?workspaceId=              # list, filter by type/status; `?sourceId=` is resolved
+                                           # first — an id this workspace does not have is the
+                                           # write door's 422, not an empty page
 GET    /api/jobs/{id}                      # detail + up to 50 per-item results, beside a
                                            # `report` that says whether this row's
                                            # percentage has a denominator to be taken over
@@ -208,7 +210,10 @@ POST   /api/jobs/{id}?action=retry|cancel  # stop it, or restart it: a worker th
 GET    /api/leads?workspaceId=             # list, filter status/minScore; `?fields=` projects each
                                            # row onto the columns named, the same names
                                            # `POST /api/exports` takes `fields` from, and a name
-                                           # that is not a Lead column is a 400, not the page
+                                           # that is not a Lead column is a 400, not the page;
+                                           # `?listId=` is resolved first — an id this workspace
+                                           # does not have is the write door's 422 (see *the read
+                                           # door looks up the row you named*)
 POST   /api/leads                          # create
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
 GET    /api/leads/{id}                     # detail + enrichment log
@@ -224,7 +229,9 @@ GET    /api/enrichment-rules?workspaceId=  # rules
 POST   /api/enrichment-rules               # create; `conditions` and `actions` are both required, and both are read
 PATCH  /api/enrichment-rules/{id}          # change a rule; conditions and actions are re-checked as a pair
 POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appliesTo }
-GET    /api/exports?workspaceId=           # exports
+GET    /api/exports?workspaceId=           # exports; `?profileId=` is resolved first — an id
+                                           # this workspace does not have is the write door's
+                                           # 422, not an empty page
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
 GET    /api/exports/{id}                   # status + download
 POST   /api/exports/{id}?action=retry      # the door's other half: `?action=download` answers a
@@ -2305,6 +2312,135 @@ appearing twice, a score bound and a projection agree on the table's own 12, the
 refuses with are the 25 the list door refuses with, a refusal costs 676 bytes against the 202,711 the
 same ask cost unanswered, and the cleanup leaves 0 crowd leads, 0 members and a 404. The step is
 **29 checks**; the whole LeadWorks demo reads **373 ✓ / 0 ✗, exit 0**.
+
+### A read door looks the row up before it answers "none": `?listId=`, `?sourceId=` and `?profileId=`
+
+Three doors filter by a row the caller names, and none of them looked it up. The column is a
+plain `String` holding an id, so Prisma happily compares it to a string that names nothing —
+and the answer to "your filter points at a row this workspace does not have" came back as the
+answer to "this crowd is empty": `200`, `total=0`, no refusal. Measured on `origin/main`
+(`65bd942`) on the running app before anything was written, in this session's own runtime
+(`:3381`, database `leadworks_r58`, Redis 6397, throwaway worktree) over a crowd sealed
+through the doors themselves — three leads on `list-alpha`, none on `list-beta`, two jobs on
+`src-alpha`, one on `src-beta`, two exports on `profile-alpha`, and a **second tenant** holding
+`list-foreign` / `src-foreign` / `profile-foreign` so that a foreign id is a real row rather
+than an invented string (`/tmp/opencode/r58_measure.log`, `r58_measure_b.log`):
+
+```
+GET  /api/leads?listId=<list-beta, real and empty>     200 total=0   the honest one
+GET  /api/leads?listId=<another tenant's list>         200 total=0   indistinguishable
+GET  /api/leads?listId=nope                            200 total=0   indistinguishable
+GET  /api/leads?listId=%20<real id>                    200 total=0   the padding became the id
+GET  /api/leads?listId=<a>&listId=<b>                  200 total=3   one of the two, silently
+GET  /api/jobs?sourceId=<typo / another tenant's>      200 total=0   same, on Job.sourceId
+GET  /api/jobs?sourceId=%20<real id>                   200 total=0   same, on the padded value
+GET  /api/exports?profileId=<typo / another tenant's>  200 total=0   same, on Export.profileId
+```
+
+The same build refuses every one of those ids at the door that **writes** the reference:
+
+```
+POST /api/jobs    {"sourceId":"nope"}                  422 sourceId is not an id this workspace has: nope
+POST /api/jobs    {"sourceId":<another tenant's>}       422 (same sentence, same unknownIds)
+POST /api/exports {"profileId":"nope"}                  422 profileId is not an id this workspace has: nope
+POST /api/leads   {"listIds":["nope"]}                  422 listIds holds 1 id this workspace does not have: nope
+```
+
+So the door that stores a reference checks it and the door that reads by it does not, and the
+`?fields=` refusal two sections up shows these doors can name a bad argument when they mean
+to. A caller with a stale id in a bookmark — or a space at the end of one — was not told their
+filter was unread. They were told the list, source or profile had no rows in it.
+
+`src/lib/ids.ts` gained `idFilterParam(searchParams, name, exists)`, and the three read doors
+call it before they build their `where`. Three decisions, each taken to match a rule the app
+already runs:
+
+- **absent or empty names nothing.** `?listId=` and no `listId` at all are the whole page, the
+  way `POST /api/jobs` reads a null `sourceId` as "no source" and the way `?status=` is read
+  two sections down. A form whose select was left alone sends exactly that.
+- **padding is not part of the id.** `stringList` trims the entries of `listIds` at the write
+  door, so the read door trims too: `?sourceId=%20<real id>` is now that source's page.
+- **a name given twice is a question with two answers.** `getAll` is read, deduplicated and
+  refused above one — `?listId=<a>&listId=<b>` is a 400 naming and counting both, rather than
+  `<a>`'s page with `<b>` dropped without a word.
+
+An id that does not resolve answers with `unknownIdError` — the write door's own 422, its own
+sentence and its own machine-readable `unknownIds`. That is the point of the shape: the lookup
+is scoped to `workspaceId`, so another tenant's row and a row that exists nowhere leave through
+the same branch, and the sentence says *this workspace does not have* it without naming who
+does. On the fix build, over the same rows and the same keys, the two doors were compared byte
+for byte after canonical JSON (`/tmp/opencode/r58_after_b.log`):
+
+```
+GET  /api/jobs?sourceId=nope                20c5c9ebc093   POST /api/jobs    {"sourceId":"nope"}                20c5c9ebc093
+GET  /api/jobs?sourceId=<another tenant's>  387d854944aa   POST /api/jobs    {"sourceId":<another tenant's>}     387d854944aa
+GET  /api/exports?profileId=nope            a05b69c3c48f   POST /api/exports {"profileId":"nope"}               a05b69c3c48f
+```
+
+`GET /api/leads?listId=nope` shares the status and the `unknownIds` with
+`POST /api/leads {"listIds":["nope"]}` but not the sentence: the body takes a list and says
+`listIds holds 1 id this workspace does not have`, the query takes one id and says `listId is
+not an id this workspace has`. Same 422, same machine-readable field, two grammars.
+
+What changed, and what did not (`r58_after.log`, `r58_after_c.log`; base and fix answering the
+same table at the same moment):
+
+```
+listId=<real, 3 members>            200 total=3        →   200 total=3        (same ids)
+listId=<real, empty list>           200 total=0        →   200 total=0        (still honest)
+listId=%20<real id>                 200 total=0        →   200 total=3        padding trimmed
+listId=nope                         200 total=0        →   422 listId …: "nope"
+listId=<another tenant's>           200 total=0        →   422 (no hint who has it)
+listId=<a>&listId=<b>               200 total=3        →   400 given 2 ids ("a", "b")
+listId= / absent                    200 total=3        →   200 total=3
+the same shapes on jobs?sourceId= (7 legs) and exports?profileId= (6 legs), typed as above
+the other tenant, its own key:      200 total=1 / 1 / 2 →  200 total=1 / 1 / 2   (its rows, still)
+```
+
+Twelve legs this round must not have moved were compared by md5 over canonical JSON and are
+byte-identical across the two builds: the unfiltered pages, `?status=NEW`, `?minScore=50`,
+`?fields=email`, `?type=EXPORT`, `?status=COMPLETED`, `?limit=2&page=2`, a real id on page 2,
+the real-and-empty list, and `profileId=<real>&status=COMPLETED`. The lookup costs one scoped
+`count` when an id is named and no query at all when none is: median `0.0139 s` → `0.0155 s`
+over six presses of `?sourceId=<real>` on this six-job table, and the *refusal* got quicker
+(`0.0128 s` → `0.0089 s`) because it answers before the page is queried (`r58_cost.log`).
+
+`tests/unit/id-filter.test.ts` pins all of it offline — 24 tests: the parse rules, the
+refusal's exact sentence, `idFilterParam`'s 422 asserted **equal to `unknownIdError`'s body**
+rather than merely the same status, a fake table that records what the door looked up (the
+refusal for two ids costs it nothing), each door's own source read back to prove the lookup is
+`where: { workspaceId, id }` scoped and that the raw `searchParams.get("…Id")` is gone, and a
+census over `src/app/api/**/*.ts` — every id-shaped query a door reads is either resolved or
+the workspace the auth layer already decided, which is how `?workspaceId=` is exempt with a
+reason. Against `origin/main`'s three routes the census fails naming all three doors and each
+unresolved name. The contract sentences and the `400`/`422` are pinned too, and the same
+document the tests read is what the build serves: `GET /api/openapi` on `:3382` carries
+*A `sourceId` this workspace does not have, named — the same refusal `POST /api/jobs` gives
+that id in a body.*
+
+Gates on this tree: `npm test` **1002/1002** (main's 978 + 24 new), `npx tsc --noEmit` clean,
+`npm run lint` 0 errors / the 13 pre-existing warnings, `npm run check:contract` 8/8, `npm run
+check:llms-full` unchanged (the deep file renders each operation's summary and auth, and this
+round changed neither), build exit 0.
+
+Not claimed by this round:
+
+- **Two ids is still not an OR.** `?listId=<a>&listId=<b>` is refused rather than answered with
+  both lists' leads; a multi-value reference filter is a feature, not this fix.
+- **`?workspaceId=` is not resolved by this rule.** `authedWorkspaceId` decides between the
+  key's own workspace and a claim it refuses; that door is a different question — which
+  workspace am I answering for — not which row did you mean.
+- **`GET /api/lead-lists`, `/api/sources`, `/api/enrichment-rules` and `/api/webhooks` take no
+  id-shaped filter at all**, so nothing there moved. Their boolean columns are a separate hole:
+  `Source.isActive` and `EnrichmentRule.isActive` are #57's, and `Webhook.isActive` and
+  `ExportProfile.isActive` still have no filter at any door.
+- **The `status`, `type` and `minScore` filters are unchanged here.** The enum words on these
+  same three doors are #56's (`?status=` / `?type=`), which is open and unmerged; this round
+  touches none of them, which is why the twelve md5 legs include them.
+- **Nothing was migrated.** A row already carrying a `sourceId` or `profileId` that points
+  nowhere was invisible to these filters before and is invisible now; the refusal is about a
+  caller's question, not about stored data.
+- **Published copies of the contract keep the old sentence** until this is built and served.
 
 ## Score: one arithmetic, and who may change it
 
