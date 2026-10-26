@@ -26,7 +26,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { collectHandlers, countCodeMentions, schemaArgs, unresolvedTailCalls } from "./route-handlers";
+import { blankComments, collectHandlers, countCodeMentions, schemaArgs, unresolvedTailCalls } from "./route-handlers";
 import * as FIELDS from "../../src/lib/fields";
 import * as ENUMS from "../../src/lib/enums";
 
@@ -88,7 +88,7 @@ test("a route validates against a declared table, never an inline one", () => {
   assert.deepEqual(offenders, [], `validate calls with no table in lib/fields:\n  ${offenders.join("\n  ")}`);
 });
 
-test("every declared table is used by a route, and every enum set by a table", () => {
+test("every declared table is used by a route, and every enum set is checked by a table or a filter", () => {
   // `LEAD_EXPORT_FIELDS` is a value list another table reads (`fields: { values:
   // LEAD_EXPORT_FIELDS }`), so it is used from inside fields.ts rather than from
   // a route. Either counts; nothing counts by being mentioned in a comment.
@@ -99,8 +99,33 @@ test("every declared table is used by a route, and every enum set by a table", (
   );
   assert.deepEqual(unusedTables, [], `tables in lib/fields nothing uses — delete them or wire them:\n  ${unusedTables.join("\n  ")}`);
 
-  const unusedEnums = Object.keys(ENUMS).filter((name) => countCodeMentions(fieldSource, name) === 0);
-  assert.deepEqual(unusedEnums, [], `enum sets no field table checks against:\n  ${unusedEnums.join("\n  ")}`);
+  // Retargeted by #56, which declared `EXPORT_STATUSES` for a reader rather than a
+  // writer: `Export.status` is written only by the worker (`PENDING` at the door,
+  // `PROCESSING` and the finish in `exporter.ts`), so no field table takes the
+  // word and the census failed the new set for the same reason it would pass a
+  // dead one. The rule is that a declared vocabulary is *consulted*, and since
+  // this round there is a second place a vocabulary gets consulted: a read door's
+  // filter. So a set counts when a field table validates against it or when a
+  // `filterParam`/`filterWordProblem` call names it as the words to judge against.
+  // Prose still counts for nothing — the call arguments are read out of blanked
+  // source — and a set with neither use is still the failure this test was written
+  // to catch.
+  const judged = [...ROUTE_FILES, "src/lib/export-format.ts"]
+    .map((file) => blankComments(routeSource(file)))
+    .flatMap((code) => [...code.matchAll(/filter(?:Param|WordProblem)\s*\(([^)]*)\)/g)].map((call) => call[1]));
+  // The widening is only honest if the scan finds the filters it says it finds.
+  assert.deepEqual(
+    ["EXPORT_STATUSES", "JOB_STATUSES", "JOB_TYPES", "LEAD_STATUSES"].filter(
+      (name) => !judged.some((args) => new RegExp(`\\b${name}\\b`).test(args)),
+    ),
+    [],
+    "the read doors judge these four sets — if this names one, the scan went blind",
+  );
+  const unusedEnums = Object.keys(ENUMS).filter(
+    (name) => countCodeMentions(fieldSource, name) === 0
+      && !judged.some((args) => new RegExp(`\\b${name}\\b`).test(args)),
+  );
+  assert.deepEqual(unusedEnums, [], `enum sets no field table and no read-door filter consults:\n  ${unusedEnums.join("\n  ")}`);
 });
 
 /**
