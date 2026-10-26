@@ -2347,17 +2347,19 @@ POST /api/leads   {"listIds":["nope"]}                  422 listIds holds 1 id t
 ```
 
 So the door that stores a reference checks it and the door that reads by it does not, and the
-`?fields=` refusal two sections up shows these doors can name a bad argument when they mean
-to. A caller with a stale id in a bookmark — or a space at the end of one — was not told their
-filter was unread. They were told the list, source or profile had no rows in it.
+`?fields=` refusal in the section just above shows these doors can name a bad argument when
+they mean to. A caller with a stale id in a bookmark — or a space at the end of one — was not
+told their filter was unread. They were told the list, source or profile had no rows in it.
 
 `src/lib/ids.ts` gained `idFilterParam(searchParams, name, exists)`, and the three read doors
 call it before they build their `where`. Three decisions, each taken to match a rule the app
 already runs:
 
 - **absent or empty names nothing.** `?listId=` and no `listId` at all are the whole page, the
-  way `POST /api/jobs` reads a null `sourceId` as "no source" and the way `?status=` is read
-  two sections down. A form whose select was left alone sends exactly that.
+  way `?fields=` absent is the whole row (that section's own sentence) and the way this build
+  stores a `POST /api/jobs` that never mentions a source — three of the six jobs workspace A
+  holds arrived with a null `sourceId`, and its unfiltered job page answers all six. A form
+  whose select was left alone sends exactly that.
 - **padding is not part of the id.** `stringList` trims the entries of `listIds` at the write
   door, so the read door trims too: `?sourceId=%20<real id>` is now that source's page.
 - **a name given twice is a question with two answers.** `getAll` is read, deduplicated and
