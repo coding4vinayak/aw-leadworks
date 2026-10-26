@@ -1,3 +1,5 @@
+import { EXPORT_STATUSES, JOB_STATUSES, JOB_TYPES, LEAD_STATUSES } from "./enums";
+import { EXPORT_FILTER_KEYS } from "./export-format";
 import { VERSION } from "./version";
 
 /**
@@ -123,12 +125,15 @@ const PATHS: Record<string, PathItem> = {
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["listId", "Only the leads on one list."],
-        ["status", "One lead status."],
+        ["status", `One lead status, spelled as the column spells it: ${LEAD_STATUSES.join(" | ")}. Spaces around it trim; a lower-case word, two words or a comma-joined pair is refused rather than answered with an empty page.`],
         ["page", "1-based page number."],
         ["limit", "Page size; it caps at 100."],
         ["fields", "Comma-separated Lead columns to project each row onto — the same names Export.fields takes. Absent means the whole row, its list memberships and its counts."],
       ],
-      responses: { "200": "The leads, with a total.", "400": "A `fields` entry that is not a Lead column, or names nothing." },
+      responses: {
+        "200": "The leads, with a total.",
+        "400": "A `fields` entry that is not a Lead column, or names nothing; or a `status` that is not exactly one word of the set above.",
+      },
     },
     post: {
       id: "leads.create",
@@ -396,13 +401,16 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["type", "One job type."],
-        ["status", "One job status."],
+        ["type", `One job type: ${JOB_TYPES.join(" | ")}. Judged exactly as \`POST /api/jobs\` judges it — \`scrape\` is a 400 at both doors now.`],
+        ["status", `One job status: ${JOB_STATUSES.join(" | ")}.`],
         ["sourceId", "Only one source's jobs."],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
-      responses: { "200": "The jobs, with a total." },
+      responses: {
+        "200": "The jobs, with a total.",
+        "400": "A `type` or `status` that is not exactly one word of the set named above.",
+      },
     },
     post: {
       id: "jobs.create",
@@ -538,11 +546,14 @@ const PATHS: Record<string, PathItem> = {
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["profileId", "Only one profile's exports."],
-        ["status", "One export status."],
+        ["status", `One export status: ${EXPORT_STATUSES.join(" | ")}. \`RUNNING\` is a job word, not an export one.`],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
-      responses: { "200": "The exports, with a total." },
+      responses: {
+        "200": "The exports, with a total.",
+        "400": "A `status` that is not exactly one word of the set named above.",
+      },
     },
     post: {
       id: "exports.create",
@@ -554,11 +565,15 @@ const PATHS: Record<string, PathItem> = {
         properties: {
           format: { type: "string", description: "One of the export formats — upper-cased at the door, because the exporter switches on the exact word.", required: true },
           fields: { type: "array", description: "Lead's columns the file renders — a name that is not a column renders empty.", required: true },
-          filterJson: { type: "object", description: "Which leads." },
+          filterJson: { type: "object", description: `Which leads — ${EXPORT_FILTER_KEYS.join(", ")}. A \`status\` here is one Lead word (${LEAD_STATUSES.join(" | ")}); a word the column never holds is refused at the door instead of delivered as a COMPLETED file with no rows in it.` },
           profileId: { type: "string", description: "A saved export profile, if you keep one." },
         },
       },
-      responses: { "201": "The export, PENDING, with the id of the job that will fill it.", "503": QUEUE_REFUSED },
+      responses: {
+        "201": "The export, PENDING, with the id of the job that will fill it.",
+        "400": "A format or column list the field table refuses, a `profileId` this workspace does not have, or a `filterJson` that names a crowd no Lead column can hold.",
+        "503": QUEUE_REFUSED,
+      },
     },
   },
   "/api/exports/{id}": {

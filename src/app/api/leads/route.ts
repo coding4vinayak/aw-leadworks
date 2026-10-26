@@ -6,6 +6,8 @@ import { asStrings, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
 import { LEAD_CREATE, LEAD_FIELD_PICK, type LeadExportField } from "@/lib/fields";
 import { fieldsParam, leadSelect } from "@/lib/list-fields";
+import { filterParam } from "@/lib/list-filter";
+import { LEAD_STATUSES } from "@/lib/enums";
 import { scoredWriteData } from "@/lib/lead-score";
 import { dispatchWebhookEvent } from "@/lib/webhooks";
 
@@ -15,14 +17,19 @@ async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
   const listId = searchParams.get("listId");
-  const status = searchParams.get("status");
+  // The same door already refuses `?fields=nonsense` by name and accepts
+  // `?status=nonsense` as a filter that matches nothing. `status` is the column
+  // `PATCH /api/leads/{id}` validates against `LEAD_STATUSES`, so the filter is
+  // judged by that table now too — see `lib/list-filter.ts`.
+  const status = filterParam(searchParams, "status", LEAD_STATUSES);
+  if (status.error) return status.error;
   const minScore = intParam(searchParams, "minScore", 0, 0, 100);
   const maxScore = intParam(searchParams, "maxScore", 100, 0, 100);
   const { page, limit } = pageParams(searchParams, 50);
 
   const where: any = { workspaceId };
   if (listId) where.listMemberships = { some: { listId } };
-  if (status) where.status = status;
+  if (status.value) where.status = status.value;
   if (minScore > 0) where.score = { ...where.score, gte: minScore };
   if (maxScore < 100) where.score = { ...where.score, lte: maxScore };
 
