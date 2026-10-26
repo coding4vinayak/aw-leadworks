@@ -98,23 +98,104 @@ function isInternalV4(ip: string): boolean {
   return false;
 }
 
-function isInternalV6(ip: string): boolean {
-  const lower = ip.toLowerCase();
-  if (lower === "::1") return true;                    // loopback
-  if (lower === "::" || lower === "0:0:0:0:0:0:0:0") return true; // unspecified
-  if (/^::ffff:/.test(lower) || /^::/.test(lower)) {
-    // v4-mapped (and the compat form): judge the IPv4 inside it, because a wall that
-    // reads `::ffff:127.0.0.1` as public is a wall with a door in it.
-    const tail = lower.replace(/^::ffff:/, "").replace(/^:*/, "");
-    if (octets(tail)) return isInternalV4(tail);
+/**
+ * The eight 16-bit groups of an IPv6 literal, or `null` when it does not parse.
+ *
+ * Written out rather than borrowed because the answer this file needs is the group
+ * vector, not a string: four IPv6 forms carry an IPv4 address inside them, and none
+ * of them can be recognised by a prefix test on the text once a URL parser has had
+ * its say (`new URL("http://[::ffff:127.0.0.1]/").hostname` is
+ * `[::ffff:7f00:1]` — the same address, in the one spelling the text test never saw).
+ * A trailing dotted quad is accepted and folded into the last two groups.
+ */
+function v6Groups(ip: string): number[] | null {
+  let work = ip;
+  const dotted = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(work);
+  if (dotted) {
+    const n = octets(dotted[1]);
+    if (!n) return null;
+    const hi = (n[0] << 8) | n[1];
+    const lo = (n[2] << 8) | n[3];
+    work = work.slice(0, dotted.index) + hi.toString(16) + ":" + lo.toString(16);
   }
-  const head = lower.split(":")[0] ?? "";
-  const word = head === "" ? 0 : parseInt(head, 16);
-  if (Number.isNaN(word)) return true;                 // not a parseable v6 literal
-  if ((word & 0xfe00) === 0xfc00) return true;         // fc00::/7 unique-local
-  if ((word & 0xffc0) === 0xfe80) return true;         // fe80::/10 link-local
-  if ((word & 0xffc0) === 0x2000 && (word & 0x0002) === 0) return false; // documentation, public
-  return false;
+
+  const words = (run: string): number[] | null => {
+    if (run === "") return [];
+    const out: number[] = [];
+    for (const part of run.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+      out.push(parseInt(part, 16));
+    }
+    return out;
+  };
+
+  const halves = work.split("::");
+  if (halves.length > 2) return null;
+  if (halves.length === 1) {
+    const all = words(work);
+    return all && all.length === 8 ? all : null;
+  }
+  const head = words(halves[0] ?? "");
+  const tail = words(halves[1] ?? "");
+  if (!head || !tail) return null;
+  const gap = 8 - head.length - tail.length;
+  if (gap < 1) return null; // `::` stands for at least one zero group, or the literal is a lie
+  return [...head, ...Array.from({ length: gap }, () => 0), ...tail];
+}
+
+/**
+ * The IPv4 an IPv6 literal carries, when its form is one that carries one.
+ *
+ * Four forms do, and #55 measured all four arriving at a write door on this box,
+ * each of them handed to `fetch` as a public address while the dotted spelling of
+ * the same target was refused: v4-mapped (`::ffff:x:y`, and the expanded
+ * `0:0:0:0:0:ffff:x:y`), v4-compatible (`::x:y`), the NAT64 well-known prefix
+ * (`64:ff9b::x:y`) and 6to4 (`2002:x:y::`). `::ffff:127.0.0.1` was already judged
+ * here; what was not, is the address after the URL parser has normalised it, and the
+ * parser normalises every one of them.
+ *
+ * Judging the embedded address is not a v6 blanket ban: `::ffff:8.8.8.8` and
+ * `2002:0808:0808::` carry a public IPv4 and stay public, exactly as the dotted form
+ * does. A form that carries nothing falls through to the v6 ranges below.
+ */
+function embeddedV4(groups: number[]): string | null {
+  const zeros = (from: number, to: number) => groups.slice(from, to).every((g) => g === 0);
+  const quad = (hi: number, lo: number) => `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  if (zeros(0, 5) && groups[5] === 0xffff) return quad(groups[6], groups[7]); // v4-mapped
+  if (zeros(0, 6)) return quad(groups[6], groups[7]); // v4-compatible
+  if (groups[0] === 0x0064 && groups[1] === 0xff9b && zeros(2, 6)) return quad(groups[6], groups[7]); // NAT64, 64:ff9b::/96
+  if (groups[0] === 0x2002) return quad(groups[1], groups[2]); // 6to4, 2002::/16
+  return null;
+}
+
+/**
+ * Why a v6 literal is internal, as the address the refusal should name: the literal
+ * itself when it sits in a v6 range, the wrapped IPv4 when a carrying prefix is what
+ * makes it internal. `null` is public.
+ *
+ * The decision and the explanation come out of one function because #55's first draft
+ * split them: `[::1]` was refused for being the v6 loopback while the message printed
+ * the v4-compatible reading of the same eight groups, `0.0.0.1`, sending an operator to
+ * chase an address nobody wrote.
+ */
+function internalV6(ip: string): string | null {
+  const lower = ip.toLowerCase();
+  if (lower === "::1") return lower;                    // loopback
+  if (lower === "::" || lower === "0:0:0:0:0:0:0:0") return lower; // unspecified
+  const groups = v6Groups(lower);
+  if (!groups) return lower;                            // not a parseable v6 literal: refuse, do not guess
+  const word = groups[0];
+  if ((word & 0xfe00) === 0xfc00) return lower;         // fc00::/7 unique-local
+  if ((word & 0xffc0) === 0xfe80) return lower;         // fe80::/10 link-local
+  const inside = embeddedV4(groups);
+  // An IPv4 wearing a v6 coat is still that IPv4 — including the coat a URL parser
+  // puts on it between the caller's string and this function.
+  if (inside) return isInternalV4(inside) ? inside : null;
+  return null; // 2001:db8:: documentation, 2000::/3 aggregator space, everything else: public
+}
+
+function isInternalV6(ip: string): boolean {
+  return internalV6(ip) !== null;
 }
 
 /** Every internal reason a URL can fail, in the order a caller can act on them. */
@@ -204,7 +285,9 @@ function isIpAddress(host: string): boolean {
 }
 
 function internalRefusal(label: string, addr: string, host?: string): string {
-  const where = host && host !== addr ? `${host} resolves to ${addr}` : addr;
+  const carried = addr.includes(":") ? internalV6(addr) : null;
+  const named = carried && carried !== addr ? `${addr} carries ${carried}` : addr;
+  const where = host && host !== addr ? `${host} resolves to ${named}` : named;
   return `${label} must not be an internal address (${where}). This server requests the address you name, so a target on its own network, a VPN mesh or the cloud metadata address is a request you could not make yourself. Set ${ALLOW_PRIVATE_ENV}=1 in a development checkout to allow it.`;
 }
 
