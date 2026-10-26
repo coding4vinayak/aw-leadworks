@@ -124,7 +124,7 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["listId", "Only the leads on one list."],
+        ["listId", "Only the leads on one list — an id this workspace does not have is refused, not answered with an empty page."],
         ["status", `One lead status, spelled as the column spells it: ${LEAD_STATUSES.join(" | ")}. Spaces around it trim; a lower-case word, two words or a comma-joined pair is refused rather than answered with an empty page.`],
         ["page", "1-based page number."],
         ["limit", "Page size; it caps at 100."],
@@ -132,7 +132,8 @@ const PATHS: Record<string, PathItem> = {
       ],
       responses: {
         "200": "The leads, with a total.",
-        "400": "A `fields` entry that is not a Lead column, or names nothing; or a `status` that is not exactly one word of the set above.",
+        "400": "A `fields` entry that is not a Lead column, or names nothing; a `listId` given two ids at once; or a `status` that is not exactly one word of the set above.",
+        "422": "A `listId` this workspace does not have, named — the same refusal `POST /api/leads` gives that id in a body.",
       },
     },
     post: {
@@ -407,13 +408,14 @@ const PATHS: Record<string, PathItem> = {
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["type", `One job type: ${JOB_TYPES.join(" | ")}. Judged exactly as \`POST /api/jobs\` judges it — \`scrape\` is a 400 at both doors now.`],
         ["status", `One job status: ${JOB_STATUSES.join(" | ")}.`],
-        ["sourceId", "Only one source's jobs."],
+        ["sourceId", "Only one source's jobs — an id this workspace does not have is refused, not answered with an empty page."],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
       responses: {
         "200": "The jobs, with a total.",
-        "400": "A `type` or `status` that is not exactly one word of the set named above.",
+        "400": "A `type` or `status` that is not exactly one word of the set named above; or a `sourceId` given two ids at once.",
+        "422": "A `sourceId` this workspace does not have, named — the same refusal `POST /api/jobs` gives that id in a body.",
       },
     },
     post: {
@@ -549,14 +551,15 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["profileId", "Only one profile's exports."],
+        ["profileId", "Only one profile's exports — an id this workspace does not have is refused, not answered with an empty page."],
         ["status", `One export status: ${EXPORT_STATUSES.join(" | ")}. \`RUNNING\` is a job word, not an export one.`],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
       responses: {
         "200": "The exports, with a total.",
-        "400": "A `status` that is not exactly one word of the set named above.",
+        "400": "A `status` that is not exactly one word of the set named above; or a `profileId` given two ids at once.",
+        "422": "A `profileId` this workspace does not have, named — the same refusal `POST /api/exports` gives that id in a body.",
       },
     },
     post: {
