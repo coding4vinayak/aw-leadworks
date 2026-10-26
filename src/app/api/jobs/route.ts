@@ -5,6 +5,8 @@ import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { JOB_CREATE } from "@/lib/fields";
 import { unknownIdError } from "@/lib/ids";
+import { filterParam } from "@/lib/list-filter";
+import { JOB_STATUSES, JOB_TYPES } from "@/lib/enums";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
 
 export const dynamic = "force-dynamic";
@@ -13,15 +15,21 @@ async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
   const sourceId = searchParams.get("sourceId");
-  const type = searchParams.get("type");
-  const status = searchParams.get("status");
+  // `type` and `status` are the two columns this door filters on and the two the
+  // write doors refuse a wrong word for — `POST /api/jobs {type:"scrape"}` is a
+  // 400 naming all five. Read straight into the `where`, `?type=scrape` was a 200
+  // with an empty page. See `lib/list-filter.ts`.
+  const type = filterParam(searchParams, "type", JOB_TYPES);
+  if (type.error) return type.error;
+  const status = filterParam(searchParams, "status", JOB_STATUSES);
+  if (status.error) return status.error;
   const { page, limit } = pageParams(searchParams, 20);
 
 
   const where: any = { workspaceId };
   if (sourceId) where.sourceId = sourceId;
-  if (type) where.type = type;
-  if (status) where.status = status;
+  if (type.value) where.type = type.value;
+  if (status.value) where.status = status.value;
 
   const [jobs, total] = await Promise.all([
     prisma.job.findMany({

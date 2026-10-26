@@ -41,3 +41,15 @@ export const LEAD_STATUSES = ["NEW", "ENRICHED", "QUALIFIED", "CONTACTED", "CONV
 export const RULE_TRIGGERS = ["ON_CREATE", "ON_UPDATE", "SCHEDULED", "MANUAL"] as const;
 /** Export.format — `ExportProfile.format` carries the same set. */
 export const EXPORT_FORMATS = ["CSV", "JSON", "XLSX", "PDF"] as const;
+/**
+ * Export.status. Not listed by the paragraph above's rule ("only the sets a write
+ * route takes"), because no route writes it: `POST /api/exports` stores PENDING,
+ * `exporter.ts` moves the row through PROCESSING to COMPLETED or FAILED, and
+ * `exports/[id]` writes PENDING again on a retry. It is declared here because
+ * #56 measured a *reader* that takes the word from a query string —
+ * `GET /api/exports?status=` filtered the column against any word at all — and a
+ * reader needs the same vocabulary the writers use. Transcribed from the schema
+ * comment and pinned to it by `tests/unit/list-filter.test.ts`, the way
+ * `RESULT_STATUSES` is pinned in `job-report.ts`.
+ */
+export const EXPORT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "FAILED"] as const;

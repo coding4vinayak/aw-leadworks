@@ -5,6 +5,9 @@
 // the rules that decide what a customer receives are pinned here instead, in
 // tests that need no Redis and no database.
 
+import { LEAD_STATUSES } from "./enums";
+import { filterWordProblem } from "./list-filter";
+
 /** The filter keys an export accepts — the lead list route's own vocabulary. */
 export const EXPORT_FILTER_KEYS = ["status", "minScore", "maxScore", "listId", "tags"] as const;
 
@@ -36,6 +39,17 @@ export function readExportFilter(raw: unknown): Record<string, unknown> {
   if (status !== undefined && typeof status !== "string") {
     throw new Error("filterJson.status must be a string");
   }
+  if (typeof status === "string") {
+    // A word the column never holds is not a narrower crowd, it is no crowd.
+    // Measured on the running app, `{"status":"ACTIVE"}` and `{"status":"qualified"}`
+    // were both a 201 that settled as `COMPLETED records=0 bytes=0` — a delivered
+    // file with nothing in it and no refusal anywhere — while the identical body
+    // at `POST /api/lead-lists` is a 400 naming the set. One vocabulary, one
+    // sentence: this is `filterWordProblem` with the table `conditionsProblem`
+    // already uses for a rule's or a list's `status`.
+    const problem = filterWordProblem("filterJson.status", status, LEAD_STATUSES);
+    if (problem !== null) throw new Error(problem);
+  }
   for (const [key, value] of [["minScore", minScore], ["maxScore", maxScore]] as const) {
     if (value === undefined) continue;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 100) {
@@ -51,6 +65,25 @@ export function readExportFilter(raw: unknown): Record<string, unknown> {
     }
   }
   return filter;
+}
+
+/**
+ * The same rules, asked before anything is written rather than while the file is.
+ *
+ * `POST /api/exports` never read its own `filterJson`: measured on the running
+ * app, `{"status":"ACTIVE"}` was a 201 that settled as `COMPLETED records=0
+ * bytes=0` — a delivered file with nothing in it, reported as a finished export —
+ * and `{"temperature":"hot"}` was a 201 that settled as a FAILED job two seconds
+ * later. The door that stores "the crowd I mean" and the reader that walks it now
+ * ask one question, so both answers arrive as a 400 at the boundary.
+ */
+export function exportFilterProblem(raw: unknown): string | null {
+  try {
+    readExportFilter(raw);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 /** One cell value for a file: arrays join, objects serialize, null is empty. */
