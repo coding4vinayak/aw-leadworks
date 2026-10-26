@@ -4,6 +4,7 @@
 // Kept out of `exporter.ts` on purpose: exporter.ts pulls the queue module, so
 // the rules that decide what a customer receives are pinned here instead, in
 // tests that need no Redis and no database.
+import { wholeScoreProblem } from "./score-range";
 
 import { LEAD_STATUSES } from "./enums";
 import { filterWordProblem } from "./list-filter";
@@ -70,8 +71,11 @@ export function readExportFilter(raw: unknown): Record<string, unknown> {
   }
   for (const [key, value] of [["minScore", minScore], ["maxScore", maxScore]] as const) {
     if (value === undefined) continue;
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 100) {
-      throw new Error(`filterJson.${key} must be a whole number from 0 to 100`);
+    // The sentence is `score-range.ts`'s, because the lead read door takes the same two bounds
+    // off a query string and must not answer a different rule for the same number.
+    const problem = wholeScoreProblem(`filterJson.${key}`, value);
+    if (problem !== null) {
+      throw new Error(problem);
     }
   }
   if (listId !== undefined && typeof listId !== "string") {
