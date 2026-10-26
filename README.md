@@ -194,7 +194,9 @@ GET    /api/sources/{id}                   # detail + recent jobs
 POST   /api/sources/{id}?action=run        # launch a scrape now — 400 for an address this
                                            # server will not open, 503 when this instance
                                            # has no browser, and no `Job` row in either case
-GET    /api/jobs?workspaceId=              # list, filter by type/status
+GET    /api/jobs?workspaceId=              # list, filter by type/status — one word each,
+                                           # spelled as the column spells it (see *a filter
+                                           # word is not a crowd*)
 GET    /api/jobs/{id}                      # detail + up to 50 per-item results, beside a
                                            # `report` that says whether this row's
                                            # percentage has a denominator to be taken over
@@ -205,7 +207,9 @@ POST   /api/jobs/{id}?action=retry|cancel  # stop it, or restart it: a worker th
                                            # row carrying that mark is one `?action=retry` may
                                            # be taken from, which makes a new job over the
                                            # crowd the stopped one's config names
-GET    /api/leads?workspaceId=             # list, filter status/minScore; `?fields=` projects each
+GET    /api/leads?workspaceId=             # list, filter status/minScore; `?status=` is one
+                                           # `LEAD_STATUSES` word and a wrong one is a 400 that
+                                           # names the set; `?fields=` projects each
                                            # row onto the columns named, the same names
                                            # `POST /api/exports` takes `fields` from, and a name
                                            # that is not a Lead column is a 400, not the page
@@ -224,8 +228,11 @@ GET    /api/enrichment-rules?workspaceId=  # rules
 POST   /api/enrichment-rules               # create; `conditions` and `actions` are both required, and both are read
 PATCH  /api/enrichment-rules/{id}          # change a rule; conditions and actions are re-checked as a pair
 POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appliesTo }
-GET    /api/exports?workspaceId=           # exports
-POST   /api/exports                        # export to CSV/JSON/XLSX/PDF
+GET    /api/exports?workspaceId=           # list, filter by status — the four words an Export
+                                           # row holds, not the five a Job row holds
+POST   /api/exports                        # export to CSV/JSON/XLSX/PDF; a `filterJson.status`
+                                           # no Lead column can hold is refused before the row
+                                           # exists, not delivered as an empty file
 GET    /api/exports/{id}                   # status + download
 POST   /api/exports/{id}?action=retry      # the door's other half: `?action=download` answers a
                                            # URL only while the row names bytes that are there,
@@ -245,9 +252,6 @@ Duplicates merge on email, phone, LinkedIn or fuzzy name match — the most
 complete record wins and nothing is silently dropped. Exports land in
 CSV, JSON, XLSX or PDF with scheduled profiles for weekly drops, and every finished
 export carries the date its own download door closes (`EXPORT_RETENTION_MS`, seven
-days by default); one sweep minute after that date the file itself is gone — see *How long
-an export's file answers*.
-days by default — see *How long an export's file answers*).
 days by default); one sweep minute after that date the file itself is gone, and deleting the
 record takes the file with it in the same request — see *How long an export's file answers* and
 the two sections after it.
@@ -2305,6 +2309,201 @@ appearing twice, a score bound and a projection agree on the table's own 12, the
 refuses with are the 25 the list door refuses with, a refusal costs 676 bytes against the 202,711 the
 same ask cost unanswered, and the cleanup leaves 0 crowd leads, 0 members and a 404. The step is
 **29 checks**; the whole LeadWorks demo reads **373 ✓ / 0 ✗, exit 0**.
+
+### A filter word is not a crowd: the read doors say which words the column holds
+
+Four query-string filters and one stored filter took a word for an enum column straight off the
+request and handed it to Prisma. The column is a `String` with a vocabulary in a comment, so nothing
+between the caller and the database knew whether the word was one the column can hold. A mistyped
+filter and a crowd that really is empty were the same answer — `200`, `total=0`, no refusal. Measured
+on the running app before this round, in this round's own runtime (`:3361` over database
+`leadworks_r56`, `/tmp/opencode/r56_measure.log`, `r56_measure_c.log`, `r56_measure_d.log`) against
+six leads seeded one per `Lead.status` word, the five job types queued through `POST /api/jobs` and
+one completed CSV export — so the export rows below were answering a table that genuinely held no
+`PENDING` or `PROCESSING` row, which is exactly why an empty page was indistinguishable from a wrong
+word:
+
+```
+GET /api/leads?status=NEW                    200 total=1
+GET /api/leads?status=new                    200 total=0      — the same lead, asked in lower case
+GET /api/leads?status=New                    200 total=0
+GET /api/leads?status=NEW%20                 200 total=0      — the padding became the word
+GET /api/leads?status=%20NEW                 200 total=0
+GET /api/leads?status=NEW,ENRICHED           200 total=0      — a comma is not an OR
+GET /api/leads?status=NEW&status=ENRICHED    200 total=1      — one of the two, silently
+GET /api/leads?status=ACTIVE                 200 total=0      — a word no column holds
+GET /api/leads?status=DONE                   200 total=0      — the value PATCH refuses by name
+GET /api/leads?status=PROCESSING             200 total=0      — an Export word, asked of a Lead
+GET /api/leads?status=null                   200 total=0
+GET /api/leads?status=                       200 total=6      — nothing named, everything returned
+
+GET /api/jobs?type=SCRAPE                    200 total=1
+GET /api/jobs?type=scrape                    200 total=0      — POST /api/jobs calls this a 400
+GET /api/jobs?type=BOGUS                     200 total=0
+GET /api/jobs?status=pending                 200 total=0
+GET /api/jobs?status=PROCESSING              200 total=0      — an Export word, asked of a Job
+GET /api/jobs?status=PENDING&status=FAILED   200 total=2      — the PENDING rows, the FAILED lost
+GET /api/jobs?status=PENDING,FAILED          200 total=0
+
+GET /api/exports?status=COMPLETED            200 total=1      (9 rows later: total=9)
+GET /api/exports?status=completed            200 total=0
+GET /api/exports?status=RUNNING              200 total=0      — a Job word, asked of an Export
+GET /api/exports?status=PROCESSING           200 total=0      — a real Export word, declared nowhere
+GET /api/exports?status=CANCELLED            200 total=0      — also a Job word
+```
+
+The same three doors already refuse a wrong `?fields=` name, a wrong `sourceId` and a wrong body word
+by printing the whole vocabulary — `?fields=nonsense` was a 400 naming 25 column names on the door
+whose `status` filter answered `200 total=0` — and the write doors had the sentence this round needed:
+
+```
+PATCH /api/leads/{id} {status:"DONE"}   400 status must be one of NEW | ENRICHED | QUALIFIED | CONTACTED | CONVERTED | REJECTED, got "DONE"
+PATCH /api/jobs/{id}  {status:"DONE"}   400 status must be one of PENDING | RUNNING | COMPLETED | FAILED | CANCELLED, got "DONE"
+POST  /api/jobs       {type:"scrape"}   400 type must be one of SCRAPE | ENRICH | EXPORT | DEDUPE | VALIDATE, got "scrape"
+```
+
+The fifth surface was worse than an empty page. `Export.filterJson` is the crowd the file renders, and
+the worker compares it with the same exactness — so the word went in unjudged at the door and came
+back as a *delivered file*:
+
+```
+POST /api/exports {"filterJson":{"status":"QUALIFIED"}}   201 → COMPLETED records=1  bytes=70
+POST /api/exports {"filterJson":{"status":"qualified"}}   201 → COMPLETED records=0  bytes=0
+POST /api/exports {"filterJson":{"status":"ACTIVE"}}      201 → COMPLETED records=0  bytes=0
+POST /api/exports {"filterJson":{"status":"RUNNING"}}     201 → COMPLETED records=0  bytes=0
+```
+
+An export that succeeded, at `records=0`, with a 0-byte file at the end of it and a `200` at every
+door that reads the row. The identical body at `POST /api/lead-lists` was a 400 naming the set.
+
+Three behaviours meet at these columns and this round left two of them alone. A word outside the set
+is **refused** by every write route that validates (`LEAD_PATCH.status`, `JOB_PATCH.status`,
+`JOB_CREATE.type`, `RULE_TRIGGERS`); a word of the wrong case is **folded** by the rule and list
+doors — `POST /api/enrichment-rules {conditions:{status:"new"}}` was a `201` that stored `NEW`, and
+`POST /api/lead-lists {filterJson:{status:"qualified"}}` a `201` — and a word of any shape was
+**ignored** by the five places above, which is the hole this round closes. `src/lib/list-filter.ts` is
+the new helper: `filterParam(searchParams, name, words)` reads every value of the parameter with
+`getAll`, trims, drops the empties, dedupes, and either hands the door one checked word or answers the
+sentence the write routes already speak. Three decisions, each taken to match a rule the app already
+runs: padding is not part of the word (so `?fields=%20email%20` projects `email`, and `?status=%20NEW`
+is `NEW`); an empty value names nothing and returns the page, because a form whose select has no
+choice sends exactly that, and "no opinion" is a request — contrast `?fields=`, which is refused, an
+empty list of columns being a projection of nothing; and a word repeated twice is a question with two
+answers, so the second one cannot also be honoured and dropping it silently is the quiet rewrite
+`fieldsParam`'s own comment refuses. Same word twice is one word.
+
+The same door on this round's build, same database, same rows:
+
+```
+status=NEW                       200 total=1     — every word of the set still answers its own crowd
+status=new   New   DONE  ACTIVE  400             — each one: `status must be one of NEW | … , got "x"`
+status=null  PROCESSING          400             — the Export and Job words, asked of a Lead
+status=NEW%20  %20NEW  %09NEW    200 total=1     — padding trimmed, then matched
+status=%22NEW%22                 400 got ""NEW"" — the quotes are not part of the word
+status=NEW%00                    400             — refused; the NUL is in the word it echoes
+status=NEW,ENRICHED              400 got "NEW,ENRICHED"   (also as %2C: the same one word)
+status=NEW&status=ENRICHED       400 status was given 2 words ("NEW", "ENRICHED"); this filter compares status to one of them
+status=NEW&status=NEW            200 total=1
+status=NEW&status=               200 total=1
+status=              (absent)    200 total=6     — still the whole page, still no opinion
+GET /api/jobs?type=scrape        400 type must be one of SCRAPE | …   (type=SCRAPE: 200 total=1)
+GET /api/jobs?status=DONE        400 status must be one of PENDING | … (status=COMPLETED: 200 total=14)
+GET /api/exports?status=RUNNING  400 status must be one of PENDING | PROCESSING | COMPLETED | FAILED, got "RUNNING"
+GET /api/exports?status=PROCESSING 200 total=0   — a legal word this time, and an honest empty table
+```
+
+`RUNNING` is refused at the export door with the four words *that* column holds, which is the other
+half of the round: nothing in `src/lib/enums.ts` declared `Export.status` at all, because the file's
+own rule is "only the sets a write route takes" and no route writes that column — `POST /api/exports`
+stores `PENDING`, `exporter.ts` moves the row to `PROCESSING` and then to `COMPLETED` or `FAILED`, and
+`POST /api/exports/{id}?action=retry` writes `PENDING` again. A reader needs the vocabulary the
+writers use, so `EXPORT_STATUSES` is transcribed from the schema comment and pinned to it, the way
+`RESULT_STATUSES` is pinned in `job-report.ts`. That declaration was then caught being right by the
+app itself: no base press ever caught the row in `PROCESSING` — every poll struck three seconds after
+the ask and found it already `COMPLETED` — while this round's poll, at 200 ms, read `poll 1:
+PROCESSING` then `poll 2: COMPLETED`. The word is not a guess; it is a state a live export passes
+through, and it is now a word the door can answer.
+
+The stored filter is judged by the same code as the query string, one call earlier than the row:
+`exportFilterProblem` runs before `prisma.export.create`, and says the worker's piece of it — a word
+the Lead column never holds is not a narrower crowd, it is no crowd.
+
+```
+{"status":"ACTIVE"}         400 filterJson.status must be one of NEW | … , got "ACTIVE"
+{"status":"qualified"}      400 … got "qualified"
+{"status":"NEW,ENRICHED"}   400 … got "NEW,ENRICHED"
+{"status":""}               400 … got ""
+{"status":7}                400 filterJson.status must be a string
+{"nonsense":1}              400 filterJson key "nonsense" is not supported — use status, minScore, maxScore, listId, tags
+"NEW"                       400 filterJson must be an object or an array, got a string
+{"status":"QUALIFIED"}      201 → COMPLETED records=1, and the table holds one row with that status
+```
+
+Seven refusals, twice over: the row count went 14 → 14 on the first run and 16 → 16 on the second,
+so a refused body writes nothing and queues nothing — and the accepted asks between them took the
+table to 17, each rendering the single row its word names (`records=1`, `bytes=70`, where the bad
+filterJson rows the base build left behind still read `records=0 bytes=0`).
+
+What this does not claim:
+
+* `GET /api/sources?isActive=` and `GET /api/enrichment-rules?isActive=` are untouched, and still
+  wrong. Measured against one active and one inactive rule: `isActive=true` named the active row,
+  `isActive=TRUE`, `isActive=1`, `isActive=yes`, `isActive=no`, `isActive=` and `isActive=%20true` each
+  named the *inactive* one — `isActive === "true"` is a coercion, not a vocabulary, and its wrong
+  answer is a page of the other state rather than an empty one. `isActive=no` after this round still
+  answers `total=1` with the inactive rule. It is a second defect with its own blast radius — a `1` is
+  a plausible way to ask for true, and every answer but one is a page a caller will believe — so it is
+  left for its own round rather than folded into this one's sentence.
+* Case still behaves differently at two doors that share one vocabulary. The rule and list doors
+  **fold** a lower-case word — `{conditions:{status:"new"}}` stores `NEW`, `{filterJson:{status:
+  "qualified"}}` stores `QUALIFIED` — and this round made `POST /api/exports` **refuse** it. The fold
+  is the older decision, made where the value is rewritten into a column the reader then matches
+  exactly; refusing at the export door is the smaller change, because `filterJson` is echoed back to
+  callers as the row's own filter and silently rewriting what a caller sent is the class of thing
+  #46 and #47 both declined to do. Either way the word that used to arrive as a delivered empty file
+  now arrives as an error that names the set; making the fold and the refusal one policy across every
+  door is a vocabulary-wide decision this round did not make.
+* There is still no OR over a status. Two words are refused, not unioned, and the refusal counts them
+  and quotes them so a caller who meant both can see what it sent. `?fields=a&fields=b` unions
+  because a projection holds what it was given; a filter compares one column to one value and cannot.
+* `?page=abc` still falls back to page 1 rather than refusing, and `?select=`, `?include=` and
+  `?fields[]=` are still unanswered synonyms. Neither is this round's defect and neither moved.
+* The other three doors' bodies are unchanged: `?fields=nonsense` is still the same 400 naming 25
+  columns, `?fields=email&status=NEW` still projects one column over the one lead that word names, and
+  `?status=NEW&page=2&limit=1` still answers `{total:1,page:2,limit:1,totalPages:1}` with an empty
+  page — a filter that matches one row and a second page of one row is legitimately nothing.
+
+Verification: `npm test` **999/999**, `npx tsc --noEmit` clean, `npm run lint` **0 errors /
+13 warnings** — none on a line this round wrote — `npm run check:contract` **8 passed, 0 failed**,
+`npm run check:llms-full` unchanged and `npm run build` exit 0. Twenty-one of that total are new, in
+`tests/unit/list-filter.test.ts`, needing no browser, no database and no network: the base table's
+refusals pinned to the exact sentence including the quote `short()` puts around the word; the
+two-word refusal quoted whole; padding, empty and repeated values; the four sets pinned against the
+schema comments they were transcribed from (`EXPORT_STATUSES` against `Export.status`'s comment and
+against every word `exporter.ts` writes, `PROCESSING` included); the three doors' own sources read
+with their comments blanked, asserting `filterParam(...)` in the handler and `searchParams.get("status")`
+gone; the `POST_impl` order, that `exportFilterProblem` is called before `prisma.export.create`; and a
+census over every file under `src/app/api` that fails the fifth door which reads a `status` or `type`
+word raw, because a door added next month is exactly what three per-file assertions would miss. The
+last pins the contract's own lines — that each of the four parameters names its set and that each door
+advertises a `400` — and it reads the sets out of `enums.ts` rather than re-typing them, so a
+vocabulary can be added to the source and cannot be left out of the spec. One existing test moved with
+a stated reason, not relaxed: the census in `tests/unit/route-validation.test.ts` that "every enum set
+is used by a write route" failed on `EXPORT_STATUSES`, and the point of that rule is that a declared
+set is *consulted*, so it now counts a set consulted by `filterParam`/`filterWordProblem` at a read
+door as used, and still fails a set nothing consults anywhere.
+
+The served contract says it too. `GET /openapi.json` on this build answers `leads.list`
+`responses=200,400` with `?status` reading *"One lead status, spelled as the column spells it: NEW |
+ENRICHED | QUALIFIED | CONTACTED | CONVERTED | REJECTED. Spaces around it trim; a lower-case word, two
+words or a comma-joined pair is refused rather than answered with an empty page."*, `jobs.list`
+`responses=200,400` naming five types and five statuses, `exports.list` `responses=200,400` naming the
+four export states and adding *"`RUNNING` is a job word, not an export one."*, and `exports.create`
+`responses=201,400` with its `filterJson` described as *"Which leads — status, minScore, maxScore,
+listId, tags. A `status` here is one Lead word (…); a word the column never holds is refused at the
+door instead of delivered as a COMPLETED file with no rows in it."* Every one of those strings is
+built from the arrays the routes check against, so the document cannot advertise a vocabulary the door
+does not use.
 
 ## Score: one arithmetic, and who may change it
 
