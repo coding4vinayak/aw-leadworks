@@ -158,6 +158,15 @@ async function deliver(
         "User-Agent": "Leadworks-Webhook/1.0",
       },
       body,
+      // A subscriber that answers with a 3xx is not answered: the redirect is the
+      // response. `fetch` follows by default, and the follow is a second address
+      // that `assertAllowedTarget` above was never asked about — measured as a
+      // subscription whose endpoint replied 302 to `http://127.0.0.1:8096/stolen`,
+      // a target every write door refuses, which the delivery then requested (as a
+      // GET, the body and the id dropped at the hop, the event header carried
+      // through). The scrape path already asks once per page it navigates to; this
+      // is the same rule at the same granularity, one ask per connect.
+      redirect: "manual",
       signal: AbortSignal.timeout(WEBHOOK_ATTEMPT_BUDGET_MS),
     });
     if (!response.ok) {
