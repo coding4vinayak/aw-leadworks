@@ -4057,6 +4057,20 @@ one paging decision in the file) are untouched, because that rule stays right fo
 pre-existing warnings · `npm run check:contract` 8/8 · `npm run check:llms-full` unchanged (the deep
 file prints each operation's summary and auth, not its query prose) · build exit 0.
 
+**Rebased onto the `main` that moved while this was open** — `e3fcc16`, which already carries #58's id
+resolution and #56/#57's filter vocabularies, so this door's head is now `filterParam` +
+`idFilterParam` + `scoreParam` in one file and the conflict was in that head, not in the rule. Every
+gate re-ran on that tree: `npm test` **1225/1225**, tsc clean, lint 0 errors / the same 13 warnings,
+`check:contract` 8/8, `check:llms-full` unchanged, build exit 0. And the door was re-pressed on that
+build (`r62_press60b.log`, `r62_press60c.log`) against eight leads set to 0, 5, 49, 50, 51, 72, 90,
+100 through `PATCH /api/leads/{id}`: `101`, `500`, `51.5`, `1e2`, `0x32`, `abc`, `-5`,
+`maxScore=1e2`, a bound given twice and `80/20` are each a **400** in the same words as before, while
+`%2050`, `50%20`, `%2B50`, `minScore=`, `49/51`, `50/90`, `100/100`, `0`, `maxScore=100`,
+`minScore=72` and `maxScore=5` answer the crowd they name. The neighbours the rebase had to keep are
+intact in the same instance: `?status=New`, `?status=new`, `?status=CONTACTED,NEW` and
+`?status=nonsense` are 400s from `LEAD_STATUSES`, `?status=NEW` is a 200, `?listId=nope` is #58's 422
+and `?listId=a&listId=b` is its 400, and `?minScore=50&status=NEW&page=1&limit=3` answers 200.
+
 ## Said rather than smoothed
 
 - **`POST /api/exports` still stores a bound the worker will refuse.** Measured on the fix build:
