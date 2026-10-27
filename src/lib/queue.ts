@@ -24,6 +24,18 @@ export class QueueUnavailableError extends Error {
 const CONNECTION_FAILURE = /connection is closed|connection is not open|connect econnrefused|connect etimedout|stream disconnected|loading/i;
 
 /**
+ * Whether an error is the queue saying it cannot be reached, rather than a job failing for a
+ * reason of its own. One predicate, because two vocabularies for the same fact is how a door
+ * ends up reporting a connection problem as a crash. The driver's wording is kept here: the
+ * messages that match carry `connect ECONNREFUSED 127.0.0.1:6399`, and `GET /api/health`
+ * answers with no key at all, so a caller that wants to say *that* to the world says "the
+ * queue is unreachable" instead and keeps the address to itself.
+ */
+export function isQueueConnectionFailure(error: unknown): boolean {
+  return error instanceof Error && CONNECTION_FAILURE.test(error.message);
+}
+
+/**
  * queues.X.add that throws QueueUnavailableError (instead of hanging or
  * leaking driver errors) when Redis is down. Genuine job errors propagate
  * untouched. API routes translate QueueUnavailableError to 503.
@@ -37,7 +49,7 @@ export async function enqueue<T extends object>(
   try {
     return await queue.add(name, data, opts);
   } catch (error) {
-    if (error instanceof Error && CONNECTION_FAILURE.test(error.message)) throw new QueueUnavailableError();
+    if (isQueueConnectionFailure(error)) throw new QueueUnavailableError();
     throw error;
   }
 }
@@ -64,7 +76,7 @@ export async function enqueue<T extends object>(
  * hold jobs — stored state, and a #51 decision rather than a side effect of a shutdown
  * fix. Rules 4 and 5 assert the queue↔worker pairing per app where the literals appear.
  */
-type QueueKey = "scrape" | "enrich" | "export" | "dedupe" | "validate" | "scheduled" | "billing";
+export type QueueKey = "scrape" | "enrich" | "export" | "dedupe" | "validate" | "scheduled" | "billing";
 
 const built: Partial<Record<QueueKey, Queue>> = {};
 
@@ -78,8 +90,9 @@ const workers: Worker[] = [];
  * names no opts. Port of the leadgenius convention (#61, §8.33) — #64.
  *
  * `removeOnComplete: true`: `GET /api/health` reads
- * `getJobCounts("waiting", "active", "failed")` and never `completed` (read from
- * `src/app/api/health/route.ts`), so a retained completed job is a Redis key with no
+ * `getJobCounts("waiting", "active", "failed")` and never `completed` (the ask lives in
+ * `src/lib/queue-snapshot.ts`, behind `src/app/api/health/route.ts`), so a retained completed job is
+ * a Redis key with no
  * reader — the durable record of the work is the `Job` table, not the queue. The sweep
  * alone mints 1,440 completed jobs a day from the calendar and writes its result to SQLite,
  * so without this they pile up unbounded.
@@ -122,6 +135,86 @@ export const queues = {
     return (built.billing ??= new Queue("leadworks-billing", { connection, defaultJobOptions: JOB_RETENTION }));
   },
 };
+
+/**
+ * The shared client's own state, as it reports it: `ready`, `connect`, `reconnecting`,
+ * `wait`, `end`. A door that answers about the queues needs this beside its answer, because
+ * "I could not ask" means two different things — the queue is down, or this process is
+ * holding a client that gave up while the queue was down — and only the client's state tells
+ * them apart.
+ */
+export function queueConnectionStatus(): string {
+  return connection.status;
+}
+
+/**
+ * Whether the shared socket is up right now. This is the fact that separates the two voices.
+ *
+ * It exists because a `Queue`'s client is a one-shot promise. bullmq 6.3.15's
+ * `RedisConnection` sets `this.initializing = this.init()` in its constructor and its
+ * `client` getter returns that same promise forever, so the `Queue` that is first touched
+ * while the lazy shared client is still failing keeps rejecting with `Connection is closed.`
+ * after Redis comes back — the socket is up, the instance is not. Measured end to end: a
+ * `Queue` built against a port with nothing on it threw, the port came up four seconds later
+ * and the shared client reached `ready`, and that instance still threw on its next twelve
+ * asks and on `add()` while a `Queue` built after the recovery answered on the same
+ * connection in 7 ms. On the running app the same shape cost `GET /api/health` 150 presses
+ * over 12.5 minutes of saying the queue was unreachable, on a process whose `POST /api/jobs`
+ * was handing off in 20-64 ms the whole time.
+ *
+ * So `ready` (or `connect`, which is how an ioredis Cluster reports a live socket) beside a
+ * failed ask is not an outage: it is this process holding a dead client, and the client can
+ * be replaced. `forgetQueue` does.
+ */
+export function queueConnectionLive(): boolean {
+  return connection.status === "ready" || connection.status === "connect";
+}
+
+/**
+ * Open the shared socket if this process has not asked for it yet, and never throw.
+ *
+ * The client is `lazyConnect`, so a process that has not been handed a job and has not been
+ * asked about its queues sits with the socket closed and the status at `wait`. That is not an
+ * outage, and a door that reads `wait` as "not live" and refuses to touch it says so forever:
+ * measured on the first cut of this fix, `GET /api/health` on an instance whose Redis was up
+ * answered seven `{"error":"unreachable"}` cells with `queueConnection:"wait"` on six presses
+ * over 18 seconds, because nothing in the process would have opened that socket until a job
+ * arrived. The old probe did not have this problem because `getJobCounts` opened the socket on
+ * the way to failing.
+ *
+ * So the wake goes through the raw client rather than through a `Queue`, deliberately: the
+ * command is issued by ioredis itself, which reports a refused connection and moves on to its
+ * own retries, instead of a bullmq client capturing a failed `initializing` promise for the
+ * life of the process. A press that wakes a healthy socket answers with numbers in the same
+ * press; a press that wakes a dead one gets `reconnecting` back and says "unreachable" with it.
+ */
+export async function queueWake(): Promise<void> {
+  if (connection.status !== "wait") return;
+  try {
+    await connection.connect();
+  } catch {
+    // The caller reads `queueConnectionStatus` for the fact; the reason is the driver's words
+    // and carries the host and port, which this door must not echo.
+  }
+}
+
+/**
+ * Drop the memoized client for `key` so the next touch builds one against the connection as
+ * it is now, and close the instance being dropped rather than leaving its listeners on the
+ * shared client.
+ *
+ * Closing is safe for the neighbours and this file already relies on that: `shutdownWorkers`
+ * closes every built queue and then disconnects `connection` itself, which would be a
+ * redundant second act if a `Queue` closed the socket it was handed. Measured on two Queues
+ * sharing one connection: `close()` on the first left the client `ready`, and the second both
+ * counted and handed off after it.
+ */
+export function forgetQueue(key: QueueKey): void {
+  const queue = built[key];
+  if (!queue) return;
+  delete built[key];
+  queue.close().catch(() => undefined);
+}
 
 /**
  * Which queue runs which `Job.type`, and the name the worker receives. Written

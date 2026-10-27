@@ -352,8 +352,12 @@ describe("the wiring, from the source", () => {
     assert.match(health, /await import\("@\/lib\/scraper"\)/, "asked lazily, so a build without the browser library still answers");
     assert.match(health, /the browser probe could not be asked/, "and reports unknown rather than throwing when the ask itself fails");
     assert.ok(!/ok: false[\s\S]*scrapeStatus/.test(health), "a missing browser is not a down database");
-    for (const key of ["ok: true", 'db: "up"', "queues: await queueDepth()", "time: new Date()"]) {
+    for (const key of ["ok: true", 'db: "up"', "queues: report.cells", "queueConnection: report.connection", "time: new Date()"]) {
       assert.ok(health.includes(key), `the shape an existing reader depends on is still there: ${key}`);
     }
+    // #51 retargeted two of these pins, with the reason: `queues: await queueDepth()` was the
+    // all-or-nothing probe, and the door now answers `report.cells` — one cell per queue —
+    // with `queueConnection` beside it. The claim being guarded did not move: the queue fact
+    // is still reported, still awaited, and still cannot decide the status.
   });
 });
