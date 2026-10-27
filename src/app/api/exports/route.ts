@@ -7,6 +7,9 @@ import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { EXPORT_CREATE } from "@/lib/fields";
 import { unknownIdError } from "@/lib/ids";
+import { filterParam } from "@/lib/list-filter";
+import { exportFilterProblem } from "@/lib/export-format";
+import { EXPORT_STATUSES } from "@/lib/enums";
 
 export const dynamic = "force-dynamic";
 
@@ -14,13 +17,18 @@ async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
   const profileId = searchParams.get("profileId");
-  const status = searchParams.get("status");
+  // `EXPORT_STATUSES` is the set the schema comment gives this column and the set
+  // `exporter.ts` writes — including PROCESSING, which no table in `enums.ts`
+  // declared until now. `RUNNING` is a Job word; asked of this door it used to be
+  // a 200 and an empty page.
+  const status = filterParam(searchParams, "status", EXPORT_STATUSES);
+  if (status.error) return status.error;
   const { page, limit } = pageParams(searchParams, 20);
 
 
   const where: any = { workspaceId };
   if (profileId) where.profileId = profileId;
-  if (status) where.status = status;
+  if (status.value) where.status = status.value;
 
   const [exports, total] = await Promise.all([
     prisma.export.findMany({
@@ -57,6 +65,13 @@ async function POST_impl(request: Request) {
     });
     if (!found.length) return unknownIdError("profileId", input.data.profileId);
   }
+
+  // And the filter, which is the crowd the file will hold. The worker reads it
+  // with `readExportFilter`; the door read nothing, so a word outside `Lead.status`
+  // was stored, run against no lead, and reported itself COMPLETED with an empty
+  // file. Same question, asked before the row exists.
+  const filterProblem = exportFilterProblem(input.data.filterJson);
+  if (filterProblem !== null) return NextResponse.json({ error: filterProblem }, { status: 400 });
 
   const exportRecord = await prisma.export.create({
     data: { workspaceId, ...input.data, status: "PENDING" },
