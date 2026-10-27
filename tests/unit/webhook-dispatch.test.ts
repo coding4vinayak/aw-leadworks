@@ -30,6 +30,7 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const sender = readFileSync(join(ROOT, "src/lib/webhooks.ts"), "utf8");
+const fanout = readFileSync(join(ROOT, "src/lib/webhook-fanout.ts"), "utf8");
 const leadsRoute = readFileSync(join(ROOT, "src/app/api/leads/route.ts"), "utf8");
 
 describe("#17 sender module", () => {
@@ -113,10 +114,25 @@ describe("#17 sender module", () => {
   });
 
   it("bounds each delivery with a timeout so a hung receiver cannot pin the caller", () => {
+    // #53 retargets this pin and keeps its rule. It asked for `AbortSignal.timeout(<digits>)`;
+    // the budget is `WEBHOOK_ATTEMPT_BUDGET_MS` now, because #53 measured that the budget
+    // bounds one *attempt* and nothing about how many attempts a caller waits for — 20 rows
+    // against a receiver that never answered cost 100.19 s on main, the budget times the
+    // crowd. Naming the number is what lets the fan-out and the README quote the same one.
     assert.match(
       sender,
-      /signal:\s*AbortSignal\.timeout\(\s*\d+\s*\)/,
+      /signal:\s*AbortSignal\.timeout\(\s*(\d+|WEBHOOK_ATTEMPT_BUDGET_MS)\s*\)/,
       "the fetch must carry AbortSignal.timeout(...) — the dispatcher is awaited by an API route, so an unbounded delivery is an unbounded request",
+    );
+    assert.match(
+      fanout,
+      /export const WEBHOOK_ATTEMPT_BUDGET_MS\s*=\s*(\d+)/,
+      "the budget is one named constant in the fan-out module, not a literal that can drift from the sentence about it",
+    );
+    assert.match(
+      sender,
+      /signal:\s*AbortSignal\.timeout\(WEBHOOK_ATTEMPT_BUDGET_MS\)/,
+      "the fetch spends that constant rather than a copy of it",
     );
   });
 
