@@ -1348,7 +1348,8 @@ Before: 1 warning line per sweep minute (the ungrammatical one) and 0 jobs. Afte
 lines and 2 rule lines** per sweep minute, the never-cadences named by the same sentence the door
 refuses with, and still **0 jobs** — the sweep's behaviour toward them is unchanged; what changed
 is that the silence has a reason in the log. `tests/unit/cron-schedule.test.ts` went from 27 to 36
-cases and the suite from 978 to 987, all green. Six of the nine new cases fail against `main`'s
+cases and `npm test` from 1089 to 1098, all green (the branch was rebased onto `main` after four
+other rounds landed, which is where the 1089 comes from). Six of the nine new cases fail against `main`'s
 module, and the retargeted #38 pin fails with them — 7 of the file's 36; the three that pass on
 both are the guard-rails, which assert what has to stay storable rather than what this round
 refuses. `npx tsc --noEmit` clean, lint 0 errors and 13 pre-existing warnings,
