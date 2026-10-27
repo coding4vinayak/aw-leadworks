@@ -1356,6 +1356,16 @@ both are the guard-rails, which assert what has to stay storable rather than wha
 refuses. `npx tsc --noEmit` clean, lint 0 errors and 13 pre-existing warnings,
 `npm run check:contract` 8/8, `npm run build` exit 0.
 
+`main` moved a third time while this was being written — `4cf6a9a`, #94 and #95 merged — so the
+branch rebased again and every gate ran on the result: `npm test` **1187/1187** (this file's same
+36 cases, plus what those two merges brought), tsc clean, lint 0 errors and the same 13 warnings,
+`check:contract` 8/8, `npm run build` exit 0; and the presses above were re-run against that build
+(`r61_after_e.log`) — the six 400s with the month's length each, the seven rare dates still 201,
+the two-count cadence still refused for its hour alone, the `PATCH` refusal and its 200 control,
+the rule door's compound 400 with `0 0 29 2 *` still a 201 — every answer the same as the run
+above. The sweep leg was not re-run: reproducing it needs rows the door now refuses, and neither
+of those two merges touched the scheduler.
+
 The contract gains the 400 those four doors have been giving since #38 and never advertised, and
 the `schedule` field's description now says what the door checks. `public/llms-full.txt` is
 unchanged — it renders each operation's summary and auth, and neither moved.
