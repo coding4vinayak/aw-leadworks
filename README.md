@@ -4256,6 +4256,22 @@ stripped first, because this module's own docstring quotes the call it proves do
 check:llms-full` — this time the deep file *does* move: it lists every operation, so
 `public/llms-full.txt` grew its two lines and the 47-operation heading became 49 · build exit 0.
 
+**Rebased onto the `main` that moved while this was open** — `e3fcc16`, which carries #58's id
+resolution, #56/#57's filter vocabularies and #60's score rule — so the contract's `profileId` line
+was merged by hand to say both things now true of it: an id this workspace does not have is refused,
+and the ids a workspace has come from `GET /api/export-profiles`. The `sweep` verdict, the doors and
+the log line the round pinned are untouched by that base. Every gate re-ran on the rebased tree:
+`npm test` **1223/1223**, tsc clean, lint 0 errors / the same 13 warnings, `check:contract` 8/8,
+`check:llms-full` unchanged (the two operations are still the file's only addition over the base),
+build exit 0. Both doors were re-pressed on that build over seven rows — three active `* * * * *`,
+one `0 9 * * 1`, one paused, one with no cadence and one holding `0 9 * * 9`
+(`r63_press59.log`): the list answers `scheduled`/`takes=true` for the minute's own rows,
+`scheduled`/`takes=false` for Monday's, `paused`, `unscheduled`, and `unreadable` naming the field
+that cannot be matched; the detail door gives the same verdict per row; another workspace's row is
+the same 404 as a row that is not there; no key is 401 and a claimed foreign `workspaceId` is 403.
+`GET /api/exports?profileId=nope` on this base answers #58's 422 naming the id — the resolution this
+round's `profileId` sentence now points at.
+
 ## Said rather than smoothed
 
 - **No door writes this table yet.** `POST`, `PATCH` and `DELETE` stay absent and the paths answer
