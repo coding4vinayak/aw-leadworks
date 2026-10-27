@@ -337,15 +337,24 @@ describe("#35 the two refusals stay two sentences", () => {
 });
 
 describe("#35 the wiring, scanned from the source", () => {
-  it("the table is written from nine places and one of them owns the lifetime", () => {
+  it("the table is written from ten places and one of them owns the lifetime", () => {
     // Ten when #35 measured it. #39 deleted `runScheduledExports` — a scheduler no caller
     // had, holding one of the three creates and one of the seven updates — so the count is
     // retargeted rather than relaxed: the eight writes that remain are the eight that can
     // actually run, and the deleted two are the reason this number moved. #43 adds the ninth:
     // the write that puts an export's record down when its worker obeyed a mark. It is pinned
     // as the site that owns *neither* fact — no lifetime, and no file — because a stopped
-    // export is the one row on this table that must say it delivered nothing.
-    assert.equal(everyWrite.length, 9, "the writes that are reachable: two creates, seven updates");
+    // export is the one row on this table that must say it delivered nothing. #50 adds the
+    // tenth, in `lib/queue-refusal.ts`: the export a refused enqueue leaves behind. It owns
+    // neither fact either, for the same reason — a row the queue never took has no bytes to
+    // expire, and #43's pair is the precedent this one copies rather than a second opinion
+    // on them.
+    assert.equal(everyWrite.length, 10, "the writes that are reachable: two creates, eight updates");
+    const refused = everyWrite.filter((w) => w.body.includes("refusalWrite"));
+    assert.equal(refused.length, 1, "the refusal is written in one place, and the doors call it");
+    assert.equal(refused[0].file.replace(src, "src"), "src/lib/queue-refusal.ts");
+    assert.doesNotMatch(refused[0].body, /expiresAt|filePath/, "a refused export names no lifetime and no bytes");
+    assert.doesNotMatch(refused[0].body, /status: (?!"PENDING")/, "the only status this write spells is the guard it refuses to walk past; the word it writes is `refusalWrite`'s decision, spelled once — and it is FAILED, which is the state the export's own retry door reads");
     const stamped = everyWrite.filter((w) => w.body.includes("expiresAt"));
     assert.equal(stamped.length, 1, "one stamp site, no accidental second one");
     assert.equal(stamped[0].file.replace(src, "src"), "src/lib/exporter.ts");

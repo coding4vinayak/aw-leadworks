@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { queues, enqueue } from "./queue";
+import { enqueueOrMark, markExportNeverQueued } from "./queue-refusal";
 import { asInputJson, asRecord } from "./json";
 import { leadWhere, readStoredConditions } from "./rule-conditions";
 import { actionsProblem, readRuleActions } from "./rule-actions";
@@ -97,7 +98,7 @@ export async function runScheduledJobs(): Promise<void> {
           config: asInputJson(source.config),
         },
       });
-      await enqueue(queues.scrape, "run-scrape", { jobId: job.id });
+      await enqueueOrMark(job.id, () => enqueue(queues.scrape, "run-scrape", { jobId: job.id }));
     }
   }
 
@@ -139,7 +140,11 @@ export async function runScheduledJobs(): Promise<void> {
       await prisma.job.update({ where: { id: job.id }, data: { config: { ...asRecord(job.config), exportId: exportRecord.id } } });
       await prisma.export.update({ where: { id: exportRecord.id }, data: { status: "PENDING" } });
 
-      await enqueue(queues.export, "run-export", { jobId: job.id });
+      const handed = await enqueueOrMark(job.id, () => enqueue(queues.export, "run-export", { jobId: job.id }));
+      // The `Export` row is paired with this job, and the door built to re-run it reads
+      // "Can only retry failed exports" for a `PENDING` one — so a refusal takes both rows
+      // terminal, or the export is stranded in a state no door will move.
+      if (!handed) await markExportNeverQueued(exportRecord.id);
     }
   }
 
@@ -223,7 +228,7 @@ export async function runScheduledJobs(): Promise<void> {
           totalItems: leads.length,
         },
       });
-      await enqueue(queues.enrich, "run-enrichment", { jobId: job.id });
+      await enqueueOrMark(job.id, () => enqueue(queues.enrich, "run-enrichment", { jobId: job.id }));
     }
   }
 }
