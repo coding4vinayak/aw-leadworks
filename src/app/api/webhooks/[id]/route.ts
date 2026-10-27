@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { eventNames, NO_FIELD_TO_UPDATE, readJson, validateBody } from "@/lib/validate";
 import { unknownEventsProblem } from "@/lib/webhooks";
 import { classifyTarget } from "@/lib/egress";
-import { WEBHOOK_PATCH } from "@/lib/fields";
+import { WEBHOOK_PATCH, webhookReadSelect } from "@/lib/fields";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +15,18 @@ export const dynamic = "force-dynamic";
  * secret — or repoint its url at their own server, or delete it. Ownership is
  * asserted after the load and answers 404 for someone else's id, so a probe
  * cannot tell "does not exist" from "not yours".
+ *
+ * The two reads here stopped printing the secret. Owning a subscription is not
+ * the same as being allowed to re-issue its HMAC key: before this, `GET` and the
+ * reply to an unrelated `PATCH {isActive:false}` each handed the plaintext secret
+ * back, on every press, and no door could change it (`PATCH {secret:"…"}` is
+ * refused by `WEBHOOK_PATCH`, and a `POST` carrying a chosen secret stores the one
+ * the server minted instead). The value now comes from the create door once, which
+ * is the only moment it can be shown to anyone — see `WEBHOOK_READ_COLUMNS`.
  */
 async function GET_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const webhook = await prisma.webhook.findUnique({ where: { id } });
+  const webhook = await prisma.webhook.findUnique({ where: { id }, select: webhookReadSelect() });
   if (!webhook) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, webhook.workspaceId);
   return NextResponse.json(webhook);
@@ -58,7 +66,7 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   // cannot see it.
   if (!Object.keys(data).length) return NextResponse.json({ error: NO_FIELD_TO_UPDATE }, { status: 400 });
 
-  const webhook = await prisma.webhook.update({ where: { id }, data });
+  const webhook = await prisma.webhook.update({ where: { id }, data, select: webhookReadSelect() });
   return NextResponse.json(webhook);
 }
 

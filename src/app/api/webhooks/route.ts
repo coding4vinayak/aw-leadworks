@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { readJson, validateBody, eventNames } from "@/lib/validate";
 import { unknownEventsProblem } from "@/lib/webhooks";
 import { classifyTarget } from "@/lib/egress";
-import { WEBHOOK_CREATE } from "@/lib/fields";
+import { WEBHOOK_CREATE, webhookReadSelect } from "@/lib/fields";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -16,12 +16,26 @@ export const dynamic = "force-dynamic";
  * still passes ?workspaceId= gets the documented answer for asking about a
  * workspace that is not theirs (403 from authedWorkspaceId), and the README's
  * `GET /api/webhooks?workspaceId=` contract is otherwise unchanged.
+ *
+ * The key is what the last fix bought; this one narrows what the key can spend.
+ * Measured on the running app before the change, one press of this door printed
+ * every subscription's plaintext signing secret — 1,734 bytes for six rows — and
+ * so did `GET /api/webhooks/{id}` and the reply to an unrelated `PATCH
+ * {isActive:false}`. That credential is not a fact about the subscription the way
+ * its url is: it is the key a subscriber verifies deliveries with, and the product's
+ * own rule for a plaintext credential is apikeys.ts's "returned once and never
+ * persisted". `secret` is therefore read at the door that mints it and nowhere else;
+ * every other column of the row is still printed, by name, in `WEBHOOK_READ_COLUMNS`.
  */
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
 
-  const webhooks = await prisma.webhook.findMany({ where: { workspaceId }, orderBy: { createdAt: "desc" } });
+  const webhooks = await prisma.webhook.findMany({
+    where: { workspaceId },
+    orderBy: { createdAt: "desc" },
+    select: webhookReadSelect(),
+  });
   return NextResponse.json({ webhooks });
 }
 
@@ -57,6 +71,10 @@ async function POST_impl(request: Request) {
   const webhook = await prisma.webhook.create({
     data: { workspaceId, url: input.data.url, events: events.values.join(","), secret },
   });
+  // The one door that prints a signing secret, because it is the one moment the
+  // caller has never held it. The reads answer without the column, so a secret lost
+  // here is replaced by DELETE + POST — a new row, a new id, a new secret — not
+  // re-read.
   return NextResponse.json(webhook, { status: 201 });
 }
 
