@@ -1288,6 +1288,85 @@ is readable now, and STEP 19 proves what it does) and `* * * * * 1` went in, so 
 shows a door refusing a cadence the sweep cannot act on instead of quietly agreeing with one
 it cannot read.
 
+### …and the day somebody types is a day the month has: the same grammar, now read against the calendar
+
+#38 pinned, in its own words, that `0 0 30 2 *` "is still a well-formed cron — refusing it would
+be inventing a rule". It is well formed. Every field is in range, the matcher reads it, and the
+door took it with a 201. What #61 measured is the other half of that sentence: **no minute of any
+year matches it**, and the build had no way to say so.
+
+Four cadences were pressed at the running app in one round of `POST /api/sources`, then read back
+from `GET /api/sources` and left for four sweep minutes:
+
+| stored `schedule` | what each field says | what the minute does |
+|---|---|---|
+| `0 0 30 2 *` | the 30th of February, 00:00 | 201; **0 `Job` rows in four sweeps**; no line in the log |
+| `0 0 31 4 *` | the 31st of April, 00:00 | 201; 0 jobs; no line |
+| `0 9 * * 9` | a weekday the field does not have | 400 at the door, and `Source … is active and scheduled, but no minute matches it` in the sweep |
+| `* * * * *` | the control | 201; 8 jobs in four sweeps, which is what proves the other rows were deaf rather than the sweep dead |
+
+The third row is the one the first two were measured against: the sweep's warning hangs off
+`scheduleProblem`, so a cadence the grammar cannot read is named, and a cadence the grammar reads
+and the calendar does not have is not. `*/5 * * * *` — #38's own case — is a *readable* cadence
+now, which is why the base run's warning list named `0 9 * * 9` and left `0 0 30 2 *` quiet.
+
+`scheduleProblem` grew one cross-field check after its per-field loop: expand the day-of-month
+field and the month field, and refuse when the earliest day it names is past the longest month it
+names. February is 29 in that table, not 28, because a leap year exists. Six of the 372
+day-and-month pairs the grammar can name are refused by it — `30.2`, `31.2`, `31.4`, `31.6`,
+`31.9`, `31.11` — and the pin is that list against `Date` itself, over the years 2026 through
+2041, not against a hand-written table.
+
+What it deliberately does not refuse is the part the measurement had to be careful about.
+`0 0 29 2 *` matched exactly **1** minute in the scan (2028-02-29 00:00), `0 0 31 4-11 *` matched
+16 and `0 0 31 1,4 *` matched 4: a range or a list that contains a month with 31 days is a
+cadence that comes round, not a dead one, and the longest month in the list is what the check
+reads. `0 0 1-31/30 2 *` names the 1st and the 31st of February, and February has the 1st.
+The weekday field stays out of the verdict entirely: `0 0 29 2 1` matches nothing in the scanned
+window and everything on 2044-02-29, which is a Monday, so a cadence that waits a long time is
+not a cadence that never comes. And a cadence misfiring twice — `23 59 30 2 *` — is refused for
+its hour, because both sentences in one message would bury the field complaint the caller can
+actually fix.
+
+No wiring changed. `POST /api/sources`, `PATCH /api/sources/{id}` and `ruleDeclarationProblem` in
+`lib/rule-actions.ts` all call the same function they already called, and the three sweep legs all
+ask it before matching, which is the point #38 made about one grammar.
+
+Offline first, on the rebuilt app: the same presses against the shipped build. Six cadences the
+base run stored with a 201 come back **400** naming both fields as written and the month's real
+length — `day of month "30" is not a day of month "2" — the longest month it names has 29 days,
+so no minute of any year matches this cadence` — while `0 0 29 2 *`, `0 0 31 4-11 *`,
+`0 0 31 1,4 *`, `0 0 1-31/30 2 *`, `0 0 29 2 1`, `0 0 30 * *` and `* * * * *` all still answer
+**201**, and `23 59 30 2 *` answers 400 for its hour alone. `POST /api/enrichment-rules`, which
+shares the module and had no idea, took `0 0 30 2 *` with a 201 before and refuses it with the
+matcher's own sentence inside the 400 after; `0 0 29 2 *` is still a 201 there.
+
+Then the rows that predate the door, which is the half a refusal cannot fix. The base run had left
+9 sources in this round's own database holding one of the never-cadences, plus the ungrammatical
+control and 2 rules holding one of them each.
+Before: 1 warning line per sweep minute (the ungrammatical one) and 0 jobs. After: **10 source
+lines and 2 rule lines** per sweep minute, the never-cadences named by the same sentence the door
+refuses with, and still **0 jobs** — the sweep's behaviour toward them is unchanged; what changed
+is that the silence has a reason in the log. `tests/unit/cron-schedule.test.ts` went from 27 to 36
+cases and the suite from 978 to 987, all green. Six of the nine new cases fail against `main`'s
+module, and the retargeted #38 pin fails with them — 7 of the file's 36; the three that pass on
+both are the guard-rails, which assert what has to stay storable rather than what this round
+refuses. `npx tsc --noEmit` clean, lint 0 errors and 13 pre-existing warnings,
+`npm run check:contract` 8/8, `npm run build` exit 0.
+
+The contract gains the 400 those four doors have been giving since #38 and never advertised, and
+the `schedule` field's description now says what the door checks. `public/llms-full.txt` is
+unchanged — it renders each operation's summary and auth, and neither moved.
+
+What is not claimed: no migration touched the rows the base run left, and none is proposed — they
+are a measurement, in a database only this session can see; the module still reads `7` as
+Sunday's other spelling and still requires *both* a day of month and a day of week, so
+`0 12 15 * 1` stays rarer than Vixie cron would make it; a cadence whose day exists somewhere in
+its month list is accepted even when the weekday makes the combination wait, which is the
+behaviour above measured at 2044-02-29; `GET /api/sources` prints no verdict on a row, only what
+was stored, so a legacy cadence is visible there only as the string the sweep refuses to explain;
+and `matchesSchedule` still answers `false` rather than throwing, because the sweep's legs are
+allowed to be run by a row the door refused before it existed.
 ### What a scrape is allowed to point at: the address a caller names, and the browser this instance does not have
 
 `WEB_SCRAPER` is one of the five `Source.type` values a caller may write.
