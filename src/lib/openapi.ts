@@ -325,13 +325,17 @@ const PATHS: Record<string, PathItem> = {
       id: "sources.list",
       summary: "The workspace's sources.",
       auth: "key",
+      // This line used to read "Only the ones running (1) or paused (0)" while the door
+      // took neither digit: #57 measured `?isActive=1` answering the *paused* sources on
+      // the same instance that served this sentence. The words are `bool-word.ts`'s, and
+      // `tests/unit/bool-word.test.ts` pins this prose to them, here and at `rules.list`.
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["isActive", "Only the ones running (1) or paused (0)."],
+        ["isActive", "Only the ones running or paused, asked with one word: true | false. Spaces around it trim; a digit, a capitalisation or a second word is refused rather than answered with the other state's page."],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
-      responses: { "200": "The sources, with a total." },
+      responses: { "200": "The sources, with a total.", "400": "An `isActive` that is not exactly one word of the set above." },
     },
     post: {
       id: "sources.create",
@@ -470,11 +474,11 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["isActive", "Only the ones running (1) or paused (0)."],
+        ["isActive", "Only the ones running or paused, asked with one word: true | false. Spaces around it trim; a digit, a capitalisation or a second word is refused rather than answered with the other state's page."],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
-      responses: { "200": "The rules, with a total." },
+      responses: { "200": "The rules, with a total.", "400": "An `isActive` that is not exactly one word of the set above." },
     },
     post: {
       id: "rules.create",

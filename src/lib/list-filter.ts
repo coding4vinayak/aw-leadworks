@@ -57,7 +57,8 @@ import { short } from "./validation-engine";
  * What this file does *not* touch: `GET /api/sources?isActive=` and
  * `GET /api/enrichment-rules?isActive=`, measured against one active and one
  * inactive rule, answer `isActive=yes`, `isActive=TRUE`, `isActive=1`, `isActive=no`
- * and `isActive=` with the *inactive* rule — `isActive === "true"` is a coercion,
+ * and `isActive=` with the *inactive* rule — judging the word by comparing it to
+ * the quoted `true` is a coercion,
  * not a vocabulary, and its wrong answer is a page of the other state rather than
  * an empty one. That is a second defect with its own blast radius (a `1` is a
  * plausible way to ask for true), and it is left for its own round.

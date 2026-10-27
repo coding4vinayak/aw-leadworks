@@ -181,7 +181,9 @@ the snippets omit the header for width.
 ```
 GET    /api/health                         # liveness + DB ping + whether this instance
                                            # can scrape, no key
-GET    /api/sources?workspaceId=           # list
+GET    /api/sources?workspaceId=           # list; `?isActive=` takes one word — `true`
+                                           # or `false` — and nothing else is the other
+                                           # state's page (see *A boolean is two words*)
 POST   /api/sources                        # create (web scraper, API, CSV, manual); a
                                            # `schedule` is refused unless some minute can
                                            # match it (see *the cadence somebody types*),
@@ -224,7 +226,9 @@ POST   /api/lead-lists/{id}?action=add-leads|remove-leads|refresh
                                           # `refresh` asks the row, never the body: a list whose
                                           # `isDynamic` is true re-runs the `filterJson` it stores
                                           # and its members become the leads that filter names
-GET    /api/enrichment-rules?workspaceId=  # rules
+GET    /api/enrichment-rules?workspaceId=  # rules; the same `?isActive=true|false`, judged
+                                           # by the same two words (see *A boolean is two
+                                           # words*)
 POST   /api/enrichment-rules               # create; `conditions` and `actions` are both required, and both are read
 PATCH  /api/enrichment-rules/{id}          # change a rule; conditions and actions are re-checked as a pair
 POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appliesTo }
@@ -2950,6 +2954,197 @@ listId, tags. A `status` here is one Lead word (…); a word the column never ho
 door instead of delivered as a COMPLETED file with no rows in it."* Every one of those strings is
 built from the arrays the routes check against, so the document cannot advertise a vocabulary the door
 does not use.
+
+### A boolean is two words, not one: `?isActive=` and the page of the other state
+
+`Source.isActive` and `EnrichmentRule.isActive` are the only two `Boolean` columns a list
+door filters on, and both doors filtered them with the same line:
+
+```ts
+if (isActive !== null) where.isActive = isActive === "true";
+```
+
+That is not a vocabulary. It is a coercion with one accepted spelling, and the word it
+rejects is not a mistype — it is the word the product's own contract tells callers to send.
+Fetched off the running instance before anything changed (`GET /api/openapi`, both doors):
+
+```
+isActive :: Only the ones running (1) or paused (0).
+```
+
+Measured on `origin/main` at `65bd942`, built in this round's worktree, served on **:3371**
+over the session's own database `leadworks_r57` with a private Redis on 6396, over five
+sources sealed through `POST /api/sources` (three `isActive: true`, two `false`) and three
+rules sealed through `POST /api/enrichment-rules` (two active, one paused). Every number is
+`curl`'s own `%{http_code}`, `%{size_download}` and `%{time_total}`, and the names the page
+returned (`/tmp/opencode/r57_measure.log`, `r57_measure_c.log`):
+
+```
+GET /api/sources                        200 total=5  — everything
+GET /api/sources?isActive=true          200 total=3  [src-active-1..3]
+GET /api/sources?isActive=false         200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=1             200 total=2  [src-paused-1..2]   ← "running", per the contract
+GET /api/sources?isActive=0             200 total=2  [src-paused-1..2]   ← and "paused" is the same page
+GET /api/sources?isActive=TRUE          200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=True          200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=yes           200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=no            200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=%20true       200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=true%20       200 total=2  [src-paused-1..2]
+GET /api/sources?isActive=              200 total=2  [src-paused-1..2]   ← "I have no opinion"
+GET /api/sources?isActive=true&isActive=false
+                                        200 total=3  [src-active-1..3]   ← one of the two, silently
+GET /api/enrichment-rules?isActive=1    200 total=1  [rule-paused-1]
+GET /api/enrichment-rules?isActive=yes  200 total=1  [rule-paused-1]
+GET /api/enrichment-rules?isActive=     200 total=1  [rule-paused-1]
+```
+
+Sixteen presses across the two tables. Eleven of them answered a page whose every row has
+`isActive = false` for a word that did not ask for the paused crowd; two answered one of the
+two words the caller sent, silently. The two digits the contract names are indistinguishable
+from each other, from a capitalisation, from a word in another language, from a space, from
+nothing at all, and from the first half of a two-word question.
+
+Which is worth more than an untidy query string, because `isActive: true` is the predicate
+the workers run on: `scheduler.ts:76` and `scheduler.ts:106` sweep the sources with
+`where: { isActive: true, schedule: { not: null } }`, `scheduler.ts:147` and
+`enrichment.ts:349` sweep the rules with `where: { isActive: true, trigger: "SCHEDULED" }`.
+So "the ones running" is exactly the set the door hides from a caller who believed the
+contract, and the page it hands back instead is the set that will never run again. An
+operator who asks `GET /api/sources?isActive=1` and counts what comes back believes this
+workspace has two sources running. It has none: both rows on that page have
+`isActive = false`, and the three that the sweep will actually visit are not on it.
+
+The asymmetry was already visible from the other door. The write path has a boolean
+*kind*, and it refuses in words:
+
+```
+PATCH /api/sources/{id} {"isActive":"1"}     400 isActive must be true or false, got a string — send it unquoted
+PATCH /api/sources/{id} {"isActive":1}       400 isActive must be true or false, got a number
+PATCH /api/sources/{id} {"isActive":"true"}  400 isActive must be true or false, got a string — send it unquoted
+PATCH /api/sources/{id} {"isActive":"yes"}   400 isActive must be true or false, got a string — send it unquoted
+PATCH /api/sources/{id} {"isActive":true}    200 — accepted, row now isActive=true
+POST  /api/sources        {"isActive":"1"}   400 (the create door speaks the same sentence)
+```
+
+`validation-engine.ts` keeps that kind for a reason it documents — `Boolean(isActive)` used
+to turn `"no"`, `[]` and `42` into `true` and `""` and `null` into `false`, "so one spelling
+switched a live subscription off and another kept it on, and neither answer mentioned the
+field". The same application therefore refused `"1"` with a 400 in a JSON body and answered
+it with the opposite page in a query string. These were the last two places in `src/` where
+a caller's word for a boolean was judged by equality against one literal.
+
+`src/lib/bool-word.ts` is the set they were missing: `BOOL_WORDS = ["true", "false"]`,
+`boolWordProblem(name, value)` and `boolParam(searchParams, name)`, no database, no network
+and no clock in the file, so the judgement is testable without any of them. Both doors now
+call `boolParam(searchParams, "isActive")` once, before the query, and return its refusal.
+Three decisions, each taken to match a rule this app already runs at another read door:
+
+* **Padding is not part of the word.** `?fields=%20email%20` projects `email` and `short()`
+  trims before quoting, so `?isActive=%20true` and `?isActive=true%20` are `true`.
+* **An empty value names nothing.** `?isActive=` is an absent `isActive` and both return the
+  whole table. A form whose select has nothing chosen sends exactly that; the column's own
+  `@default` is `true`, so "no opinion" and "paused" are different questions and the door
+  was answering them as one.
+* **A word repeated is a question with two answers.** `?isActive=true&isActive=false` cannot
+  be honoured by one column comparison, so it is refused by name and count rather than
+  resolved to whichever value `get()` returned first. Same word twice is one word.
+
+`1` and `0` are refused rather than folded in, and the contract sentence that recommended
+them is corrected in the same commit. They are the digits a JSON body is told off for
+sending, and this API's body takes `true` and `false` unquoted; a read door accepting a word
+its write door refuses is two vocabularies for one column, which is how the sentence above
+got written in the first place. The words are interpolated nowhere — `openapi.ts` keeps no
+import from `bool-word.ts` because the contract module is loaded by scripts that must not
+pull `next/server` — so the pin is a test instead: the sentence at each door must name both
+words, must no longer contain `(1)` or `(0)`, must price a 400 that names `isActive`, and
+must not be repeated at a third door.
+
+The same rows, the same database, both builds pressed side by side (`:3371` base, `:3372`
+this round — `/tmp/opencode/r57_after.log`, `r57_after_b.log`, `r57_after_c.log`):
+
+```
+isActive=true            base 200 1144B total=3        fix  200 1144B total=3
+isActive=false           base 200  740B total=2        fix  200  740B total=2      (md5 identical)
+isActive=1               base 200  740B total=2 paused fix  400   59B "…must be one of true | false, got \"1\""
+isActive=0               base 200  740B total=2 paused fix  400   59B "…got \"0\""
+isActive=TRUE            base 200  740B                fix  400   62B
+isActive=yes             base 200  740B                fix  400   61B
+isActive=no              base 200  740B                fix  400   60B
+isActive=%20true         base 200  740B total=2 paused fix  200 1144B total=3      — the padding trims
+isActive=true%20         base 200  740B total=2 paused fix  200 1144B total=3
+isActive=                base 200  740B total=2 paused fix  200 1826B total=5      — no opinion, whole table
+isActive=true&isActive=false
+                         base 200 1144B total=3        fix  400  106B "isActive was given 2 words (\"true\", \"false\"); …"
+isActive=true&isActive=true
+                         base 200 1144B total=3        fix  200 1144B total=3      — same word twice is one word
+(no parameter)           base 200 1826B total=5        fix  200 1826B total=5      (md5 identical)
+```
+
+and at the rules door the three shapes that mattered: `1` base `200 total=1 [rule-paused-1]`
+→ fix `400 …got "1"`; `isActive=` base `200 total=1` → fix `200 total=3`; `true&false` base
+`200 total=2` → fix a 400 naming both words. The untouched legs were checked to be
+untouched, by hash rather than by eye: `?isActive=false` (740 B), `?isActive=true&page=1&limit=2`
+(781 B, `total=3 page=1 limit=2 totalPages=2`), the rules door's `?isActive=true` (749 B) and
+both doors with no parameter at all (1,826 B and 1,096 B) are byte-identical on the two
+builds, the five keys and their order are the same five, and `PATCH /api/sources/{id}` is
+unchanged on both builds for `"1"`, `1` and `"yes"` — refused, byte for byte, by the door this
+round did not edit — and the accepted `{"isActive":false}` differs between the two answers only
+in `updatedAt`, which is what a write does (`{name, isActive, type}` compared equal, and the row
+was put back through the same door).
+
+Pinned offline: **1003/1003** — **25 new** in `tests/unit/bool-word.test.ts` over 6 describes,
+no browser, no database, no network. The set is pinned as two words; twenty measured
+non-words are each refused with the value echoed back and the whole set named; the
+three-way distinction between *absent*, *empty* and *one word* is pinned so `?isActive=`
+cannot drift back into meaning `false`; padding is trimmed on both sides and a tab; a word
+repeated is one word and two words are a refusal naming both and their count; the refusal is
+a 400 carrying exactly one key, `error`, with the same `content-type` as the doors' other
+refusals. The two doors are pinned by reading their own source: `boolParam` called once each,
+about `isActive`, its `.error` returned before any `prisma.` line, the `where` clause fed the
+judged value, and no `=== "true"` or `!== "true"` left anywhere in `src/` except inside the
+module that now owns the comparison — a census that walks every file, so a third door cannot
+open the same hole. `BOOL_WORDS` is pinned to be the set the refusal sentence prints, both
+contract entries are pinned to name both words, to price a 400 mentioning `isActive`, and to
+be the *only* two entries that document `isActive` as a query parameter. The write doors are
+pinned against the same two words through `validateBody`, so the body's `must be true or
+false` and the query's `must be one of true | false` cannot quietly become different
+vocabularies. tsc clean, lint **0 errors / 13 warnings** (unchanged from `main`, none on a
+line this round wrote), `check:contract` **8/8**, `check:llms-full` **unchanged** (the deep
+content file prints operation summaries, not query-parameter prose), build exit 0. No
+existing test was retargeted: the suite on `main` is 978 and nothing in it quoted the digit
+sentence.
+
+What this does not claim:
+
+* **The contract text on an already-published copy is still the old sentence.** `GET
+  /api/openapi` is generated from the source, so a running instance starts telling the truth
+  when it is rebuilt — verified above, the base instance still printing `(1) or (0)` while
+  the fix instance prints the two words. Nothing caches the document elsewhere;
+  `public/llms-full.txt` never contained it.
+* **`?isActive=` is still not a filter at three other doors.** `Webhook.isActive`,
+  `ExportProfile.isActive` and `LeadList.isDynamic` are boolean columns nobody filters on;
+  `GET /api/webhooks` takes no `isActive` at all and `GET /api/lead-lists` takes none. The
+  census that walks `src/` pins that no *third* door reads a boolean word, and the contract
+  test pins that these two operations are the only ones that document `isActive` as a query
+  parameter — not that every boolean column is filterable. That would be a feature, and an
+  undocumented filter is not the same defect as a misdocumented one.
+* **No first-party caller sends anything at all.** On `main`, `git grep 'isActive='` across
+  `src`, `demo`, `docs`, `README.md` and `public` returns nothing — the parameter is read by
+  two doors and spelled in a query string by no page, no demo and no document, so this round
+  breaks no internal caller. An external integration that has been sending `1` was being
+  answered with the paused crowd; it now gets a 400 that tells it so, which is the point of
+  the round and the only thing that changes for them.
+* **`?isActive=true|false` still cannot ask for both states at once, or express an OR over
+  statuses.** One column, one word — the same limit #56 recorded for the enum filters. Two
+  words is a refusal, not a union.
+* **The empty-value rule is a decision, not a discovery.** `?isActive=` returning the whole
+  table is the reading the open `?status=` round (#56) chose for an empty enum word; a
+  product could decide an empty boolean means `false`. It is stated here because the two
+  doors now share one rule and someone will eventually want them not to.
+* **No demo step this round**, for the reason #51, #52 and #53 recorded — `aw-deploy`'s only
+  open pair (#96, STEP 27) is `CONFLICTING`, so a step stacked on it is not a direct child of
+  that repo's `main`.
 
 ## Score: one arithmetic, and who may change it
 
