@@ -29,7 +29,8 @@
 // a step `*/n`, `a-b/n` or `a/n`. Day of week takes `7` as Sunday's other spelling and folds
 // it to `0` on the way in. What it refuses, by name, with the offending part quoted: `?`, `L`,
 // `W`, `#`, weekday and month names, a step of `0`, a reversed range, a number outside its
-// field, an empty entry between commas, and anything that is not exactly five fields.
+// field, an empty entry between commas, and anything that is not exactly five fields — and,
+// since #61, a day and a month that are each in range but have no date in common.
 //
 // One semantic choice is stated rather than inherited. Vixie cron matches a cadence that
 // restricts both day of month and day of week when *either* one matches; this matcher has
@@ -145,6 +146,36 @@ export function scheduleFieldProblem(field: string, spec: ScheduleFieldSpec): st
   return null;
 }
 
+/** Every month's longest real day, January first. February is 29, not 28: leap years exist,
+ * so `0 0 29 2 *` is a cadence that runs — measured, once in four years, on 2028-02-29. */
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/**
+ * Why the day field and the month field together name no date the calendar has, or `null`.
+ *
+ * Each field can be legal on its own and the pair still be empty: `0 0 30 2 *` asks for the
+ * 30th of February, and no February has a 30th even though `30` is a day of month and `2` is a
+ * month. `matchesSchedule` already answers that cadence `false` at every minute — this is the
+ * half that says so out loud, so the door that stores it and the minute that reads it agree.
+ *
+ * Only the day and month fields are cross-checked. A day-of-week is not part of the verdict
+ * because no combination of a real date and a weekday is unreachable: the weekday a date falls
+ * on moves through the whole week over the leap-year cycle, so `0 0 29 2 1` is a cadence that
+ * waits a long time rather than one that never comes.
+ */
+function dateProblem(parts: string[]): string | null {
+  const [dayField, monthField] = [parts[2], parts[3]];
+  if (scheduleFieldProblem(dayField, SCHEDULE_FIELDS[2]) !== null) return null;
+  if (scheduleFieldProblem(monthField, SCHEDULE_FIELDS[3]) !== null) return null;
+  const days = valuesFor(dayField, SCHEDULE_FIELDS[2]);
+  const months = valuesFor(monthField, SCHEDULE_FIELDS[3]);
+  if (days.length === 0 || months.length === 0) return null;
+  const earliest = Math.min(...days);
+  const longest = Math.max(...months.map((month) => DAYS_IN_MONTH[month - 1]));
+  if (earliest <= longest) return null;
+  return `day of month "${dayField}" is not a day of month "${monthField}" — the longest month it names has ${longest} days, so no minute of any year matches this cadence`;
+}
+
 /** Why this cadence can never be honoured, every problem in one message, or `null` when the
  * matcher can read it. Takes `unknown` because the doors hand it whatever the body held. */
 export function scheduleProblem(value: unknown): string | null {
@@ -160,6 +191,12 @@ export function scheduleProblem(value: unknown): string | null {
     const problem = scheduleFieldProblem(part, SCHEDULE_FIELDS[index]);
     if (problem !== null) problems.push(problem);
   });
+  // A cadence whose fields are each misfired is refused for its fields, not for its date:
+  // the two complaints would be one message about two different things.
+  if (problems.length === 0) {
+    const noSuchDate = dateProblem(parts);
+    if (noSuchDate !== null) problems.push(noSuchDate);
+  }
   return problems.length > 0 ? problems.join("; ") : null;
 }
 
