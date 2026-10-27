@@ -2535,6 +2535,131 @@ written beside them: two of the strings moved (`queues: await queueDepth()` → 
 report.cells`, plus the new `queueConnection`); `ok: true`, `db: "up"` and `time: new Date()` are
 the same claim about the same lines.
 
+### A row the queue never took did not finish, and the job report stops saying it did
+
+`GET /api/jobs/{id}` reads a `Job` row and hands back a `report` beside it: the share of the crowd the
+job walked, the verdict the status column cannot hold, and — since #40 — a `problem` naming the case
+where the row's own numbers cannot all be true at once. That reading had one rule about tense and it
+applied it to every row: a denominator with nothing accounted for under it was
+*"this job finished without saying it visited any row"*. True of a `COMPLETED` row written that way.
+Not true of the row a refused hand-off leaves behind, which has not finished anything because nothing
+ever started it.
+
+Measured on this session's own runtime, both legs built from `origin/main` at `65bd942`
+(`/tmp/opencode/r52_measure.log`, `/tmp/opencode/r52_ab.log`). `:3323` booted with `REDIS_URL` on a
+port nothing is listening on, `:3326` and `:3327` beside it — one on a real Redis (6391), one carrying
+`main`'s `job-report.ts` byte for byte so the two readings could be pressed against the **same rows**.
+The door that leaves the row is `POST /api/leads/{id}?action=enrich`: it writes the `Job` first, with
+the denominator in the insert (`totalItems: 1`, `src/app/api/leads/[id]/route.ts:85`), and hands off
+after. The scheduled sweep does the same with up to 100 (`scheduler.ts:223`), and so does a rule run
+(`enrichment.ts:340`). With no queue to take it:
+
+```
+POST /api/leads/{id}?action=enrich   -> 30.0 s, no answer at all (curl exit 000)
+the row it left                     -> status PENDING, totalItems 1, processedItems 0,
+                                       progress 0, startedAt null, error null
+GET /api/jobs/{that row}            -> "verdict": "PENDING", "verdictNote": null,
+                                       "problem": "a denominator of 1 and nothing accounted for —
+                                                   this job finished without saying it visited any row"
+```
+
+Two sentences in that answer are false. The door never answered — that half is #50's, whose 3-second
+hand-off deadline is still an open branch, and this round does not touch the queue. And the report
+calls a row with `startedAt: null` a job that *finished*. The second half is this file's own, and
+`GET /api/jobs/{id}` is the door an operator reaches for when a job does not move.
+
+The same counters under the status a worker writes when it takes a row printed the same finished-tense
+sentence: `RUNNING` beside 1 promised and 0 visited is a job that has not reached its first row, not a
+job that got through it silently. And the open row with **no** denominator said *"this job stamped no
+denominator"* — #40's past tense about a row that has no past.
+
+So the reading now asks the row what phase it is in before it accuses it of anything. `phaseOf(status)`
+in `src/lib/job-report.ts` partitions the five words the `Job.status` column holds — `PENDING` and
+`RUNNING` are `open` (a worker may still count rows into this row), `CANCELLED` is `stopped` (#40's
+forgiven shape, under a name that says why it is forgiven), and `COMPLETED`, `FAILED` and any word the
+schema does not know are `closed`. `jobReport` derives the phase once, from the column, and gives it to
+the two readings that can be wrong about it: `countersProblem` keeps its `done > total` contradiction
+for every phase — rows accounted for come from a worker that reached them, and no phase explains 14 of
+10 — and fires the silent-finish sentence only on a `closed` row. `progressOf` keeps `measured: false`
+and `percent: 0` for an open row with no denominator, and changes only which of the two
+`"not measured: …"` sentences explains it (`NOT_STARTED` beside `NO_DENOMINATOR`).
+
+Telling the truth takes `problem` away, and `problem` was the only key a caller could watch, so the
+sentence moves rather than disappearing: it arrives in `verdictNote`, the key that was `null` beside it.
+
+```
+                     row: status PENDING, totalItems 1, processedItems 0, startedAt null
+  main  : problem "a denominator of 1 and nothing accounted for — this job finished without saying it visited any row"
+          verdictNote null                                                          618 bytes
+  here  : problem null
+          verdictNote "not started: a denominator of 1 with nothing counted against it, and no worker has
+                       written a start on this row — the wait is the fact, not a result"      667 bytes
+```
+
+Matched on the same database and the same rows, both readings pressed side by side:
+
+| The row | `main` | this build | the two answers |
+| --- | --- | --- | --- |
+| `PENDING`, 1 promised, 0 visited | `problem` calls it finished | `verdictNote`: *not started … the wait is the fact, not a result* | 618 → 667 bytes |
+| `RUNNING`, 1 promised, 0 visited | the same finished-tense sentence | `verdictNote`: *in flight … what a worker that has not reached its first row looks like* | differs |
+| `PENDING`, no denominator | *this job stamped no denominator* | *no worker has written on this row, so it has stamped no denominator … yet* | differs |
+| `COMPLETED`, 12 promised, 0 visited | *this job finished without saying it visited any row* | unchanged, **byte for byte** | 626 = 626 |
+| `COMPLETED`, 16 visited against 0 | *16 row(s) accounted for against a denominator of 0* | unchanged, **byte for byte** | 626 = 626 |
+| `CANCELLED`, 1 promised, 0 visited | #40's *the mark was read before the worker reached a row* | unchanged, **byte for byte** | identical |
+| `COMPLETED`, 1 of 1 (the leg with a queue) | `problem` null, `verdictNote` null | unchanged | identical |
+
+The reference leg is the one that shows the accusation is not needed for the honest case: the same door
+on `:3326`, whose Redis was up, answered 200 in **133 ms** with a `jobId`, and three seconds later its
+row read `COMPLETED`, `processedItems: 1`, `problem: null` and one `JobResult`. That row's report is
+identical on both builds.
+
+What this does not claim:
+
+* **`GET /api/jobs` still prints no report at all.** Measured on both legs: 17 keys per row, no
+  `report` on any of them. The list door hands out raw counters, so `progress: 0` on a row that is
+  waiting reads the same as `progress: 0` on a row that stopped reporting. Giving that door a per-row
+  reading is a separate round's decision — it is a `count` per row on a paged door, and #45 and #46
+  are the precedent for what that costs.
+* **`verdict` is still the stored status.** `PENDING`, `RUNNING`, `COMPLETED` — none is rewritten, and
+  no column is written by this module. #40's rule stands: the arithmetic decides, a worker does the
+  writing, and `prisma.` appears nowhere in `job-report.ts`.
+* **`percent: 0` on an open row with a denominator is kept, not softened.** 0 of 1 is arithmetically
+  true of a job that has not started, `measured` stays `true`, and `reason` stays `null`. The lie was
+  in the sentence, not in the number.
+* **#50's row is not this row.** Once that branch lands, a refused hand-off leaves `FAILED` with
+  `error` starting `never queued:` — a *terminal* row, so `phaseOf` calls it `closed` and #40's
+  finished-tense sentence fires on it again. The row that branch writes is a fact about the queue and
+  this file reads it as one; teaching the reading that a `never queued:` row never started means
+  deciding what a row's `error` text is evidence of, which is that branch's question and not this
+  round's measurement. Said in both PR bodies rather than quietly coded against an unmerged branch.
+* **A `PENDING` row with work already counted under it is not called a contradiction.** It cannot be
+  made through any door — `JOB_PATCH` and `JOB_CREATE` forbid a caller from writing `progress`,
+  `totalItems`, `processedItems` or `failedItems` — and this round adds no accusation for a shape it
+  did not measure.
+
+Verification: `npm test` **1001/1001** — 23 new in `tests/unit/job-report-phase.test.ts` over 6
+describes on top of `main`'s 978, with none of `main`'s tests touched except two, no browser, no
+database, no network. `npx tsc --noEmit` clean, `npm run lint` **0 errors / 13 warnings** (unchanged
+from `main`), `npm run check:contract` **8/8**, `npm run check:llms-full` unchanged — the report is a
+response body, not a declared schema, so the contract and the deep-content file print none of these
+sentences — and `npm run build` exit 0. The new file pins: `phaseOf` walked over the five words parsed
+out of `prisma/schema.prisma` so the partition cannot silently drop a status, and an unknown word
+falling to `closed` rather than being excused; the accusation firing on `open` and, in the same call,
+*not* firing on `closed` — where the `closed` sentence is asserted digit for digit against #40's exact
+string, so this round cannot soften the case it was written for; the over-count surviving all three
+phases; `progressOf`'s two unmeasured sentences sharing the `"not measured: "` prefix a caller may
+branch on while being different sentences; the report's seven keys being the same seven keys in the
+same order; and the write path untouched — no worker file speaks `open`/`stopped`/`closed` or calls
+`phaseOf`, `counters, phase` is passed in exactly twice and both times inside `jobReport`, and no door
+re-decides the phase beside the module. The two retargeted pins are `tests/unit/job-stop.test.ts`'s
+two `countersProblem(…, true)` calls, which now pass `"stopped"`: the second argument is a phase, not
+a flag, and #40's forgiveness is the same forgiveness under its own name.
+
+Live STEP 28 is not written this round, for the reason #51 recorded: the newest demo step on
+`aw-deploy`'s `main` would have to sit on top of a still-open branch to be a direct child of anything,
+and a step whose base moves twice is a step that gets lost. The measurement above is this session's own
+runtime, on ports and databases this session owns, and the two legs read the same rows.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
