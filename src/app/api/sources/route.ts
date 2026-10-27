@@ -3,6 +3,8 @@ import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { boolParam } from "@/lib/bool-word";
 import { prisma } from "@/lib/db";
 import { pageParams } from "@/lib/pagination";
+import { filterParam } from "@/lib/list-filter";
+import { SOURCE_RUN_STATUSES, SOURCE_TYPES } from "@/lib/enums";
 import { readJson, validateBody } from "@/lib/validate";
 import { SOURCE_CREATE } from "@/lib/fields";
 import { scheduleProblem } from "@/lib/cron-schedule";
@@ -15,11 +17,25 @@ async function GET_impl(request: Request) {
   const workspaceId = await authedWorkspaceId(request, searchParams.get("workspaceId"));
   const active = boolParam(searchParams, "isActive");
   if (active.error) return active.error;
+  // `type` is the one column this door's own write route refuses a wrong word for by name
+  // (`POST /api/sources {type:"api"}` → 400, measured on the base build of this round), and
+  // `lastRunStatus` is the verdict the scrape worker stamps. Neither was ever read: eight
+  // presses against six sources — `?type=API`, `?type=api`, `?type=nonsense`,
+  // `?type=API&type=MANUAL`, `?lastRunStatus=FAILED` against a source whose sweep run had
+  // genuinely failed, `=SUCCESS`, `=PARTIAL`, `=nope` — every one of them answered
+  // `total=6` with all five types in the page. A filter this door does not have was sold to
+  // the caller as a page that happens to be the whole table. See `lib/list-filter.ts`.
+  const type = filterParam(searchParams, "type", SOURCE_TYPES);
+  if (type.error) return type.error;
+  const lastRunStatus = filterParam(searchParams, "lastRunStatus", SOURCE_RUN_STATUSES);
+  if (lastRunStatus.error) return lastRunStatus.error;
   const { page, limit } = pageParams(searchParams, 20);
 
 
   const where: any = { workspaceId };
   if (active.value !== null) where.isActive = active.value;
+  if (type.value) where.type = type.value;
+  if (lastRunStatus.value) where.lastRunStatus = lastRunStatus.value;
 
   const [sources, total] = await Promise.all([
     prisma.source.findMany({

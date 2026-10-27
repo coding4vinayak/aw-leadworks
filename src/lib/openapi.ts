@@ -1,4 +1,4 @@
-import { EXPORT_STATUSES, JOB_STATUSES, JOB_TYPES, LEAD_STATUSES } from "./enums";
+import { EXPORT_STATUSES, JOB_STATUSES, JOB_TYPES, LEAD_STATUSES, SOURCE_RUN_STATUSES, SOURCE_TYPES } from "./enums";
 import { EXPORT_FILTER_KEYS } from "./export-format";
 import { VERSION } from "./version";
 
@@ -352,10 +352,15 @@ const PATHS: Record<string, PathItem> = {
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["isActive", "Only the ones running or paused, asked with one word: true | false. Spaces around it trim; a digit, a capitalisation or a second word is refused rather than answered with the other state's page."],
+        ["type", `One source type, spelled as the column spells it: ${SOURCE_TYPES.join(" | ")}. Judged exactly as \`POST /api/sources\` judges the same word in a body — \`api\` is a 400 at both doors now. Before this round the read door took no \`type\` at all: \`?type=API\`, \`?type=nonsense\` and no \`type\` were one page of everything.`],
+        ["lastRunStatus", `Only the sources whose last run left that verdict: ${SOURCE_RUN_STATUSES.join(" | ")}. A source that has never run holds no word here, so it answers to none of them. \`PARTIAL\` is spelled by the column's own comment and written by no code in this app — asking it is a question with an answer, and the answer is an empty page.`],
         ["page", "1-based page number."],
         ["limit", "Page size."],
       ],
-      responses: { "200": "The sources, with a total.", "400": "An `isActive` that is not exactly one word of the set above." },
+      responses: {
+        "200": "The sources, with a total.",
+        "400": "An `isActive` that is not exactly one word of the set above; a `type` or `lastRunStatus` that is not exactly one word of its own set; or either of the three given two words at once.",
+      },
     },
     post: {
       id: "sources.create",
