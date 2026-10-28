@@ -91,6 +91,11 @@ async function POST_impl(request: Request) {
   // way it already asks it two paragraphs up about `profileId`: scoped to the
   // workspace, so another tenant's list answers the same way as a list that exists
   // nowhere and the refusal says nothing about who owns it.
+  //
+  // Those bytes are this module's history, not its present: the zero-byte CSV was a
+  // second defect the same press noticed, and #69 wrote the declared header into an
+  // empty crowd's file (`recordCount=0 fileSize=21`), so nothing reachable now
+  // downloads as zero bytes.
   const named = asked.filter.listId;
   if (typeof named === "string") {
     const holds = await prisma.leadList.count({ where: { workspaceId, id: named } });
