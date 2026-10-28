@@ -3433,10 +3433,26 @@ What this does not claim:
 * **No new query parameter opened.** `GET /api/exports` filters by `status` and `profileId`
   and still does exactly that; `filterJson` is only reachable in a body. Nothing about the
   read doors changed — their four `?listId=` legs are byte-identical on both builds.
-* **Nothing here is merged.** `main` is `e3fcc16` and this session has landed no PR, so the
-  nine pairs still open (#101, #100, #99, #98, #97, #93, #89, #88, #87) are all unmerged.
-  #101 and #99 touch `src/lib/openapi.ts` and `README.md` as this branch does; whichever
-  lands second carries a rebase of a few hunks.
+* **This one landed, and a sibling was already shipping it.** The PR for this section is
+  merged: `main` is `1b2f285` for it, with #100 behind it at `88bf6d2`, so both statements
+  above this bullet about `e3fcc16` describe the base this round was measured on rather than
+  the trunk it landed on. Eight pairs from this session remain open (#101, #99, #98, #97,
+  #93, #89, #88, #87) and six of them are `CONFLICTING` on the files this section names —
+  `src/lib/openapi.ts`, `README.md`, `src/lib/ids.ts` — which is a rebase, not a rework.
+  What the collision note missed is worth stating plainly: **#98, round #64's
+  `feat/export-list-id-at-the-write-door`, already fixed this defect** — the same
+  `unknownIdError("filterJson.listId", …)` call, the same 422 sentence, the same four measured
+  inputs. The census of open pairs compared titles and file lists and never read #98's diff.
+  The two implementations differ in exactly one decision: #98 stores the id verbatim and
+  *refuses* a padded id, reasoning that the value the worker matches must be the value the
+  caller sent, while this round trims inside `readExportFilter`, refuses `""` as not-a-name and
+  stores what it judged, the way `idFilterParam` already trims `?listId=` and `asStrings` trims
+  `listIds`. Both refuse `nope`, another tenant's id and `42` with the same bytes, so `main`
+  now behaves the trimmed way and **#98 cannot simply be rebased** — its own padding test
+  asserts the opposite of what shipped, so it has to be closed as superseded or rewritten to
+  main's semantics. #98 does carry what this round does not: `tests/unit/export-list-id.test.ts`
+  presses the live door over a database, where this round's fourteen tests pin the door's
+  source.
 * **No demo step**, for the reason #51, #52, #53 and #67 recorded — `aw-deploy`'s only open
   pair (#96, STEP 27) is still `CONFLICTING` (`mergeable: CONFLICTING`, re-checked while this
   PR was open), so a step stacked on it is not a direct child of that repo's `main`.
