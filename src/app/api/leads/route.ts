@@ -4,9 +4,9 @@ import { prisma } from "@/lib/db";
 import { intParam, pageParams } from "@/lib/pagination";
 import { asStrings, idFilterParam, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
-import { LEAD_CREATE, LEAD_FIELD_PICK, type LeadExportField } from "@/lib/fields";
+import { LEAD_CREATE, LEAD_EMAIL, LEAD_FIELD_PICK, type LeadExportField } from "@/lib/fields";
 import { fieldsParam, leadSelect } from "@/lib/list-fields";
-import { filterParam } from "@/lib/list-filter";
+import { filterParam, textFilterParam } from "@/lib/list-filter";
 import { LEAD_STATUSES } from "@/lib/enums";
 import { scoredWriteData } from "@/lib/lead-score";
 import { dispatchWebhookEvent } from "@/lib/webhooks";
@@ -22,6 +22,12 @@ async function GET_impl(request: Request) {
   // judged by that table now too — see `lib/list-filter.ts`.
   const status = filterParam(searchParams, "status", LEAD_STATUSES);
   if (status.error) return status.error;
+  // `?email=` was read by nobody: over a four-lead workspace it answered the
+  // question with the whole crowd, and with `&status=ENRICHED` attached it
+  // answered a row whose email was not the email asked for. The value is judged
+  // by the same field the create door validates against — see `lib/list-filter.ts`.
+  const email = textFilterParam(searchParams, "email", LEAD_EMAIL);
+  if (email.error) return email.error;
   const minScore = intParam(searchParams, "minScore", 0, 0, 100);
   const maxScore = intParam(searchParams, "maxScore", 100, 0, 100);
   const { page, limit } = pageParams(searchParams, 50);
@@ -36,6 +42,7 @@ async function GET_impl(request: Request) {
   const where: any = { workspaceId };
   if (list.id) where.listMemberships = { some: { listId: list.id } };
   if (status.value) where.status = status.value;
+  if (email.value) where.email = email.value;
   if (minScore > 0) where.score = { ...where.score, gte: minScore };
   if (maxScore < 100) where.score = { ...where.score, lte: maxScore };
 
