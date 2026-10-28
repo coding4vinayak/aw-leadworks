@@ -9,6 +9,7 @@ import { fieldsParam, leadSelect } from "@/lib/list-fields";
 import { filterParam } from "@/lib/list-filter";
 import { LEAD_STATUSES } from "@/lib/enums";
 import { scoredWriteData } from "@/lib/lead-score";
+import { emailCaseConflict, emailCaseHolder } from "@/lib/lead-email";
 import { dispatchWebhookEvent } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +78,31 @@ async function POST_impl(request: Request) {
 
   if (!input.data.email && !input.data.phone && !input.data.linkedinUrl) {
     return NextResponse.json({ error: "at least one contact method required" }, { status: 400 });
+  }
+
+  // One address, one row. `@@unique([workspaceId, email])` compares bytes, so the second
+  // spelling of an address this workspace already holds walked past it and became a second
+  // person: measured on the base build, `john@x.com`, `JOHN@X.COM` and `John@X.com` were three
+  // 201s and `GET /api/leads?limit=100` listed all three. The file door refuses the same row
+  // (`duplicatesExisting: 1`, `imported: 0`) because it folds case before it looks, and the
+  // DEDUPE job then spends a merge folding away what this door accepted (`found=2 resolved=2`).
+  // So this was the last place left where a person could be written twice.
+  //
+  // Refused, not rewritten: the bytes of a row that already exists are nobody's business here,
+  // and a new address is still stored exactly as it was sent. A collision with the same bytes is
+  // left to the index, which answers that one itself.
+  const askedEmail = input.data.email;
+  if (typeof askedEmail === "string") {
+    const holders = await prisma.lead.findMany({
+      where: { workspaceId, email: { equals: askedEmail, mode: "insensitive" } },
+      select: { id: true, email: true },
+      // The oldest holder gets named: three spellings of one address leave the
+      // database free to return them in any order, and a refusal that names a row
+      // should name the same one every time the same press is made.
+      orderBy: { createdAt: "asc" },
+    });
+    const holder = emailCaseHolder(askedEmail, holders);
+    if (holder) return emailCaseConflict(holder, askedEmail);
   }
 
   // Every list the caller names has to exist here, or the lead is created
