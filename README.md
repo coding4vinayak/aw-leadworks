@@ -4230,7 +4230,12 @@ rebuilt for the A/B above, and the fix again after restoring it; the first attem
 third build **failed** the type check, because the new test imports `SOURCE_RUN_STATUSES` and the
 base does not export it — the test is pinned to the fix, and that failure is the pin working. No
 existing test was retargeted: `main`'s 1202 contain nothing that quotes the sources door's old
-silence.
+silence. Re-checked after rebasing onto `main` at `88bf6d2` (which carries #100 and #102): still
+**no test retargeted and none deleted**, suite **1250/1250** with these 14 over main's now-1236,
+`tsc` exit 0, lint 0 errors / 13 warnings, `check:contract` **8/8**, `check:llms-full` unchanged.
+The rebase touched one file — `README.md`, where #102's landed section and this one were both
+inserted immediately before `## Score`; both are kept, main's first. `src/lib/openapi.ts` did not
+collide: #102 priced the exports body and responses, this round added the two sources parameters.
 
 What this does not claim:
 
