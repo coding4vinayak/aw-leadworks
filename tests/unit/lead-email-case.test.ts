@@ -168,13 +168,18 @@ describe("the case refusal is the index's own shape, plus the row it names", () 
     assert.deepEqual(Object.keys(json.conflict).sort(), ["askedEmail", "existingEmail", "existingId", "fields"]);
   });
 
-  it("carries its own `fields`, because the index's 409 has none on this Prisma", () => {
+  it("agrees with the index's 409 on `fields`, and carries the row that 409 cannot name", () => {
     // Measured on this round's database (`scripts/r66-meta-probe`, run then deleted): the
     // driver adapter Prisma 7 requires puts the violation in `meta.driverAdapterError.cause`
-    // with a constraint name and no `meta.target` at all, so `conflictFor` takes its own
-    // fallback branch — a byte-identical duplicate answered `conflict: { fields: [] }` and
-    // "That Lead already exists in this workspace." Naming the columns a constraint holds is
-    // that helper's problem, not this round's; the case refusal does not inherit the gap.
+    // with a constraint name and no `meta.target` at all.
+    //
+    // RETARGETED on rebase onto `88bf6d2` (#100): this pin asserted the gap it was written
+    // against — `conflict: { fields: [] }` and "That Lead already exists in this workspace."
+    // `src/lib/unique-index.ts` now reads the columns out of the constraint's own name, so the
+    // byte-identical duplicate answers `fields: ["email"]` with the same clause this round's
+    // refusal opens with. What the index still cannot do is name the *row* — an index violation
+    // carries columns, not an id — so that, not `fields`, is what this round adds. Pinned in
+    // both directions: the two bodies agree on `fields`, and only this round's carries the id.
     const measured = conflictFor(prismaError("P2002", {
       modelName: "Lead",
       driverAdapterError: {
@@ -187,8 +192,33 @@ describe("the case refusal is the index's own shape, plus the row it names", () 
         },
       },
     }));
-    assert.deepEqual(measured?.body.conflict, { fields: [] });
-    assert.equal(measured?.body.error, "That Lead already exists in this workspace.");
+    assert.deepEqual(measured?.body.conflict, { fields: ["email"] });
+    assert.equal(measured?.body.error, "A Lead with this email already exists in this workspace.");
+    // The id the index's answer cannot carry is exactly the key this round's does.
+    assert.deepEqual(Object.keys(measured!.body.conflict).sort(), ["fields"]);
+  });
+
+  it("still refuses when a name does not decompose, and this round does not lean on that path", async () => {
+    // #100's own limit: a constraint that is not `<table>_<columns>_key` keeps the nameless
+    // body. This round's refusal is built from the rows the lookup handed back, so it names
+    // `fields: ["email"]` and the holder whichever way the index's sentence falls out — the
+    // two are not wired together, which is why a later change to `unique-index.ts` cannot
+    // silently empty this refusal's `conflict`.
+    const nameless = conflictFor(prismaError("P2002", {
+      modelName: "Lead",
+      driverAdapterError: {
+        name: "DriverAdapterError",
+        cause: {
+          kind: "UniqueConstraintViolation",
+          constraint: { index: "lead_email_dupes" },
+          table: "Lead",
+        },
+      },
+    }));
+    assert.deepEqual(nameless?.body.conflict, { fields: [] });
+    const { json } = await refusal("JOHN@X.COM");
+    assert.deepEqual(json.conflict.fields, ["email"]);
+    assert.equal(json.conflict.existingId, "cmrealtsofd");
   });
 });
 
