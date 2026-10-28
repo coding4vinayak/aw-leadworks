@@ -4071,6 +4071,8 @@ intact in the same instance: `?status=New`, `?status=new`, `?status=CONTACTED,NE
 `?status=nonsense` are 400s from `LEAD_STATUSES`, `?status=NEW` is a 200, `?listId=nope` is #58's 422
 and `?listId=a&listId=b` is its 400, and `?minScore=50&status=NEW&page=1&limit=3` answers 200.
 
+**Rebased a second time onto `main` at `88bf6d2`**, the trunk #100 and #102 left behind. The rule this branch owns did not move: `origin/main:src/app/api/leads/route.ts` still answers a score bound with `intParam(searchParams, "minScore", 0, 0, 100)` — the silent clamp this section measured — and `src/lib/openapi.ts` on main carries no `minScore` line at all, so none of this had arrived by another route. The conflict was again the README anchor plus the door's head, and the merge kept both sides: main's `EXPORT_LIST_ID` block in `src/lib/export-format.ts` and this branch's `wholeScoreProblem` loop now sit in one file without touching each other. Every gate re-ran on the rebased tree — `npm test` **1259/1259** (main's 1236 plus these 23), `tsc --noEmit` clean, lint 0 errors / the same 13 warnings, `check:contract` 8/8, `check:llms-full` unchanged. The counts in the two paragraphs above (`1001/1001` over main's 978, `1225/1225` over `e3fcc16`) are this round's own history and are true of the trees they name; they are not this tree's numbers.
+
 ## Said rather than smoothed
 
 - **`POST /api/exports` still stores a bound the worker will refuse.** Measured on the fix build:
