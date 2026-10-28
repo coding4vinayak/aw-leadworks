@@ -4125,6 +4125,178 @@ tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, l
 re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
 and the eight scored leads the tables above were measured over belong to it.
 
+### An export's columns were the rows' to give, so a crowd of zero wrote a file that named nothing
+
+`POST /api/exports` takes two different kinds of instruction in one body: `filterJson`, the
+crowd a file will hold, and `fields`, the columns that file will have. The door judged both —
+`fields` is required, non-empty, and every name is checked against `LEAD_EXPORT_FIELDS` — and
+then handed the names to writers that ignored them. `exportToCSV` called
+`stringify(rows, { header: true })`, and csv-stringify builds a header from the keys of the
+objects it is given; `exportToXLSX` called `json_to_sheet(data)`, which does the same. With
+rows both are right. With none, the CSV had **no bytes at all** and the workbook had a sheet
+with **no cells**.
+
+Measured on `88bf6d2` built in a fresh worktree, served on **:3421** over this round's own
+database `leadworks_r70` with a private Redis on 6412, two workspaces and keys in `0600` files
+printed nowhere. Tenant A held three leads — `ana@x.com` and `bo@x.com` `NEW`, `cy@x.com`
+`ENRICHED`, all `company: Acme` — and one list `cmvsagqzd00091bqcpoj9yln0` with no members in
+it. Every leg below is `POST /api/exports {"format":<F>,"fields":["email","status","company"],
+"filterJson":<this>}`, polled to a terminal status and then downloaded, bytes read off the
+download (`r70_press_base2.log`, and the `--- BASE :3421 ---` block of `r71_press_ab.log`):
+
+```
+{"status":"NEW"}        CSV  COMPLETED recordCount=2 fileSize=58     "email,status,company\n" + bo + ana
+                        JSON COMPLETED recordCount=2 fileSize=157    two objects
+                        XLSX COMPLETED recordCount=2 fileSize=16145   dimension A1:C3
+                        PDF  COMPLETED recordCount=2 fileSize=1672
+{"status":"CONVERTED"}  CSV  COMPLETED recordCount=0 fileSize=0      download 200, ZERO bytes
+                        JSON COMPLETED recordCount=0 fileSize=2       "[]"
+                        XLSX COMPLETED recordCount=0 fileSize=15767   "<sheetData/>", dimension A1, no sharedStrings
+                        PDF  COMPLETED recordCount=0 fileSize=1640   "0 leads · fields: email, status, company"
+```
+
+and the identical four files for the other two ways of asking for nobody —
+`{"listId":"cmvsagqzd00091bqcpoj9yln0"}` (a list that exists and holds nothing) and
+`{"tags":["nosuch"]}` — measured `CSV fileSize=0`, `XLSX fileSize=15767 dimension A1`,
+`JSON fileSize=2`, `PDF 1640–1641` each time. The workbook's own XML, read out of the
+download:
+
+```
+<dimension ref="A1"/><sheetViews>…</sheetViews><sheetData/>
+```
+
+and the door that filed these files refuses, on the same build, to proceed without the names:
+
+```
+POST /api/exports {"format":"CSV","filterJson":{"status":"NEW"}}   400 {"error":"fields is required", …}
+POST /api/exports {"format":"CSV","fields":[],"filterJson":…}      400 fields must hold at least one entry
+```
+
+Two facts make this a defect rather than a format opinion. First, one request produced four
+files that answered the same question four ways: JSON said `[]`, the PDF printed
+`0 leads · fields: email, status, company`, and the two artefacts a spreadsheet actually opens
+said nothing — the CSV not even that it was a CSV. Second, nothing was missing from the app:
+the columns are required at the door and validated against the list this API can project, so
+the header line those files lack is a line the caller handed over and the writer threw away.
+A script that reads the download as `tail -n +2` gets a crowd off a file with no header to
+skip past, and a tool that maps columns by name opens a 15 KB workbook with no column to map.
+
+Four decisions, each taken to match a rule this app already runs:
+
+* **The header comes from the request.** `stringify(rows, { header: true, columns: fields })`
+  — one argument, and csv-stringify now writes the first line from the caller's array instead
+  of deriving it from whatever keys survived. A crowd with rows is byte-identical to before
+ (same order, same quoting, same cells), which is the whole point: the rows are the product
+  and nothing about them moved. The same line also settles the smaller version of the bug that
+  does not need an empty crowd — `getNestedValue` answers `undefined` for a path a lead does
+  not have, so a declared column that no row carried was silently dropped from the header; with
+  `columns` it is present because the caller asked for it.
+* **The workbook takes the same rule through its own API.** `aoa_to_sheet([fields])` is
+  SheetJS's way of writing a header row as cells, and it is used **only** when the crowd is
+  empty; `json_to_sheet(data)` still runs for anything with rows, because that is also where
+  the key union and the cell typing this app depends on happen. Feeding a blank first data row
+  to force a header would have put a lie in the file to fix its appearance.
+* **JSON and the PDF are untouched, on purpose.** `[]` and
+  `No leads matched this export's filter.` are true statements about an empty crowd, and both
+  already name the count. Widening this round to them would be re-deciding two formats to make
+  a point about a third, so the pins are that those lines are still there and still alone.
+* **The rule is borrowed, not invented.** `src/lib/import-problems.ts` is this app's own
+  answer to "a file with nothing in it": its last line is `[header, ...rows].join("\n") + "\n"`,
+  so the reject list a buyer takes back to their spreadsheet opens with
+  `"line","field","message"` whether or not any row was rejected. A reject list with no rejects
+  is a header plus zero rows; so is an export nobody matched. The contract's
+  `exports.download` 200 now says so, and says where the promise comes from — "as the import's
+  problem report does" — while the 410 sentence and `public/llms-full.txt` are byte-identical.
+
+Live A/B on the **same rows** — the fix build booted over the database the base press had
+left, nothing reseeded. `r71_press_ab.log` holds both blocks; `r71_press_rebased.log` is the
+same legs re-run against this branch after the four merges and the dependency bump landed
+mid-round:
+
+```
+crowd of 2  CSV   base 2/58 bytes, header + 2 rows     fix 2/58 bytes, the same 58 bytes
+            JSON  base 2/157                            fix 2/157
+            XLSX  base 2/16145, A1:C3                   fix 2/16145, A1:C3
+            PDF   base 2/1672                            fix 2/1670–1671 (the generated-at text moves the length)
+crowd of 0  CSV   base 0/fileSize=0,  download 200, 0 bytes   fix 0/fileSize=21, "email,status,company\n"
+   by status,  XLSX base 0/15767, <sheetData/> A1              fix 0/15906, dimension A1:C1, three cells
+   by list and  JSON base 0/2   "[]"                            fix 0/2   "[]"          unchanged
+   by tag      PDF  base 0/1640                                 fix 0/1639–1640         unchanged in substance
+tenant B's own empty crowd                                      fix 0/fileSize=21, header only — no row of tenant A's
+#68's door refusals ({"listId":"nope"} 422, "" 400, 42 400, missing fields 400, [] 400)  all five unchanged
+```
+
+**How the first A/B was wrong, and what it took to make it right.** The base build and the fix
+build were first pressed sharing one Redis on 6412, so each build's BullMQ worker picked up the
+other's export jobs and the legs came back swapped — the fix printing zero bytes and the base
+printing the header. Nothing was reseeded and nothing was quietly re-run until it agreed: the
+run was discarded, the fix build moved to its own Redis on 6413, the two apps were killed by the
+exact PID read off `ss -ltnp` for their own port, and the press was run again. Two more
+artefacts of the same pass, both fixed the same way: `wait_for` polled tenant B's row with tenant
+A's key, which reported "no terminal status" for a row that `psql` showed sitting
+`COMPLETED recordCount=0 fileSize=21`, and the press read `id` off the wrong level of the
+create response, which is `{export, jobId}`.
+
+Pinned offline, **1330/1330** on this branch — **17 new** in
+`tests/unit/export-empty-crowd-header.test.ts`, no browser, no database, no network, `main` baseline **1313/1313** at `15e100e`, measured in a detached worktree of trunk with this
+branch's own `node_modules`: the measured zero bytes reproduced by the one call the writer makes,
+and the same call with `columns` producing the header; byte-identity for a non-empty crowd with
+and without the argument; the caller's order kept when the rows spell it differently; a declared
+column no row carries still getting its column; `json_to_sheet([])` measured as `!ref === "A1"`
+with `Object.keys` holding only `!ref` and a spreadsheet reading back `[[]]`; `aoa_to_sheet([FIELDS])`
+round-tripping through `XLSX.write` → `XLSX.read`, because this build cannot use SheetJS's
+`writeFile` at all; a crowd with rows deep-equal to the sheet the old branch produced; both
+writers' source with **comments blanked** (this round's own fix comment quotes the words
+`json_to_sheet` builds its header from, and a pin that can be satisfied by the prose explaining
+it is not a pin); the neighbouring rules this round must not re-decide (`csvSafeText`, the
+array-flattening `exportCell`, `JSON.stringify(data, null, 2)`, the PDF's sentence); the contract's
+new 200 sentence and the 410 sentence unchanged word for word; and `EXPORT_CREATE.fields` still
+`required`, still `min: 1`, still exactly `LEAD_EXPORT_FIELDS` — which is why the header can be
+written unconditionally. **No existing test was retargeted or relaxed**: `stringify(rows` appears
+in the suite only in this round's own reproduction, so no earlier pin claimed the header came
+from the rows. **Non-vacuity, offline and exact**: six patterns run against the base text and
+this branch's (`r71_vacuity.log`) — three presence pins match here and not on `88bf6d2`, the
+pin that the rows-built call is *gone* matches there and not here, and the two pins for what this
+round left alone (the PDF's sentence, the 410 response) match on both. tsc exit 0, lint **0
+errors / 13 warnings** (the same 13 as `main`, none on a line this round wrote),
+`check:contract` **8/8**, `check:llms-full` **unchanged**, build exit 0.
+
+What this does not claim:
+
+* **The scheduled path gets these bytes, but was not pressed.** `src/lib/scheduler.ts:143`
+  creates its own `Export` row and calls the same `enqueue(queues.export, "run-export", …)`, and
+  the worker runs the same `exporter.ts`, so a scheduled profile whose crowd is empty now writes
+  a header too. That is a reading of the code, not a measurement: no schedule was fired on either
+  build.
+* **A no-match crowd is still a finished export.** `recordCount=0` with `status: COMPLETED` and a
+  stamped `expiresAt` is what this round made a well-formed empty file, not what it made an
+  error. Whether zero matches should refuse the export instead of answering it is the question
+  #68's last bullet declined, and this round declines it identically.
+* **`fileSize` is only what the row reports.** The retention sweep and `GET
+  /api/exports/{id}/download` read the path and stream the bytes; nothing in either was changed,
+  and no threshold that compares `fileSize` was re-measured for 21 versus 0.
+* **The tag disagreement #68 recorded is still there.** `{"tags":["nosuch"]}` exports nobody, as
+  it did; `array_contains` still means AND for an export's two tags while
+  `rule-conditions.ts:279` means OR for a rule's two. This round wrote the header; it did not
+  choose a meaning.
+* **Nothing here is merged, and trunk moved under the round while it was being written.**
+  `main` is `15e100e`. Five pairs this session had open when the base press ran — #101, #99, #98,
+  #93 and Dependabot's #89 — landed during it, so this branch is a direct child of `15e100e`
+  rather than of the `88bf6d2` the base build was made from. That is not a re-measurement
+  excuse: `git diff --stat 88bf6d2 15e100e -- src/lib/exporter.ts src/lib/export-format.ts
+  src/app/api/exports` is empty, so the two writers this round changed are byte-for-byte the
+  writers trunk has, and the press was re-run on the rebased tree anyway over the same rows
+  (`r71_press_rebased.log`) — CSV `21`, XLSX `15906` at `A1:C1` with three header cells, JSON `2`,
+  the five door refusals identical, tenant B's own empty crowd a 21-byte header with no row of
+  tenant A's in it. #89's minor bump of bullmq (`6.3.15` → `6.4.0`) is the one thing in that
+  window that touches how a job reaches a worker, and the re-press ran on it. Three README-only
+  pairs from this session (#97, #88, #87) went `CONFLICTING` when #103 landed its README fix —
+  a few hunks each, rebases rather than reworks — and Dependabot opened #104 and #105 in the same
+  window.
+* **No demo step**, for the reason #51, #52, #53, #67 and #68 recorded — `aw-deploy`'s only open
+  pair (#96, STEP 27) is still `CONFLICTING`, so a step stacked on it is not a direct child of
+  that repo's `main`.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
