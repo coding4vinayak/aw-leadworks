@@ -293,6 +293,146 @@ Unlike discovery from a source — which merges on email, phone, LinkedIn or a
 fuzzy name match — an import is the customer's own list: a duplicate address is
 not a better record, it is the same person twice.
 
+### A unique index says which column it refused, and the 409 says it back
+
+`conflict.fields` is the one part of a duplicate-response body a client can act
+on: it is what marks an input box red. On this app it was always empty.
+
+Prisma 7 with the pg driver adapter hands the door this, read off the error in
+the process that raised it (`/tmp/opencode/r67-meta-probe.log`):
+
+```json
+{"driverAdapterError":{"name":"DriverAdapterError","cause":
+  {"originalCode":"23505",
+   "originalMessage":"duplicate key value violates unique constraint \"Lead_workspaceId_email_key\"",
+   "kind":"UniqueConstraintViolation","constraint":{"index":"Lead_workspaceId_email_key"},
+   "table":"Lead"}},"modelName":"Lead","target":[]}
+```
+
+`target` — the only field `conflictFor` read — is there, and it is empty. The
+collision is in the constraint's *name*, which nothing read. Measured on the
+base build (`e3fcc16`, booted on :3418 over `leadworks_r67`,
+`/tmp/opencode/r67_press_base.log`) — five doors, one blind answer:
+
+| press on the base build | answer |
+| --- | --- |
+| `POST /api/leads {"email":"john@x.com"}` twice | `409 {"error":"That Lead already exists in this workspace.","conflict":{"fields":[]}}` |
+| `PATCH /api/leads/{nina} {"email":"john@x.com"}` | `409` same body |
+| `POST /api/lead-lists/{l}?action=add-leads {"leadIds":[john]}` twice | `409 "That LeadListMember already exists…", fields []` |
+| `POST …?action=add-leads {"leadIds":[john,john]}` | `409` same body |
+| `POST /api/leads/{john}?action=add-to-list {"listId":l}` again | `409` same body |
+
+Prisma names a unique index `<table>_<column>[_<column>]_key` from the schema —
+`Workspace_slug_key`, `Lead_workspaceId_email_key`,
+`LeadListMember_listId_leadId_key`, all three read out of `pg_indexes` on that
+instance. The same error carries the table twice (`cause.table` and
+`modelName`), so the columns are the part between the prefix and the `_key`.
+`src/lib/unique-index.ts` does that split and nothing else:
+
+```ts
+export function uniqueIndexColumns(indexName: string, table: string): string[] | null {
+  if (!indexName.endsWith("_key")) return null;
+  const prefix = table + "_";
+  if (!indexName.startsWith(prefix)) return null;
+  const columns = indexName.slice(prefix.length, -"_key".length).split("_");
+  if (columns.some((column) => column.length === 0)) return null;
+  return columns;
+}
+```
+
+Four decisions worth their reason:
+
+- **`meta.target` stays the authority when it carries something.** That is the
+  client's own words about the constraint; the index name is Postgres' words
+  about the table. Prisma 5 and 6 filled `target`, this version does not, and a
+  future version that fills it again should not be argued with. An empty array
+  is not a target — a check that only asked *whether the key exists* would keep
+  answering "nothing collided" forever, which is the bug.
+- **There is no map of index names to columns.** A hand-written table is a list
+  that falls behind the schema on the day somebody adds a unique column, and
+  then the door names the wrong thing with total confidence. The split needs
+  one fact to be true: underscores mean one thing. They do here — `@map` and
+  `@@map` appear zero times in `prisma/schema.prisma`, so a table is its
+  model's name and a column is its field's name — and
+  `tests/unit/unique-index.test.ts` proves it against the schema text: it reads
+  every `@unique` and `@@unique` the schema declares, builds the name Prisma
+  will give it, and fails if the split does not hand back exactly the declared
+  columns. A future `home_town` column or a renamed constraint fails a test
+  rather than mis-naming a caller's field.
+- **When the name does not decompose, this module says nothing** and the door
+  keeps the sentence it has always kept: `fields: []`, `"That Lead already
+  exists in this workspace."` A wrong field is worse than none — a client that
+  marks the wrong input red has been lied to precisely.
+- **`workspaceId` is still dropped from the named fields.** It is the tenant the
+  caller already authenticated as; naming it describes the scope of the
+  constraint, not the collision. That rule predates this round and the
+  `meta.target` tests already pinned it; the real error now reaches the same
+  sentence.
+
+Live A/B on **the same rows** — the fix build booted over the database the base
+press had left, nothing reseeded (`/tmp/opencode/r67_same_rows_fix.log`, the
+base column from `/tmp/opencode/r67_press_base.log`):
+
+| press | base build | fix build |
+| --- | --- | --- |
+| `POST /api/leads {"email":"john@x.com"}` (row already there) | `409 fields: []` | `409 {"error":"A Lead with this email already exists in this workspace.","conflict":{"fields":["email"]}}` |
+| `PATCH /api/leads/{nina} {"email":"john@x.com"}` | `409 fields: []` | `409` names `email` |
+| `POST /api/lead-lists/{l}?action=add-leads [john]` (member already) | `409 fields: []` | `409` names `listId + leadId` |
+| `POST …?action=add-leads [john, john]` (one press, twice) | `409 fields: []` | `409` names `listId + leadId` |
+| `POST /api/leads/{john}?action=add-to-list {listId:l}` | `409 fields: []` | `409` names `listId + leadId` |
+| tenant B, an address nobody holds | `201` | `201` |
+| tenant B, its own address twice | `409 fields: []` | `409` names `email`, and the body carries no workspace id |
+| `POST /api/leads {"email":"JOHN@X.COM"}` | `201` (a twin) | `201` (a twin) |
+| `POST /api/leads/import` over `john@x.com, zoe@x.com, john@x.com` | `201 {"imported":1,"duplicatesExisting":1,"duplicatesInFile":1,"total":3}` | identical |
+| `POST /api/leads/{carol}?action=enrich` | `200 {"jobId":…}` | `200 {"jobId":…}` |
+| `GET /api/openapi` | no `conflict` text | no `conflict` text — unchanged on purpose |
+
+The case-variant row is the honest one: `main` still writes a twin for
+`JOHN@X.COM`. Folding case at those doors is a separate round's work, open as
+**#99**; this round changes no write, only what the index's own refusal says.
+
+Pinned offline: **1222/1222** — **20 new** in `tests/unit/unique-index.test.ts`
+over four describes, no browser, no database, no network. The measured meta is
+reproduced verbatim as a fixture, the split is pinned on the three names read
+out of `pg_indexes` plus four shapes it must refuse, and `conflictFor` is pinned
+to the body the door answers with — including that neither the driver's
+`originalMessage` nor a workspace id reaches the caller. `npx tsc --noEmit`
+exit 0, `npm run lint` 0 errors / 13 warnings (the same 13 as `main`, none on
+lines this round wrote), `npm run check:contract` 8/8, `check:llms-full`
+unchanged, `npm run build` exit 0. **No existing test was retargeted**:
+`tests/unit/conflict.test.ts` still passes on the `meta.target` path it was
+written against. Non-vacuity, offline and exact — the same measured meta through
+`conflictFor` as `main` wrote it and as this branch writes it
+(`/tmp/opencode/r67_discriminate.log`):
+
+```
+base: {"error":"That Lead already exists in this workspace.","conflict":{"fields":[]}}
+fix : {"error":"A Lead with this email already exists in this workspace.","conflict":{"fields":["email"]}}
+base: {"error":"That LeadListMember already exists in this workspace.","conflict":{"fields":[]}}
+fix : {"error":"A LeadListMember with this listId + leadId already exists in this workspace.",…}
+```
+
+and the `base:` line is character-for-character the body the live base build
+answered with.
+
+**What this does not claim.** The sentence says *"in this workspace"* even for
+`LeadListMember`, whose index is per-list, not per-workspace — that phrasing is
+`conflictFor`'s, it predates this round, and the `meta.target` tests pin it for
+models with no workspace column at all, so changing it is its own round's
+decision. The body names *columns*, not the row: `LeadListMember with this
+listId + leadId` tells a caller what it already knew and not which membership
+owns it, and getting an id out of an index violation means a lookup the error
+cannot do. A caller told `fields: ["email"]` still cannot ask for that row —
+measured on this build, `GET /api/leads?email=john@x.com` is not a filter
+`GET /api/leads` reads at all (it returns the whole crowd, `john@x.com`,
+`JOHN@X.COM` and `nina@x.com` together), so the missing piece after this round
+is the read door, not the write door. A P2002 raised by a name that is not a
+`<table>_<columns>_key` — none exists in this schema today — still gets the old
+nameless body. `src/lib/billing-events.ts` keeps swallowing its own P2002 on
+purpose: a billing event that arrived twice is not a caller's collision. No
+demo step while `aw-deploy`'s proxy PR #96 is `CONFLICTING`
+(`mergeStateStatus: DIRTY`, re-checked when this PR was opened).
+
 ### An enrichment rule applies the conditions it declares
 
 `schema.prisma` declares `EnrichmentRule.conditions Json // When to apply this
