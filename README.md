@@ -4272,6 +4272,8 @@ the same 404 as a row that is not there; no key is 401 and a claimed foreign `wo
 `GET /api/exports?profileId=nope` on this base answers #58's 422 naming the id — the resolution this
 round's `profileId` sentence now points at.
 
+**Rebased a second time onto `main` at `88bf6d2`.** Nothing here had landed in the meantime — `git ls-tree -r origin/main src/app/api` has no `export-profiles/`, and the only `exportProfile` reads on trunk are `src/app/api/exports/route.ts:32` (a `count` behind `?profileId=`) and `:68` (a `findMany` resolving a body reference), both of which consume profiles rather than expose them. So the two doors, the `sweep` verdict and its log line are still this branch's own work, and they met main only at the README anchor: #102's section and this one were both appended in the same slot, and both are kept. `src/lib/openapi.ts` merged without conflict — main's landed `exports.create` 422 wording is verbatim, and this branch adds its two paths plus its own `profileId` sentence, with `SWEEP_TAKES` defined once, in `src/lib/export-profile.ts`. Every gate re-ran on the rebased tree: `npm test` **1257/1257** (main's 1236 plus these 21), `tsc --noEmit` clean, lint 0 errors / the same 13 warnings, `check:contract` 8/8 with the two new operations, `check:llms-full` unchanged (the 49-operation heading is still this file's only addition over the base). The `1223/1223` and the `e3fcc16` above describe the earlier rebase of this branch, not this one.
+
 ## Said rather than smoothed
 
 - **No door writes this table yet.** `POST`, `PATCH` and `DELETE` stay absent and the paths answer
