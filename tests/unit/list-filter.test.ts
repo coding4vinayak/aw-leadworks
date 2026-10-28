@@ -251,10 +251,17 @@ test("an export's stored filter is refused the word the worker could never match
 });
 
 test("POST /api/exports asks the worker's question before it writes a row", () => {
+  // Retargeted in #68, not relaxed: the door used to call `exportFilterProblem`,
+  // which judged the blob and threw the judgement away. It now reads through
+  // `exportFilter` so the filter it files is the one it judged — and the padded name
+  // it refused-to-resolved never reaches a stored row. Both halves of what this test
+  // always asked still hold: the judge is called, and it runs before anything is
+  // written.
   const body = functionBody(blankComments(exportsDoor), "POST_impl") ?? "";
-  assert.match(body, /exportFilterProblem\(input\.data\.filterJson\)/);
+  assert.match(body, /exportFilter\(input\.data\.filterJson\)/);
+  assert.doesNotMatch(body, /exportFilterProblem/, "the door keeps the value, so it does not ask for the sentence alone");
   assert.ok(
-    body.indexOf("exportFilterProblem") < body.indexOf("prisma.export.create"),
+    body.indexOf("exportFilter") < body.indexOf("prisma.export.create"),
     "the refusal happens before anything is stored",
   );
   assert.match(exportFormat, /filterWordProblem\("filterJson\.status",\s*status,\s*LEAD_STATUSES\)/);
