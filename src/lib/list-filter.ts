@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import type { Field } from "./validation-engine";
 import { short } from "./validation-engine";
+import { validateBody } from "./validate";
 
 /**
  * The word a read door filters by, checked against the column's own vocabulary.
@@ -75,6 +77,17 @@ export interface FilterWordError {
   error: NextResponse;
 }
 
+export interface FilterText {
+  /** The text to filter by, or `null` when the caller said nothing about this column. */
+  value: string | null;
+  error: null;
+}
+
+export interface FilterTextError {
+  value: null;
+  error: NextResponse;
+}
+
 /**
  * Why this word cannot name a value of the column, in the same sentence the write
  * routes use, or `null` when it can. Split out because the same word arrives two
@@ -111,3 +124,84 @@ export function filterParam(
 function bad(message: string): NextResponse {
   return NextResponse.json({ error: message }, { status: 400 });
 }
+
+/**
+ * A text column the read door was asked to filter by, judged by the rule the
+ * write door already applies to it.
+ *
+ * The enum case above is the easy one: `LEAD_STATUSES` is a list of words a
+ * column holds, so a word outside it can only be a mistake. A free-text column
+ * has no list to check against, and the mistake is in the *shape* — which the
+ * write door already refuses, through the field's own entry in `fields.ts`
+ * (`email: { kind: "text", nullable: true, format: "email", max: 254 }`).
+ * `GET /api/leads?email=` asked none of it. Measured on the running app before
+ * this round, in this round's own runtime (`e3fcc16` built in a fresh worktree,
+ * served on :3419 over `leadworks_r68`, `/tmp/opencode/r68_press_base.log`) over
+ * a workspace holding `bob@x.com, john@x.com, JOHN@X.COM, nina@x.com` and a
+ * second tenant holding its own `john@x.com`:
+ *
+ *   GET /api/leads?email=john@x.com                    200 total=4  — the whole crowd
+ *   GET /api/leads?email=JOHN@X.COM                    200 total=4  — the whole crowd
+ *   GET /api/leads?email=nobody@x.com                  200 total=4  — indistinguishable from no filter
+ *   GET /api/leads?email=not-an-address                200 total=4  — a shape POST /api/leads refuses
+ *   GET /api/leads?email=john@x.com&email=nina@x.com   200 total=4
+ *   GET /api/leads?email=john@x.com&status=ENRICHED    200 total=1  — nina@x.com
+ *
+ * The last line is the one that makes this a lie rather than a gap: `status` IS
+ * read, so the door applied half of the question and answered with a row whose
+ * email is not the email that was asked for. A caller that presses one filter
+ * and gets a page filtered by the other has no way to know which of its own
+ * conditions the answer obeys — and `total=4` for `?email=nobody@x.com` is the
+ * same body as no filter at all, so "nobody by that name" and "you did not ask"
+ * are one answer.
+ *
+ * This is the door the duplicate-refusal points at. #66's PR makes a colliding
+ * write answer `{"conflict":{"fields":["email"]}}`, which names this column to a
+ * caller that then has no way to ask the read door for it — measured on this
+ * build, which does not carry that PR, a duplicate still answers the nameless
+ * `{"error":"That Lead already exists in this workspace.","conflict":{"fields":[]}}`
+ * (extras leg 12), and `?email=` answered `total=4` either way.
+ *
+ * Two decisions, both taken from rules this file already runs:
+ *
+ *  - **The write door's field table is the judge.** The caller passes the
+ *    column's own `Field` — `LEAD_EMAIL` in `fields.ts`, the entry
+ *    `LEAD_CREATE.email` — and the value goes through `validateBody` with it, so
+ *    `?email=not-an-address` is refused with the sentence
+ *    `POST /api/leads` already gives for that body, and the 254-character cap is
+ *    enforced here too rather than a second, slightly different email rule
+ *    being invented for a query string. A column that is not an address gets
+ *    its own field passed in; nothing in this file knows what `email` means.
+ *  - **Padding, empty and repeated arrive the way `filterParam` treats them.**
+ *    `%20john@x.com%20` is the address without its padding; `?email=` names
+ *    nothing and returns the whole page; two different values under one name is
+ *    a question with two answers and is refused in the same sentence.
+ *
+ * What it does not do: it matches the bytes the column holds, so
+ * `?email=JOHN@X.COM` finds the row written with those bytes and not the one
+ * written as `john@x.com`. That is what the unique index on the column is
+ * (`@@unique([workspaceId, email])`, byte-exact), and a read door answering one
+ * spelling while a write door accepts a different one would leave this app with
+ * two answers to "do I already have this person". Folding case is open as #99;
+ * when it lands, `?email=` keeps working for the bytes it was given and the
+ * twin it would have found stops existing. A `mode: "insensitive"` filter here
+ * would also cost the composite index.
+ */
+export function textFilterParam(
+  searchParams: URLSearchParams,
+  name: string,
+  field: Field,
+): FilterText | FilterTextError {
+  const asked = [...new Set(searchParams.getAll(name).map((one) => one.trim()).filter((one) => one !== ""))];
+  if (asked.length === 0) return { value: null, error: null };
+  if (asked.length > 1) {
+    return {
+      value: null,
+      error: bad(`${name} was given ${asked.length} words (${asked.map(short).join(", ")}); this filter compares ${name} to one of them`),
+    };
+  }
+  const input = validateBody({ [name]: asked[0] }, { [name]: field });
+  if (!input.ok) return { value: null, error: input.error };
+  return { value: input.data[name] as string, error: null };
+}
+

@@ -1,4 +1,4 @@
-import type { Schema } from "./validate";
+import type { Field, Schema } from "./validate";
 import { MAX_IMPORT_BYTES } from "./import-limits";
 import { PRIORITY_MAX, PRIORITY_MIN } from "./rule-priority";
 import {
@@ -121,6 +121,20 @@ export const LEAD_CREATE = {
   socialProfiles: { kind: "json" },
   customFields: { kind: "json" },
 } satisfies Schema;
+
+/**
+ * `Lead.email`'s rule, on its own, for the doors that are not writing the column.
+ *
+ * `GET /api/leads?email=` compares this column to a value the caller typed into a
+ * query string, and the only honest answer to "is that an address?" is the answer
+ * `POST /api/leads` already gives — the same shape, the same 254-character cap, the
+ * same refusal sentence — rather than a second rule invented for a URL.
+ *
+ * This widens the literals to `Field`, which is fine here and is not fine for the
+ * tables above: a read door takes the value as a `string` and builds a `where`, so
+ * it has no route typing to lose.
+ */
+export const LEAD_EMAIL: Field = LEAD_CREATE.email;
 
 /**
  * `score` is the column whose comment says 0-100 and whose reader is

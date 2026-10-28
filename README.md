@@ -3441,6 +3441,153 @@ What this does not claim:
   pair (#96, STEP 27) is still `CONFLICTING` (`mergeable: CONFLICTING`, re-checked while this
   PR was open), so a step stacked on it is not a direct child of that repo's `main`.
 
+### `?email=` on the lead read: the address the 409 names, and the crowd that answered it
+
+Round #67. `GET /api/leads` already projects with `?fields=`, refuses a wrong `?status=`
+word by name (#56), resolves `?listId=` before it filters (#58) and takes a page and a
+limit. It also took `?email=`, read it, and threw it away. Measured on the running app
+before any of this shipped — `e3fcc16` built in a fresh worktree, served on :3419 over a
+database of this round's own (`leadworks_r68`), workspace A seeded through
+`POST /api/leads` with `bob@x.com`, `john@x.com`, `JOHN@X.COM` and `nina@x.com` (nina left
+at `ENRICHED`, the other three at `NEW`) and a second workspace holding its own
+`john@x.com`; `/tmp/opencode/r68_press_base.log`:
+
+| leg | request | base answer |
+| --- | --- | --- |
+| 1 | `?email=john@x.com` | 200 `total=4` — the whole crowd |
+| 2 | `?email=JOHN@X.COM` | 200 `total=4` |
+| 3 | `?email=nobody@x.com` | 200 `total=4` — the same body leg 5 gives |
+| 4 | `?email=not-an-address` | 200 `total=4` — a shape `POST /api/leads` refuses |
+| 5 | `?email=` | 200 `total=4` |
+| 6 | `?email=john@x.com&email=nina@x.com` | 200 `total=4` |
+| 7 | `?email=%20john@x.com%20` | 200 `total=4` |
+| 8 | `?email=a@b..c` | 200 `total=4` |
+| 10 | `?email=john@x.com&status=NEW` | 200 `total=3` |
+| 11 | **`?email=john@x.com&status=ENRICHED`** | **200 `total=1 emails=['nina@x.com']`** |
+| 12 | `?email=john@x.com&fields=email` | 200 `total=4` |
+| 13 | `?email=john@x.com&limit=1&page=2` | 200 `total=4 page=1` |
+
+Leg 11 is the reason this is a lie rather than a gap: `status` *is* read, so the door
+applied half of the question and handed back a row whose email is not the email that was
+asked for. Legs 3 and 5 are the same failure from the other side — `total=4` for an address
+nobody holds is the byte-identical body of `total=4` for no filter at all, so "you do not
+have this person" and "you did not ask" were one answer. Leg 13 is the third shape: a page
+that reports four rows and then serves one per page forever.
+
+Four decisions, none of them new rules:
+
+* **The write door's field table is the judge.** `LEAD_EMAIL` in `fields.ts` is
+  `LEAD_CREATE.email` — the same object, asserted by identity in the test — and the query
+  value is passed through `validateBody` with it. So the shape rule, the 254-character cap
+  and the trimming are the create door's, and this app has one email rule rather than one
+  for a body and one for a URL.
+* **Padding, empty and repeated behave the way `filterParam` already behaves** (#56):
+  `%20john@x.com%20` is the bare address, `?email=` names nobody and returns the page, the
+  same address twice is one address, and two different addresses is a refusal that names
+  both and counts them — the same sentence a word column gets.
+* **A refusal costs no query.** The check returns before `findMany`, so leg 4 is a 400 with
+  nothing read.
+* **The match is byte-exact, and that is written down rather than smoothed over.** No
+  `mode: "insensitive"`, no fold: `?email=JOHN@X.COM` finds the row written with those
+  bytes and not the one written `john@x.com`. That is what `@@unique([workspaceId, email])`
+  is, and a read door that folded while the write door refused to would leave this app with
+  two answers to "do I already have this person". Folding is open as #99; an insensitive
+  filter here would also stop that composite index from being used.
+
+The same press against the shipped build, over the very rows the base build wrote
+(`keep` — no reseed between the two runs; `/tmp/opencode/r68_press_fix.log`):
+
+| leg | request | base → fix |
+| --- | --- | --- |
+| 1 | `?email=john@x.com` | `total=4` → **`total=1 emails=['john@x.com']`** |
+| 2 | `?email=JOHN@X.COM` | `total=4` → **`total=1 emails=['JOHN@X.COM']`** |
+| 3 | `?email=nobody@x.com` | `total=4` → **`total=0`** |
+| 4 | `?email=not-an-address` | `total=4` → **400**, byte-identical to leg 18's `POST` refusal |
+| 5 | `?email=` | `total=4` → `total=4` (nothing asked, nothing filtered) |
+| 6 | two addresses, one name | `total=4` → **400 naming both and their count** |
+| 7 | `?email=%20john@x.com%20` | `total=4` → **`total=1`** |
+| 8 | `?email=a@b..c` | `total=4` → **400** |
+| 9 | tenant B, `?email=john@x.com` | `total=1` → `total=1` (scoped before and after) |
+| 10 | `?email=john@x.com&status=NEW` | `total=3` → **`total=1`** |
+| 11 | `?email=john@x.com&status=ENRICHED` | `total=1 ['nina@x.com']` → **`total=0`** |
+| 12 | `?email=john@x.com&fields=email` | `total=4` → **`total=1`** |
+| 13 | `?email=john@x.com&limit=1&page=2` | `total=4 page=1` → **`total=1 page=0`** |
+| 14 | `?phone=+1-555-0100` | `total=4` → `total=4` (still not a filter) |
+| 15 | `?company=x` | `total=4` → `total=4` (still not a filter) |
+| 16–19 | `?status=NEW`, `?status=new`, the junk `POST`, `?listId=nope` | unchanged, byte for byte |
+
+Leg 11 is the lie undone: the row that used to answer a question about `john@x.com` is gone,
+and leg 13's `total` now agrees with the page it is paginating.
+
+Eighteen tests in `tests/unit/lead-email-filter.test.ts`, none of which needs a database, a
+browser or a network: every address the column can hold; the value reaching the filter with
+its bytes and a pin that the door neither folds nor asks Prisma to; padding, empty, absent,
+repeated; two addresses refused in the word column's sentence; the create door compared
+body-for-body with the read door's refusal on six junk values; the 254-character cap taken
+from `LEAD_EMAIL.max` rather than re-typed; `LEAD_EMAIL === LEAD_CREATE.email` and the
+column's `String?` in `prisma/schema.prisma`; a second column (`phone`, no `format`) judged
+by its own field, with a pin that the string `email` never appears in the module that
+judges it; the door's own source, comments blanked — the call, the refusal return, the
+`where.email = email.value` line, no `searchParams.get("email")` left, the refusal ordered
+before the first `findMany`, `where.email` assigned before the `where` is used by both the
+page and the count, and the `where` still opening with `workspaceId`; the census that walks
+every file under `src/app/api` and fails on any query-string name reaching a door outside
+the four that legitimately do (`workspaceId`, `action`, `model`, `id`); a pin that `?phone=`
+and `?company=` are still not filters *and* that the contract does not advertise them; the
+contract's parameter list pinned exactly; and `filterParam` still owning `status`. The
+source pins were then run against the `e3fcc16` text they replaced
+(`/tmp/opencode/r68_vacuity.mts`): the eight patterns that assert new behaviour do not match
+the base, so none of them is a tautology — the ninth, the pin that no fold was ever asked of
+Prisma, holds on both builds, which is the point of it. Gates: the suite **1220/1220** (1202 on `main` plus
+these 18; **no existing test was retargeted** — the two filter-word files
+(`list-filter.test.ts`, `lead-crowd.test.ts`) still pass against the source they were written
+for), `tsc --noEmit` exit 0, lint **0 errors / 13 warnings** (the same 13 `main` has, none on
+a line this round wrote), `check:contract` **8/8**, `check:llms-full` **unchanged** (the deep
+content file prints operation summaries, not query-parameter prose), build exit 0.
+Rebased onto `main` at `88bf6d2` after #100 and #102 landed: the same eighteen tests, **no test
+retargeted and none deleted**, suite **1254/1254**, `tsc` exit 0, lint **0 errors / 13 warnings**,
+`check:contract` **8/8**, `check:llms-full` unchanged. The rebase needed one decision, in
+`README.md`, where this section and #102's landed section had both been inserted immediately
+before `## Score` — both are kept, main's first. Nothing in `src/lib/openapi.ts` collided:
+#102 wrote the exports body and response blocks, this round wrote the `leads.list` parameters.
+
+What this does not claim:
+
+* **`?email=` is exact, so the twin stays invisible until #99 lands.** In this workspace
+  `?email=john@x.com` answers one row and `?email=JOHN@X.COM` answers the other, and there
+  is no query that answers both. That is a real sharp edge, and it is the sharp edge #99
+  removes at the write doors — after which the second row stops being creatable and this
+  filter needs no change. It is stated here rather than fixed here because folding at a read
+  door alone would give the app two answers to "is this the same person".
+* **`?phone=` and `?company=` are still swallowed.** Legs 14 and 15 answered the whole crowd
+  before and answer the whole crowd after. `email` is the column the schema puts a unique
+  index on and the column a duplicate collision is about; making every text column
+  filterable is a wider contract decision than a defect fix, and it belongs in front of
+  whoever owns this door's query surface.
+* **One address per request.** No OR, no list, no comma: two values under one name are a
+  refusal, exactly as #56 made it for a word column. A caller who wants three people makes
+  three requests.
+* **The read door does not decide what a lead is.** A null `email` is a lead with no address
+  (extras leg E1/E2: a row created with only a phone stays reachable through the unfiltered
+  door and unreachable through `?email=nobody@x.com`), and the CSV importer still folds case
+  with its own `mode: "insensitive"` lookup when it decides a row is a duplicate (extras leg
+  E8: `imported=1 duplicatesExisting=1` for a file holding `john@x.com` beside the `JOHN@X.COM`
+  this workspace already had). Those two doors disagree about case today; #99 is where that
+  disagreement is decided, not here.
+* **#66 landed while this PR was open, so this branch now carries it.** Before the rebase, a
+  duplicate `POST` on this build answered the nameless `{"conflict":{"fields":[]}}`; on
+  `88bf6d2` it answers `{fields: ["email"]}` for a lead collision (`unique-index.test.ts` pins
+  both halves — `["email"]` for the pair a caller typed, and the second column's name for a
+  different index). That is the sentence this round said it wanted: the read door that now
+  obeys `?email=` is the one that can act on a name the write door finally gave, so the pair
+  is decided by #99's fold question, not by an unnamed collision.
+* **No UI calls `?email=` yet.** `git grep 'email='` across `src/app` pages, `demo` and
+  `public` finds no caller, so this round changes what a hand-written request gets and
+  nothing on the pages.
+* **No demo step this round**, for the reason #51 through #66 recorded: `aw-deploy`'s open
+  pair (#96, STEP 27) is still `CONFLICTING` and `DIRTY` — re-checked this round — so a step
+  stacked on it is not a direct child of that repo's `main`.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
