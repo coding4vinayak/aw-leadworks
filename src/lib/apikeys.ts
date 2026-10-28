@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { prisma } from "./db";
 import { classifyWorkspaceClaim } from "./ai-actor";
+import { uniqueViolationColumns } from "./unique-index";
 
 /** Key prefix for this product, e.g. "lg_live_". Visible in the string itself. */
 export const KEY_PREFIX = "lw_live_";
@@ -110,10 +111,13 @@ export function conflictFor(error: unknown): { status: number; body: Record<stri
   if (!(error instanceof Error) || !error.name.startsWith("PrismaClient")) return null;
   if ((error as { code?: unknown }).code !== "P2002") return null;
 
-  const meta = (error as { meta?: { modelName?: unknown; target?: unknown } }).meta ?? {};
-  const model = typeof meta.modelName === "string" ? meta.modelName : "record";
-  const raw = Array.isArray(meta.target) ? meta.target : typeof meta.target === "string" ? meta.target.split(/[\s,]+/) : [];
-  const fields = raw.filter((f): f is string => typeof f === "string" && f.length > 0);
+  const meta = (error as { meta?: { modelName?: unknown } }).meta ?? {};
+  // Prisma 7 with the pg driver adapter leaves `meta.target` empty and puts the
+  // collision in the constraint's own name; `uniqueViolationColumns` reads both
+  // shapes and says nothing when the name does not decompose.
+  const violation = uniqueViolationColumns(error);
+  const model = typeof meta.modelName === "string" ? meta.modelName : (violation?.model ?? "record");
+  const fields = violation?.columns ?? [];
   // workspaceId is the tenant the caller already authenticated as: naming it
   // would describe the scope of the constraint rather than what collided.
   const shown = fields.filter((f) => f !== "workspaceId");
