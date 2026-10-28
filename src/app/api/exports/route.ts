@@ -7,8 +7,9 @@ import { pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { EXPORT_CREATE } from "@/lib/fields";
 import { idFilterParam, unknownIdError } from "@/lib/ids";
+import { asInputJson } from "@/lib/json";
 import { filterParam } from "@/lib/list-filter";
-import { exportFilterProblem } from "@/lib/export-format";
+import { EXPORT_LIST_ID, exportFilter } from "@/lib/export-format";
 import { EXPORT_STATUSES } from "@/lib/enums";
 
 export const dynamic = "force-dynamic";
@@ -75,11 +76,43 @@ async function POST_impl(request: Request) {
   // with `readExportFilter`; the door read nothing, so a word outside `Lead.status`
   // was stored, run against no lead, and reported itself COMPLETED with an empty
   // file. Same question, asked before the row exists.
-  const filterProblem = exportFilterProblem(input.data.filterJson);
-  if (filterProblem !== null) return NextResponse.json({ error: filterProblem }, { status: 400 });
+  const asked = exportFilter(input.data.filterJson);
+  if (asked.problem !== null) return NextResponse.json({ error: asked.problem }, { status: 400 });
+
+  // The one key of that filter that names a *row* rather than a value in a column is
+  // the one the door did not resolve. Measured on this round's runtime over a
+  // workspace of three leads and a list holding two of them: `{"listId":"nope"}` and
+  // another tenant's `{"listId":"lst_r69_b"}` each settled as `COMPLETED
+  // recordCount=0 fileSize=0`, and the download that followed answered 200 with zero
+  // bytes — not even the header line the same export correctly produces for a list
+  // the caller does have. That name at the read door is a 422 naming it
+  // (`GET /api/leads?listId=nope`), and in a body it is a 422 naming it
+  // (`POST /api/leads {listIds:["nope"]}`), so the question is this door's, asked the
+  // way it already asks it two paragraphs up about `profileId`: scoped to the
+  // workspace, so another tenant's list answers the same way as a list that exists
+  // nowhere and the refusal says nothing about who owns it.
+  const named = asked.filter.listId;
+  if (typeof named === "string") {
+    const holds = await prisma.leadList.count({ where: { workspaceId, id: named } });
+    if (!holds) return unknownIdError(EXPORT_LIST_ID, named);
+  }
+
+  // The judged filter is what gets filed, not the bytes that arrived: a padded name
+  // is stored stripped, so the row `GET /api/exports` echoes, the config a retry
+  // re-queues and the `where` the worker builds are one crowd rather than three
+  // readings of the same value. A `filterJson` that was absent or `null` stays that
+  // way — nothing was said about the crowd, and writing `{}` would be saying it.
+  const declared = typeof input.data.filterJson === "object" && input.data.filterJson !== null
+    ? asInputJson(asked.filter)
+    : undefined;
 
   const exportRecord = await prisma.export.create({
-    data: { workspaceId, ...input.data, status: "PENDING" },
+    data: {
+      workspaceId,
+      ...input.data,
+      ...(declared === undefined ? {} : { filterJson: declared }),
+      status: "PENDING",
+    },
   });
 
   const job = await prisma.job.create({
@@ -90,7 +123,7 @@ async function POST_impl(request: Request) {
       config: {
         format: input.data.format,
         fields: input.data.fields,
-        ...(input.data.filterJson !== undefined ? { filterJson: input.data.filterJson } : {}),
+        ...(declared === undefined ? {} : { filterJson: declared }),
         exportId: exportRecord.id,
       },
     },

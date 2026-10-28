@@ -3146,6 +3146,161 @@ What this does not claim:
   open pair (#96, STEP 27) is `CONFLICTING`, so a step stacked on it is not a direct child of
   that repo's `main`.
 
+### An export's `filterJson.listId` names a list, and a name that resolves nowhere filed a finished file of nothing
+
+`POST /api/exports` takes the crowd a file will hold as `filterJson`, and it validated that
+blob carefully — the shape, the key list, and one `status` word against `LEAD_STATUSES` —
+while never asking the one question its own door asks about every other caller-named row:
+does this id exist here. The key that needs it is `listId`, the only key in
+`EXPORT_FILTER_KEYS` that names a row rather than a value in a column.
+
+Measured on `e3fcc16` built in this round's worktree, served on **:3420** over the session's
+own database `leadworks_r69` with a private Redis on 6411, two workspaces and keys in `0600`
+files printed nowhere. Tenant A held three leads — `ana@x.com` and `bo@x.com` in a list
+`lst_r69_a`, `cy@x.com` outside it — and tenant B held `lst_r69_b` with one lead of its own.
+Each leg is `POST /api/exports {"format":"CSV","fields":["email","status"],
+"filterJson": <this>}`, polled to a terminal status and then downloaded
+(`/tmp/opencode/r69_press_base.log`, `r69_extras_base.log`):
+
+```
+{"listId":"lst_r69_a"}      201 → COMPLETED recordCount=2 fileSize=46  header + bo + ana
+{"listId":"nope"}           201 → COMPLETED recordCount=0 fileSize=0   download 200, 0 bytes
+{"listId":"lst_r69_b"}      201 → COMPLETED recordCount=0 fileSize=0   download 200, 0 bytes
+{"listId":"  lst_r69_a  "}  201 → COMPLETED recordCount=0 fileSize=0   the list exists
+{"listId":""}               201 → COMPLETED recordCount=0 fileSize=0
+{"listId":42}               400 filterJson.listId must be a string
+{"listId":["a","b"]}        400 filterJson.listId must be a string
+```
+
+and the same names, at the doors that already resolve them, on the same build:
+
+```
+GET  /api/leads?listId=nope              422 listId is not an id this workspace has: nope
+GET  /api/leads?listId=lst_r69_b         422 another tenant's name is not a crowd
+GET  /api/leads?listId=%20lst_r69_a%20   200 total=2 — and those are the list's two leads
+POST /api/leads {listIds:["nope"]}       422 listIds holds 1 id this workspace does not have
+POST /api/leads {listIds:[""]}           400 every listIds entry must be a non-empty string
+POST /api/leads {listIds:["  lst_r69_a  "]}
+                                         201, and the lead is filed under that list — it trims
+POST /api/exports {profileId:"nope"}     422 profileId is not an id this workspace has
+POST /api/exports {"filterJson":{"status":"ACTIVE"}}
+                                         400 filterJson.status must be one of NEW | …   (#56)
+```
+
+Two facts make this a lie rather than a gap. First, the answer the empty file gave was a
+*success*: the row said `COMPLETED`, `expiresAt` was stamped, and the download returned 200 —
+so a caller who typo'd a list id received a finished export whose contents were nothing, and
+the only difference between that and the crowd really being empty is a number the caller has
+to notice. Second, the file was **zero bytes** — not even the header line that the same
+export correctly produces for a list the caller does have — so the artefact itself carries no
+record of having been filtered at all. Meanwhile the same name in the same body at the same
+workspace is refused by the two doors beside it, and the door that filed the empty file
+already refused a wrong `status` word inside that very blob.
+
+Four decisions, each taken to match a rule this app already runs:
+
+* **The bytes are judged where the bytes are judged.** `readExportFilter` in
+  `src/lib/export-format.ts` is the one function both the door and `exporter.ts`'s
+  `getLeadsForExport` read the blob through, so padding is stripped there — the way
+  `idFilterParam` strips it for `?listId=` and `asStrings` strips it for `listIds` — and an
+  empty or padding-only name is refused there. If the trim lived only in the door, the
+  worker would compare the padded bytes and the two readers would disagree about which
+  crowd the same stored row names, which is the failure this fleet keeps finding.
+* **Existence is the door's question, not the module's.** `export-format.ts` is the half of
+  the export path that needs no database and no Redis; the lookup that needs Prisma lives in
+  `POST /api/exports`, scoped to `workspaceId`, so another tenant's list answers exactly like
+  a list that exists nowhere and the refusal says nothing about who owns it. That keeps the
+  two statuses honest: a filter that cannot be a filter is a 400, and a filter that names a
+  row this workspace does not have is the 422 `unknownIdError` already speaks for `profileId`
+  four lines above.
+* **The file stores what was judged.** The door now reads through `exportFilter` — the same
+  rules, keeping the value — and writes that object into both `Export.filterJson` and the
+  job's `config`, the way `POST /api/lead-lists` stores `asInputJson(declared.filter)`
+  rather than the blob it was handed. A padded name is filed stripped, so the row
+  `GET /api/exports` echoes, the config a retry re-queues and the `where` the worker builds
+  are one crowd. A `filterJson` that was absent or `null` stays that way: nothing was said
+  about the crowd, and writing `{}` would be saying it.
+* **`""` is an assertion, not silence.** `?listId=` in a query string names nobody and
+  returns the page — that is an untouched form field. A body that carries `"listId": ""`
+  claims a list, and the identical claim at the other write door, `{listIds: [""]}`, is
+  already a 400. Treating it as "no opinion" would have widened the file, which is the one
+  mistake this module's own header says a customer will not catch by eye.
+
+Live A/B on the **same rows** — the fix build booted over the database the base press had
+left, nothing reseeded (`r69_press_fix.log`, `r69_extras_fix.log`):
+
+```
+{"listId":"lst_r69_a"}   base 201/COMPLETED/2/46      fix 201/COMPLETED/2/46   unchanged
+{"listId":"nope"}        base 201/COMPLETED/0/0 bytes fix 422 filterJson.listId is not an id…
+{"listId":"lst_r69_b"}   base 201/COMPLETED/0/0 bytes fix 422 the same sentence, owner unnamed
+{"listId":"  lst_r69_a  "}
+                         base 201/COMPLETED/0/0 bytes fix 201/COMPLETED/2/46, 46 bytes, and the
+                         row echoes {"listId":"lst_r69_a"}; F3's file is F5's file byte for byte
+{"listId":""}            base 201/COMPLETED/0/0 bytes fix 400 must name a list; "" is not a list
+{"listId":42}/["a","b"]  base 400 must be a string    fix 400 must be a string  unchanged
+{"status":"NEW"}         base 201/COMPLETED/2/40      fix 201/COMPLETED/2/40    unchanged
+{"tags":["nosuch"]}     base 201/COMPLETED/0/0       fix 201/COMPLETED/0/0     unchanged
+{"temperature":"hot"}   base 400 not supported       fix 400 not supported     unchanged
+GET /api/leads?listId=…  the four read-door legs are byte-identical on both builds
+POST /api/exports?profileId=nope  422 on both builds  — #58's own door, untouched
+```
+
+and the served document carries it: `/api/openapi` for `POST /api/exports` now prices a 422
+naming `profileId`, or the `listId` inside `filterJson`, and the 400 sentence no longer
+claims the `profileId` refusal that has always arrived as a 422.
+
+Pinned offline, **1216/1216** — **14 new** in `tests/unit/export-filter-listid.test.ts`, no
+browser, no database, no network, `main` baseline 1202/1202: the trim, the copy that leaves
+the caller's object alone, the three empty spellings refused with the one sentence, the kind
+refusals quoted byte for byte so a `42` and an array still sound as they did, the name
+`filterJson.listId` pinned to be `filterJson.` plus the key in `EXPORT_FILTER_KEYS` (one
+spelling, three users), the door's own source with comments blanked (the trimmed value asked
+about, `typeof named === "string"` so absent and `null` stay no-opinion, the scoped
+`prisma.leadList.count`, the 422 ordered after `validateBody` and before
+`prisma.export.create`, `filterJson: declared` exactly twice and the raw blob not stored at
+all), the worker still reading through `readExportFilter` so a stored name and a compared
+name cannot drift, and the contract's split of 400 from 422. **One existing test was
+retargeted, not relaxed**: `tests/unit/list-filter.test.ts:253` pinned the door's source
+saying `exportFilterProblem(input.data.filterJson)`, which is the call that judged the blob
+and threw the judgement away; it now pins `exportFilter(input.data.filterJson)` and keeps
+both questions it always asked — the judge is called, and it runs before anything is stored.
+**Non-vacuity, offline and exact**: thirteen of this round's patterns were run against the
+`e3fcc16` text they replace (`r69_vacuity.mts`) and none of them matches the base; the
+absence pin matches the base and stops matching here; and three patterns are the rules this
+round left alone, pinned to still match (`r69_vacuity.log`). tsc exit 0, lint **0 errors / 13
+warnings** (the same 13 as `main`, none on a line this round wrote), `check:contract` **8/8**,
+`check:llms-full` **unchanged** (the deep content file prints operation summaries, not body
+property prose), build exit 0.
+
+What this does not claim:
+
+* **A tag nobody holds is still an empty file.** `{"tags":["nosuch"]}` and
+  `{"tags":["hot","outbound"]}` were pressed on both builds and answered
+  `COMPLETED recordCount=0` on both, unchanged and on purpose: a tag is open vocabulary
+  rather than a row id, so "no lead carries this" is a crowd and not a typo. What the press
+  did find is a disagreement worth someone's attention: the export's two tags are **AND**
+  (`array_contains` of the whole array) while `rule-conditions.ts:279` builds a rule's two
+  tags as **OR**. Two doors, one key, opposite meanings — deciding which is right is a
+  product call, and this round records it rather than guessing.
+* **A list deleted after the row was filed still exports zero.** The door resolves the name
+  at the boundary; a retry of an old export re-runs a filter whose list no longer exists and
+  gets an empty file. That is a different question from a name that never resolved — the row
+  was truthful when it was written, and `recordCount=0` matches the crowd the name holds now.
+* **The empty file's bytes are unchanged.** A crowd that genuinely is empty still downloads
+  as 200 with zero bytes, header line absent. The row says `recordCount: 0`, so the fact is
+  available; whether a CSV of no leads should still carry its header is a format decision
+  this round did not make.
+* **No new query parameter opened.** `GET /api/exports` filters by `status` and `profileId`
+  and still does exactly that; `filterJson` is only reachable in a body. Nothing about the
+  read doors changed — their four `?listId=` legs are byte-identical on both builds.
+* **Nothing here is merged.** `main` is `e3fcc16` and this session has landed no PR, so the
+  nine pairs still open (#101, #100, #99, #98, #97, #93, #89, #88, #87) are all unmerged.
+  #101 and #99 touch `src/lib/openapi.ts` and `README.md` as this branch does; whichever
+  lands second carries a rebase of a few hunks.
+* **No demo step**, for the reason #51, #52, #53 and #67 recorded — `aw-deploy`'s only open
+  pair (#96, STEP 27) is still `CONFLICTING` (`mergeable: CONFLICTING`, re-checked while this
+  PR was open), so a step stacked on it is not a direct child of that repo's `main`.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)

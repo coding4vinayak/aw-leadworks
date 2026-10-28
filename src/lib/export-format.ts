@@ -12,6 +12,15 @@ import { filterWordProblem } from "./list-filter";
 export const EXPORT_FILTER_KEYS = ["status", "minScore", "maxScore", "listId", "tags"] as const;
 
 /**
+ * What the refusal calls this key: `filterJson.listId`, the place the value arrived,
+ * the way `filterJson.status` is named in the sentence `readExportFilter` throws for a
+ * wrong word. One name for three callers — the shape refusal, the empty-name refusal,
+ * and the door's 422 — because the alternative is a sentence an integrator has to
+ * learn twice, and a test cannot tell the two apart.
+ */
+export const EXPORT_LIST_ID = "filterJson.listId";
+
+/**
  * Read `filterJson` as the caller's words, not as truthiness.
  *
  * The exporter used to honour this contract with a comment — `if
@@ -20,13 +29,22 @@ export const EXPORT_FILTER_KEYS = ["status", "minScore", "maxScore", "listId", "
  * reported COMPLETED. A file that quietly widens is the one mistake a customer
  * is unlikely to catch by eye, so an unsupported key is a FAILED job naming
  * the key, never a wider file.
+ *
+ * The door that *stores* the blob honoured it the same way with nothing at all:
+ * measured on the running app, `{"status":"ACTIVE"}` was a 201 that settled as
+ * `COMPLETED records=0 bytes=0` — a delivered file with nothing in it, reported as
+ * a finished export — and `{"temperature":"hot"}` was a 201 that settled as a
+ * FAILED job two seconds later. The door that stores "the crowd I mean" and the
+ * reader that walks it ask one question now, through this function, so both answers
+ * arrive at the boundary: the shape as a 400, and a name that resolves nowhere as a
+ * 422 (see `POST /api/exports`, which is where the database is reachable from).
  */
 export function readExportFilter(raw: unknown): Record<string, unknown> {
   if (raw === undefined || raw === null) return {};
   if (typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error('filterJson must be an object like {"status":"QUALIFIED"}');
   }
-  const filter = raw as Record<string, unknown>;
+  let filter = raw as Record<string, unknown>;
   const unsupported = Object.keys(filter).filter(
     (key) => !(EXPORT_FILTER_KEYS as readonly string[]).includes(key),
   );
@@ -57,7 +75,26 @@ export function readExportFilter(raw: unknown): Record<string, unknown> {
     }
   }
   if (listId !== undefined && typeof listId !== "string") {
-    throw new Error("filterJson.listId must be a string");
+    throw new Error(`${EXPORT_LIST_ID} must be a string`);
+  }
+  if (typeof listId === "string") {
+    // `listId` names a row rather than a value in a column, so the two decisions every
+    // id in this API already travels with come with it: padding is not part of the id,
+    // and an empty string names nothing. Measured on this round's runtime before either
+    // was honoured — over a workspace of three leads and a list holding two of them —
+    // `{"listId":"  lst_r69_a  "}` for a list that exists and `{"listId":""}` each
+    // settled as `COMPLETED recordCount=0 fileSize=0`, and the download that followed was
+    // a 200 with **zero bytes** in it, not even the header line `{"listId":"lst_r69_a"}`
+    // correctly produces. The same padded bytes at the read door —
+    // `GET /api/leads?listId=%20lst_r69_a%20` — answered that list's two leads, because
+    // `idFilterParam` trims. `stringList`/`asStrings` trim the same bytes for `listIds`,
+    // and a body that asks to file a lead under `""` is a 400 — "every listIds entry
+    // must be a non-empty string". Whether the stripped name *exists* is not this
+    // function's question — it needs the database, and the door asks it — but what the
+    // caller meant by the bytes is.
+    const named = listId.trim();
+    if (named === "") throw new Error(`${EXPORT_LIST_ID} must name a list; "" is not a list`);
+    if (named !== listId) filter = { ...filter, listId: named };
   }
   if (tags !== undefined) {
     if (!Array.isArray(tags) || tags.length === 0 || tags.some((t) => typeof t !== "string" || t === "")) {
@@ -67,23 +104,40 @@ export function readExportFilter(raw: unknown): Record<string, unknown> {
   return filter;
 }
 
+/** What a stored or incoming `filterJson` is: the judged filter, or the sentence refusing it. */
+export interface ExportFilterRead {
+  /** The filter as this module judges it — an id with its padding stripped. Empty when nothing was said. */
+  filter: Record<string, unknown>;
+  /** Why the blob is not an export filter, or `null` when it is one. */
+  problem: string | null;
+}
+
 /**
- * The same rules, asked before anything is written rather than while the file is.
+ * `readExportFilter` for a door that has to keep what it judged.
  *
- * `POST /api/exports` never read its own `filterJson`: measured on the running
- * app, `{"status":"ACTIVE"}` was a 201 that settled as `COMPLETED records=0
- * bytes=0` — a delivered file with nothing in it, reported as a finished export —
- * and `{"temperature":"hot"}` was a 201 that settled as a FAILED job two seconds
- * later. The door that stores "the crowd I mean" and the reader that walks it now
- * ask one question, so both answers arrive as a 400 at the boundary.
+ * The export row is the durable artefact — `GET /api/exports` echoes its
+ * `filterJson`, and a retry re-queues the config the door wrote — so the value the
+ * file is built from and the value the row shows have to be the same bytes. Reading
+ * through `readExportFilter` and storing its answer is how `POST /api/lead-lists`
+ * already treats a dynamic list's filter (`asInputJson(declared.filter)` rather
+ * than the blob it was handed), and it means the worker's re-read of the stored row
+ * cannot find a different filter than the door resolved.
+ */
+export function exportFilter(raw: unknown): ExportFilterRead {
+  try {
+    return { filter: readExportFilter(raw), problem: null };
+  } catch (error) {
+    return { filter: {}, problem: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * The same question, as only the sentence — `null` when the filter is sound. For a
+ * caller that judges the blob and then throws it away; a door that stores it reads
+ * through `exportFilter` so the stored bytes are the judged ones.
  */
 export function exportFilterProblem(raw: unknown): string | null {
-  try {
-    readExportFilter(raw);
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
+  return exportFilter(raw).problem;
 }
 
 /** One cell value for a file: arrays join, objects serialize, null is empty. */

@@ -572,13 +572,14 @@ const PATHS: Record<string, PathItem> = {
         properties: {
           format: { type: "string", description: "One of the export formats — upper-cased at the door, because the exporter switches on the exact word.", required: true },
           fields: { type: "array", description: "Lead's columns the file renders — a name that is not a column renders empty.", required: true },
-          filterJson: { type: "object", description: `Which leads — ${EXPORT_FILTER_KEYS.join(", ")}. A \`status\` here is one Lead word (${LEAD_STATUSES.join(" | ")}); a word the column never holds is refused at the door instead of delivered as a COMPLETED file with no rows in it.` },
+          filterJson: { type: "object", description: `Which leads — ${EXPORT_FILTER_KEYS.join(", ")}. A \`status\` here is one Lead word (${LEAD_STATUSES.join(" | ")}); a word the column never holds is refused at the door instead of delivered as a COMPLETED file with no rows in it. A \`listId\` here names one of your lists: padding is not part of the id, an empty string is not a name, and a list this workspace does not have is refused at the door rather than filed as a finished export of nothing.` },
           profileId: { type: "string", description: "A saved export profile, if you keep one." },
         },
       },
       responses: {
         "201": "The export, PENDING, with the id of the job that will fill it.",
-        "400": "A format or column list the field table refuses, a `profileId` this workspace does not have, or a `filterJson` that names a crowd no Lead column can hold.",
+        "400": "A format or column list the field table refuses, or a `filterJson` that names a crowd no Lead column can hold.",
+        "422": "An id this workspace does not have, named — `profileId`, or the `listId` inside `filterJson`. The same name at `GET /api/leads?listId=` gets the same refusal from the read door.",
         "503": QUEUE_REFUSED,
       },
     },
