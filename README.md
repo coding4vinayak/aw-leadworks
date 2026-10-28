@@ -658,6 +658,8 @@ What this does not claim:
   STEP 27) is still `CONFLICTING`/`DIRTY`, so a step stacked on it would not be a direct child of
   that repo's `main`.
 
+**Corrected after rebasing onto `main` at `88bf6d2`.** Several sentences above report the base build's `409` as the nameless one — `{"conflict":{"fields":[]}}`, `"That Lead already exists in this workspace."` — and that is exactly what round #65 measured. It is no longer what this branch's tree answers: #100 landed `uniqueViolationColumns`, so the index now says `{fields: ["email"]}` / "A Lead with this email already exists in this workspace." Nothing about this round's own decision changes with that: it refuses the twin at the door, in the same words whatever case the caller typed, and it names the row the caller already has — `fields` *plus* `existingId` — which is the part no index can supply, because the index has never seen the request. #100's named 409 is the backstop behind it, not a replacement for it. `tests/unit/lead-email-case.test.ts:171` is retargeted to the named body with that reason in the file, and a second pin was added beside it: a constraint name that does not decompose still yields `fields: []`, so the naming is #100's mechanism and this round's refusal does not depend on it. Gates on the rebased tree: `npm test` **1263/1263** (main's 1236 plus these 27), `tsc --noEmit` exit 0, lint 0 errors / the same 13 warnings, `check:contract` 8/8, `check:llms-full` unchanged.
+
 ### An enrichment rule applies the conditions it declares
 
 `schema.prisma` declares `EnrichmentRule.conditions Json // When to apply this
