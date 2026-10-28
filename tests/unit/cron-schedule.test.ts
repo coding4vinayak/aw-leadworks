@@ -107,7 +107,13 @@ describe("the matcher: known answers on fixed clocks", () => {
 
   it("matches a cadence that cannot fall on the calendar as never, not as an error", () => {
     assert.equal(matchesSchedule("0 0 30 2 *", new Date(2026, 1, 28, 0, 0)), false, "February 2026 has 28 days");
-    assert.equal(scheduleProblem("0 0 30 2 *"), null, "and it is still a well-formed cron — refusing it would be inventing a rule");
+    // #38 pinned the second half of this as `scheduleProblem(...) === null` — "refusing it
+    // would be inventing a rule". #61 measured what that left open: the door stored the
+    // cadence with a 201, the sweep matched it at no minute of 2,103,840 and printed nothing,
+    // because the warning it logs hangs off this function. The rule is not invented, it is the
+    // calendar the matcher already consults, so the refusal is the retarget, not a relaxation:
+    // the matcher's `false` above is untouched and now has a door that says so.
+    assert.match(scheduleProblem("0 0 30 2 *")!, /no minute of any year/);
   });
 
   it("reads the same clock whatever the whitespace", () => {
@@ -193,6 +199,97 @@ describe("the grammar: every refusal names the part it refuses", () => {
   });
 });
 
+describe("the calendar: two fields that are each legal and have no date between them", () => {
+  // #61 measured six of these stored through `POST /api/sources` with a 201 and left for four
+  // sweep minutes: 0 `Job` rows for each, and not one line in the log naming them, because the
+  // warning the sweep does print hangs off `scheduleProblem` — which read all six as well
+  // formed. Scanning every minute of 2026-01-01 through 2029-12-31 (2,103,840 minutes, the leap
+  // year 2028 inside the window) is what turned "quiet so far" into "never": each of these
+  // matched 0 of them, while `0 0 29 2 *` matched exactly 1 and `0 0 31 4-11 *` matched 16.
+  const NEVER = ["0 0 30 2 *", "0 0 31 2 *", "0 0 30-31 2 *", "0 0 31 4 *", "0 0 31 6 *", "0 0 31 9 *", "0 0 31 11 *", "0 0 31 2,4 *"];
+
+  it("refuses the day the month does not have, quoting both fields as they were written", () => {
+    for (const cadence of NEVER) {
+      const parts = canonicalSchedule(cadence).split(" ");
+      const problem = scheduleProblem(cadence)!;
+      assert.ok(problem.includes(`day of month "${parts[2]}"`), `the day field comes back as written: ${problem}`);
+      assert.ok(problem.includes(`month "${parts[3]}"`), `the month field comes back as written: ${problem}`);
+      assert.match(problem, /^day of month /, "the date is the complaint, not a footnote to one");
+      assert.match(problem, /no minute of any year matches this cadence/);
+      assert.equal(problem.includes(";"), false, "one sentence — there is one problem, and it is between the fields");
+    }
+  });
+
+  it("says how long the month it refuses actually is", () => {
+    assert.match(scheduleProblem("0 0 30 2 *")!, /has 29 days/, "February in a leap year — which is why 29 is the limit and 30 is not");
+    for (const month of ["4", "6", "9", "11"]) {
+      assert.match(scheduleProblem(`0 0 31 ${month} *`)!, /has 30 days/, `month ${month} runs to 30`);
+    }
+    assert.match(scheduleProblem("0 0 31 2,4 *")!, /has 30 days/, "a list of months is judged by its longest member");
+  });
+
+  it("agrees with the calendar for every day and month the grammar can name", () => {
+    const onTheCalendar = (day: number, month: number) => {
+      for (let year = 2026; year <= 2041; year += 1) {
+        const date = new Date(year, month - 1, day);
+        if (date.getDate() === day && date.getMonth() === month - 1) return true;
+      }
+      return false;
+    };
+    let refused = 0;
+    for (let month = 1; month <= 12; month += 1) {
+      for (let day = 1; day <= 31; day += 1) {
+        const problem = scheduleProblem(`0 0 ${day} ${month} *`);
+        if (onTheCalendar(day, month)) {
+          assert.equal(problem, null, `day ${day} of month ${month} is a date 2026-2041 holds, so the door must take it`);
+        } else {
+          refused += 1;
+          assert.ok(problem !== null && /no minute of any year/.test(problem), `${day}.${month} is no date and the refusal says so: ${problem}`);
+        }
+      }
+    }
+    assert.equal(refused, 6, "30.2, 31.2, 31.4, 31.6, 31.9, 31.11 — the six the scan found, and no other pair");
+  });
+
+  it("does not mistake a date that comes round rarely for one that never comes", () => {
+    // The rare ones are the reason this refusal is bounded by the month's own length rather
+    // than by "is 31 a day": each of these was counted matching at real minutes in the scan.
+    assert.equal(scheduleProblem("0 0 29 2 *"), null, "the leap day — 1 minute in four years, at 2028-02-29 00:00");
+    assert.equal(scheduleProblem("0 0 31 4-11 *"), null, "the range holds May, July, August and October, and 16 minutes fall in them");
+    assert.equal(scheduleProblem("0 0 31 1,4 *"), null, "one month with 31 days carries the whole list");
+    assert.equal(scheduleProblem("0 0 1-31/30 2 *"), null, "the step names the 1st and the 31st, and February has the 1st");
+  });
+
+  it("leaves the weekday out of the verdict, because a real date reaches every weekday", () => {
+    assert.equal(scheduleProblem("0 0 29 2 1"), null, "a Monday leap day matches nothing in 2026-2029 and everything on 2044-02-29");
+    assert.equal(matchesSchedule("0 0 29 2 1", new Date(2044, 1, 29, 0, 0)), true, "which is the minute the refusal would have had to be wrong about");
+    assert.match(scheduleProblem("0 0 30 2 1")!, /day of month "30"/, "the 30th of February is refused on its day and month alone, weekday or not");
+  });
+
+  it("refuses nothing the two sample years would match", () => {
+    for (const cadence of NEVER) {
+      for (const year of [2026, 2028]) {
+        for (let day = 0; day < 366; day += 1) {
+          const clock = new Date(year, 0, 1 + day, 0, 0);
+          if (clock.getFullYear() !== year) continue;
+          assert.equal(matchesSchedule(cadence, clock), false, `${cadence} at ${clock.toDateString()} — the matcher already said never`);
+        }
+      }
+    }
+  });
+
+  it("refuses a cadence that misfires on two counts for its fields, not for its date", () => {
+    const problem = scheduleProblem("23 59 30 2 *")!;
+    assert.match(problem, /hour "59" holds 59, outside 0-23/);
+    assert.equal(problem.includes("no minute of any year"), false, "the field complaint is the whole answer; the date sentence would bury it");
+  });
+
+  it("spells the month lengths once, in the module that reads them", () => {
+    const spellers = srcFiles(srcDir).filter((file) => /31,\s*29,\s*31/.test(readFileSync(file, "utf8")));
+    assert.deepEqual(spellers.map((file) => file.split("/").pop()), ["cron-schedule.ts"], "no second calendar for a second door to drift from");
+  });
+});
+
 describe("one table of ranges, one grammar, and the doors that use them", () => {
   it("is the only module under src that spells the five fields", () => {
     const spellers = srcFiles(srcDir).filter((file) => {
@@ -228,6 +325,7 @@ describe("one table of ranges, one grammar, and the doors that use them", () => 
     const table = [
       "* * * * *", "0 9 * * *", "*/5 * * * *", "0 9 * * 1-5", "*/15 9-17 * * 1-5",
       "10/15 * * * *", "30 8,12 * * 0,6", "0 0 1 1 *", "0 9 * * 7", "0 12 15 * 1",
+      "0 0 30 2 *", "0 0 31 4 *", "0 0 29 2 *", "0 0 31 4-11 *",
       "*/0 * * * *", "0 9 * * MON-FRI", "* * * * * 1", "60 * * * *", "0, 9 * * *",
       "20-5 * * * *", "0 0 ? * 1", "nonsense", "",
     ];
@@ -258,6 +356,8 @@ describe("the wiring, from the source", () => {
   const scheduler = at("../../src/lib/scheduler.ts");
   const createDoor = at("../../src/app/api/sources/route.ts");
   const editDoor = at("../../src/app/api/sources/[id]/route.ts");
+  const ruleCreate = at("../../src/app/api/enrichment-rules/route.ts");
+  const ruleEdit = at("../../src/app/api/enrichment-rules/[id]/route.ts");
 
   it("asks the matcher three times in the minute, once per leg that stores a schedule", () => {
     const body = blankComments(functionBody(scheduler, "runScheduledJobs")!);
@@ -291,6 +391,22 @@ describe("the wiring, from the source", () => {
       assert.ok(refused < code.indexOf(write), `and refuses before ${write} runs`);
       assert.match(code.slice(refused, code.indexOf(write)), /status: 400/, "with a 400 naming the problem");
     }
+  });
+
+  it("refuses one on both rule doors too, through the rule's own declaration check", () => {
+    // Neither rule door calls `scheduleProblem` itself — #34 put the check in
+    // `rule-actions.ts` first — so what binds them to this module is that they ask the
+    // declaration, and the declaration asks the grammar. Measured live at the create door
+    // (`0 0 30 2 *`: 201 before this round, 400 with the matcher's sentence inside the
+    // refusal after); the edit door is pinned here rather than pressed.
+    for (const [door, write] of [[ruleCreate, "prisma.enrichmentRule.create"], [ruleEdit, "prisma.enrichmentRule.update"]] as const) {
+      const code = blankComments(door);
+      assert.ok(code.includes('from "@/lib/rule-actions"'), "the door imports the declaration check");
+      const asked = code.search(/ruleDeclarationProblem\(|actionsProblem\(/);
+      assert.ok(asked > -1, `${write} asks it`);
+      assert.ok(asked < code.indexOf(write), `and refuses before ${write} runs`);
+    }
+    assert.equal(actionsProblem({ fields: ["seniority"], schedule: "0 0 30 2 *" }) !== null, true, "and the check the doors ask covers this class");
   });
 
   it("leaves a cleared cadence cleared, on the door that takes null", () => {
