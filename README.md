@@ -215,10 +215,10 @@ GET    /api/leads?workspaceId=             # list, filter status/minScore; `?sta
                                            # row onto the columns named, the same names
                                            # `POST /api/exports` takes `fields` from, and a name
                                            # that is not a Lead column is a 400, not the page
-POST   /api/leads                          # create
+POST   /api/leads                          # create — one address is one row, in this case or another (see *One address, one row*)
 POST   /api/leads/import                   # CSV import (text/csv or JSON)
 GET    /api/leads/{id}                     # detail + enrichment log
-PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below)
+PATCH  /api/leads/{id}                     # update; `{score}` is an override, not a write (see Score below); a new address is refused if the workspace holds it (see *One address, one row*)
 POST   /api/leads/{id}?action=enrich       # visit the one lead the URL names
 GET    /api/lead-lists?workspaceId=        # lists
 GET    /api/lead-lists/{id}                # one list, a page of its members, and what the whole membership counts
@@ -432,6 +432,233 @@ nameless body. `src/lib/billing-events.ts` keeps swallowing its own P2002 on
 purpose: a billing event that arrived twice is not a caller's collision. No
 demo step while `aw-deploy`'s proxy PR #96 is `CONFLICTING`
 (`mergeStateStatus: DIRTY`, re-checked when this PR was opened).
+
+### One address, one row: the two doors that take an email fold case before they write
+
+Two files in this product already decided what `JOHN@X.COM` means when a `john@x.com` is on hand:
+
+```ts
+// src/lib/csv-import.ts — the file door, looking before it inserts
+where: { workspaceId, email: { in: emails, mode: "insensitive" } },
+```
+
+```ts
+// src/lib/dedupe.ts:216 — the merge door, deciding who is one person
+return !!a.email && !!b.email && a.email.toLowerCase() === b.email.toLowerCase();
+```
+
+and a third decides it for accounts (`src/app/auth-actions.ts` lower-cases the address before it
+looks). The one thing that does not decide it is the constraint the write doors leaned on:
+
+```prisma
+@@unique([workspaceId, email])                     // prisma/schema.prisma:191
+```
+
+which compares bytes. Measured on `e3fcc16`, built in this round's worktree and served on
+**:3417** over the session's own database `leadworks_r66` with a private Redis on 6408 — two
+workspaces and two keys, the DEDUPE worker allowed to run each job to its own verdict
+(`/tmp/opencode/r66_press_base.log`, `/tmp/opencode/r66_extras_base.log`, row truth from
+`psql … "Lead"`):
+
+```
+POST /api/leads {"email":"john@x.com"}          201  cmvqf4fjs000b…
+POST /api/leads {"email":"john@x.com"} again    409  "That Lead already exists in this workspace."
+POST /api/leads {"email":"JOHN@X.COM"}          201  cmvqf4fl3000d…  ← a second person
+POST /api/leads {"email":"John@X.com"}          201  cmvqf4flw000e…  ← a third
+POST /api/leads {"email":"  JOHN@X.COM  "}      409  (the field table trims, then the index answers)
+POST /api/leads {"email":"JOHN@X.COM"} as B     201  (the index is per workspace, and stays so)
+POST /api/leads {"email":"buyer@other.com"}     201
+POST /api/leads/import  JoHn@X.com              200  imported=0 duplicatesExisting=1
+POST /api/leads/import  Nina@Y.com              201  imported=1 — and held as nina@y.com
+PATCH  /api/leads/<buyer> {"email":"JOHN@X.COM"}   409
+PATCH  /api/leads/<nina>  {"email":"JoHn@X.cOm"}  200  ← a fourth spelling, on somebody else's row
+GET    /api/leads?limit=100                     200  total=5: john@x.com | John@X.com | JOHN@X.COM
+POST   /api/jobs {"type":"DEDUPE","config":{"strategy":"email","action":"merge"}}
+                                                COMPLETED found=2 resolved=2 — five rows became four
+```
+
+The last two lines are what makes this a defect rather than a schema choice. The file door and
+the merge door are not being contradicted by some outside rule: they are the product's own
+answer, already paid for. A caller who created the same person three times got three 201s and
+three rows in the crowd every later read walks, and the only thing that ever put those rows back
+together was a job the operator had to notice, queue and run — whose entire result, measured
+above, was to fold away what the door had just accepted.
+
+The fix asks each of the two doors the question the importer already asks, before the write:
+
+```ts
+const askedEmail = input.data.email;
+if (typeof askedEmail === "string") {
+  const holders = await prisma.lead.findMany({
+    where: { workspaceId, email: { equals: askedEmail, mode: "insensitive" } },
+    select: { id: true, email: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const holder = emailCaseHolder(askedEmail, holders);
+  if (holder) return emailCaseConflict(holder, askedEmail);
+}
+```
+
+and `src/lib/lead-email.ts` holds the two halves that are not a query: `emailCaseHolder`, which
+decides which of those rows is a collision, and `emailCaseConflict`, which is the 409:
+
+```
+A Lead with this email already exists in this workspace as cmvqfubjf0000wsqcik2z9yq8:
+"JOHN@X.COM" is "john@x.com" with the case changed.
+```
+
+Four decisions, each taken because a rule this app already runs decided it:
+
+* **Refused, not rewritten.** The importer *stores* the folded address — measured above:
+  `Nina@Y.com` arrives and is held as `nina@y.com`, because `csv-parse.ts`'s `normalizeEmail`
+  runs on a column the caller never typed. Nothing here does: the bytes of a row that exists are
+  nobody's business, and a new address is stored exactly as it was sent. A door that folded on
+  write would be changing what the record says about the person it recorded, which is the same
+  reason #64 refused to normalise a `filterJson`.
+* **The index keeps the bytes it holds.** If any of those rows is the very string the caller
+  sent, `emailCaseHolder` stands down and `@@unique` answers — the base answer, unchanged:
+  `409 "That Lead already exists in this workspace."` This round adds a refusal where the index
+  has no opinion; it does not replace the one it has.
+* **The refusal names the row, because the caller cannot find it any other way.** The address it
+  just sent is precisely the address that does not match. `conflict` carries `existingId`,
+  `existingEmail` and `askedEmail` with it, and the sentence opens with the clause
+  `conflictFor` builds for this column, so a client that reads one of the two 409s has already
+  read the other. `select: { id, email }` is the whole payload: a refusal cannot become a way to
+  read a column the caller was not entitled to.
+* **The row under edit is left out of the lookup, not out of the helper.**
+  `PATCH /api/leads/{id}` asks the same question with `id: { not: id }` in the `where`, so a row
+  may keep its own address in any case (`{"email":"SOLO@Z.COM"}` on the row stored as
+  `solo@z.com` is a 200, measured) and the helper stays one function with no parameter that one
+  door passes and the other forgets.
+
+Both builds, the same database, the same empty starting table, the same script
+(`r66_press_base.log`, `r66_press_fix.log`):
+
+```
+{"email":"JOHN@X.COM"}                base 201 second row    fix 409, names john@x.com's row
+{"email":"John@X.com"}                base 201 third row     fix 409, the same row named
+{"email":"  JOHN@X.COM  "}             base 409 nameless     fix 409 named — same verdict, new sentence
+{"email":"john@x.com"} (same bytes)   base 409 nameless      fix 409 nameless      — unchanged
+{"email":"JOHN@X.COM"} as tenant B    base 201               fix 201               — unchanged
+{"email":"buyer@other.com"}           base 201               fix 201               — unchanged
+import JoHn@X.com                     base dup=1 imported=0  fix dup=1 imported=0  — unchanged
+import Nina@Y.com                     base held nina@y.com   fix held nina@y.com   — unchanged
+PATCH <buyer> → JOHN@X.COM            base 409 nameless      fix 409 named
+PATCH <nina>  → JoHn@X.cOm            base 200 (twin made)   fix 409 named
+GET /api/leads?limit=100              base total=5           fix total=3
+DEDUPE strategy=email action=merge    base found=2 resolved=2  fix found=0 resolved=0
+{"phone":"+1555…"}, no email          base 201 email=null    fix 201 email=null    — unchanged
+{"email":""}                          base 400 contact       fix 400 contact       — unchanged
+{"email":"JOHN AT X DOT COM"}         base 400 named         fix 400 named         — unchanged
+```
+
+Two presses moved from a created person to a refusal that says which person already exists, one
+kept its verdict and gained the id, and everything that was already honest is the same answer.
+The job that cost two merges on the base build now costs nothing, because there is nothing to
+fold. `GET /api/leads?limit=100` reads the difference: five rows for three people, then three.
+
+What was *not* touched is measurable, because the rows a pre-round build left behind were put
+back by hand — two `Lead` rows in one workspace, `john@x.com` and `JOHN@X.COM`, with
+`createdAt` thirty and twenty days old (`/tmp/opencode/r66_stored.py`, log
+`r66_stored_fix.log`):
+
+```
+POST /api/leads {"email":"John@X.com"}                 409 names storedoldest000000000001 (john@x.com)
+POST /api/leads {"email":"JOHN@X.COM"}                 409 "That Lead already exists…" fields=[] (the index)
+PATCH /api/leads/<stored twin> {"email":"john@x.com"}  409 the index's nameless answer
+PATCH /api/leads/<stored twin> {"email":"John@X.com"}  409 names storedoldest000000000001
+GET  /api/leads?limit=100                              200 total=2 — both rows still there
+POST /api/jobs {"DEDUPE","strategy":"email","merge"}   COMPLETED found=1 resolved=1 — one row left
+```
+
+The two rows are still two rows after every press this round added: the fix is at the boundary
+that accepts an address, not a sweep over the table, and repairing what a customer already
+imported belongs to the job that has always done it — the last line above is that job, running
+against a pair the door refused to make. Which of the two stored spellings gets named is the
+`orderBy` doing, not luck: the oldest holder, in both doors.
+
+The fold is two folds, and for non-ASCII addresses they are not the same fold. The doors match
+with Postgres' `lower()` and decide with JavaScript's `toLowerCase()`, and these are the inputs
+where the two disagree (`/tmp/opencode/r66_extras2_fix.log`, pressed on this round's fix build):
+
+```
+POST /api/leads {"email":"İbrahim@x.com"}   201   POST {"email":"İBRAHİM@X.COM"}  201  ← still a twin
+POST /api/leads {"email":"İBRAHIM@X.COM"}   409   names the row, the fold's own sentence
+POST /api/leads {"email":"σασ@x.com"}       201   POST {"email":"ΣΑΣ@X.COM"}      201  ← still a twin
+POST /api/leads {"email":"straße@x.com"}    201   POST {"email":"STRASSE@x.com"}  201  ← and these stay two
+POST /api/leads {"email":"STRASSE@X.COM"}   409   names STRASSE@x.com
+```
+
+`İ` (U+0130) lower-cases to `i` in Postgres and to `i` plus a combining dot in JavaScript; a
+capital `Σ` lower-cases to `σ` in both, but a final `ς` is left alone by JavaScript and folded by
+Postgres. So a Turkish or Greek address can still be written twice, and the honest description of
+this round is *the case fold an ASCII address gets*, which is the address this product's buyers
+paste out of a spreadsheet. The fix is not more code here: it is one fold rather than two, which
+is a round of its own, and the leg is pinned below so a later round cannot call it fixed by
+accident. `ß` and `ss` stay two addresses at both doors — that is an equivalence question, and
+neither this file nor `dedupe.ts` claims to answer it.
+
+Pinned offline: **1228/1228** — **26 new** in `tests/unit/lead-email-case.test.ts` over five
+describes, no browser, no database, no network. The judge is pinned on the inputs that matter —
+no holders, a stranger, a prefix, the same bytes (alone, and *after* a variant, so standing down
+is a rule and not an accident), one variant in either direction, three spellings of one address
+(where the named row is the first one handed to it, which is what the doors' `orderBy` is for), a
+row whose email is `null`, and the four inputs the fold does not judge: an accent, a space, a
+Cyrillic `а`, a domain's case. The refusal is pinned to 409, to open with the clause
+`conflictFor` builds for `Lead.email`, to carry both spellings and the id, to say nothing about
+the row beyond those three keys, and — measured, not assumed — to carry its own `fields`, because
+the P2002 this Prisma throws has no `meta.target` at all: the driver adapter puts the violation
+in `meta.driverAdapterError.cause` with a constraint name, so a byte-identical duplicate answers
+`conflict: { fields: [] }` and the nameless sentence, which is why a case refusal written against
+that helper would have named nothing. Both doors are pinned by reading their own source with
+comments blanked: the lookup scoped and shaped (`{ workspaceId, email: { equals: askedEmail, mode:
+"insensitive" } }`, `select: { id, email }`, `orderBy: { createdAt: "asc" }`, and
+`id: { not: id }` in the update door), the refusal raised at a lower offset than the write it
+guards and after the body has been judged, the row still built by `...input.data` / `...fields`
+so nothing rewrites the address, `exceptId` absent from the module, and no third file importing
+it. Then two censuses, because the hole is a shape: every file that writes a `Lead` row is
+exactly `{leads/[id], leads, csv-import, dedupe, enrichment, scraper, validator}`, and every
+file whose *code* (comment-blanked) performs a case-insensitive match is exactly
+`{leads/[id], leads, csv-import}` — which is the round's whole claim in one list, and the reason
+the scrape's byte-exact `findUnique({ where: { workspaceId_email: … } })` is named in the
+paragraph above rather than quietly left out. The contract is pinned to price a duplicate at
+409 rather than the 422 it claimed, to name `listIds` as the 422, to describe `email` by the
+promise at both doors, and to leave the importer's older promise — *matched case-insensitively by
+email* — standing. tsc clean, lint **0 errors / 13 warnings** (unchanged from `main`, none on a
+line this round wrote), `check:contract` **8/8**, `check:llms-full` **unchanged**, build exit 0.
+No existing test was retargeted: the suite on `main` is 1202 and nothing in it asserted that a
+second spelling of an address is a new person.
+
+What this does not claim:
+
+* **Rows already stored are not repaired.** The `storedoldest…` block above is the measurement:
+  two spellings, both still there after every press. Nothing was added that folds an existing
+  pair, because a door that says no and a sweep that rewrites a customer's table are different
+  promises — and the app already owns the second one as `DEDUPE`, which is shown running against
+  that pair.
+* **Non-ASCII case is not covered.** The `İ` and `ς` legs are 201 on the fix build. This round
+  makes two doors agree with two other files for the addresses where all four agree already;
+  making the database's fold and the language's fold one fold is the next question, and it is a
+  bigger one — it would move the decision out of `emailCaseHolder` entirely.
+* **`straße` and `STRASSE` are still two rows**, and two `Lead`s whose emails differ by an
+  unescaped space, an accent or a homoglyph are still two people. The rule this round imports is
+  `dedupe.ts`'s email rule, and that rule is two `toLowerCase()` calls; widening it would be
+  widening what "the same person" means everywhere, not what one door accepts.
+* **The scrape still matches byte for byte.** `scraper.ts:212` looks up
+  `findUnique({ where: { workspaceId_email: { workspaceId, email: lead.email } } })` before it
+  decides between an update and a create, so a source that hands back `JOHN@X.COM` still makes a
+  second row. It is pinned as a limit rather than fixed, because its input is a provider's field
+  rather than a caller's typo and the fix there is one line on a path no HTTP door guards — a
+  reviewer who wants it in this round should say so and it is the same helper.
+* **A byte-identical duplicate still gets the nameless 409,** with `conflict.fields: []`, because
+  the P2002 measured above carries no target. Naming the columns of the constraint that index
+  names is `conflictFor`'s job and is not this round's; the pins say so in both directions, so
+  the gap is visible in the suite rather than only here.
+* **No demo step this round**, for the standing reason — `aw-deploy`'s only open pair (#96,
+  STEP 27) is still `CONFLICTING`/`DIRTY`, so a step stacked on it would not be a direct child of
+  that repo's `main`.
+
+**Corrected after rebasing onto `main` at `88bf6d2`.** Several sentences above report the base build's `409` as the nameless one — `{"conflict":{"fields":[]}}`, `"That Lead already exists in this workspace."` — and that is exactly what round #65 measured. It is no longer what this branch's tree answers: #100 landed `uniqueViolationColumns`, so the index now says `{fields: ["email"]}` / "A Lead with this email already exists in this workspace." Nothing about this round's own decision changes with that: it refuses the twin at the door, in the same words whatever case the caller typed, and it names the row the caller already has — `fields` *plus* `existingId` — which is the part no index can supply, because the index has never seen the request. #100's named 409 is the backstop behind it, not a replacement for it. `tests/unit/lead-email-case.test.ts:171` is retargeted to the named body with that reason in the file, and a second pin was added beside it: a constraint name that does not decompose still yields `fields: []`, so the naming is #100's mechanism and this round's refusal does not depend on it. Gates on the rebased tree: `npm test` **1263/1263** (main's 1236 plus these 27), `tsc --noEmit` exit 0, lint 0 errors / the same 13 warnings, `check:contract` 8/8, `check:llms-full` unchanged.
 
 ### An enrichment rule applies the conditions it declares
 

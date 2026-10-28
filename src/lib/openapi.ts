@@ -145,7 +145,10 @@ const PATHS: Record<string, PathItem> = {
       body: {
         description: "The lead's fields. Every column is optional here; a lead with no email and no phone is still a person you met.",
         properties: {
-          email: { type: "string", description: "An address, or leave it out." },
+          email: {
+            type: "string",
+            description: "An address, or leave it out. One address is one row per workspace: an address this workspace already holds is refused, whether the bytes match or only the case does.",
+          },
           phone: { type: "string", description: "A phone number." },
           linkedinUrl: { type: "string", description: "A profile URL." },
           firstName: { type: "string", description: "Given name." },
@@ -166,7 +169,12 @@ const PATHS: Record<string, PathItem> = {
           customFields: { type: "object", description: "Anything else this workspace wants to keep." },
         },
       },
-      responses: { "201": "The lead, with its score. 422 for a duplicate." },
+      responses: {
+        "201": "The lead, with its score.",
+        "400": "A field the table refuses, an address that is not an address, or no contact method at all.",
+        "409": "This workspace already holds the address: byte for byte, refused by the unique index, or in another case, refused by name with the id of the row it collided with. One address is one row.",
+        "422": "A `listIds` entry this workspace does not have, named.",
+      },
     },
   },
   "/api/leads/import": {
@@ -199,7 +207,10 @@ const PATHS: Record<string, PathItem> = {
       body: {
         description: "The fields to change.",
         properties: {
-          email: { type: "string", description: "A new address." },
+          email: {
+            type: "string",
+            description: "A new address — one this workspace does not already hold, in this case or another. A row may always keep its own.",
+          },
           phone: { type: "string", description: "A new number." },
           linkedinUrl: { type: "string", description: "A new profile URL." },
           firstName: { type: "string", description: "A new given name." },
@@ -222,7 +233,12 @@ const PATHS: Record<string, PathItem> = {
           status: { type: "string", description: "A new status." },
         },
       },
-      responses: { "200": "The lead as it now reads." },
+      responses: {
+        "200": "The lead as it now reads.",
+        "400": "A field the table refuses, or a body that changes nothing.",
+        "404": "No lead of this workspace has that id.",
+        "409": "Another row of this workspace already holds the address — byte for byte, refused by the unique index, or in another case, refused by name with the id of the row it collided with.",
+      },
     },
     post: {
       id: "leads.enrich",

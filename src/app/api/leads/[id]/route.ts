@@ -5,6 +5,7 @@ import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
 import { markNeverQueued } from "@/lib/queue-refusal";
 import { readJson, validateBody } from "@/lib/validate";
 import { rowAfterWrite, scoredWriteData } from "@/lib/lead-score";
+import { emailCaseConflict, emailCaseHolder } from "@/lib/lead-email";
 import { LEAD_ADD_TO_LIST, LEAD_PATCH } from "@/lib/fields";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,29 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
   // the arithmetic.
   const { score, ...fields } = input.data;
   const scoreOverride = score === undefined ? before.scoreOverride : score;
+
+  // One address, one row — the fold `POST /api/leads` asks for too, with the row under edit
+  // excluded by the lookup rather than by the helper, so an edit that resends the address the
+  // row already holds, in any case, stays an edit. Measured on the base build:
+  // `PATCH {email: "JoHn@X.cOm"}` on a lead stored as `nina@y.com` answered 200 and turned it
+  // into another workspace-wide spelling of a different person's address.
+  const askedEmail = fields.email;
+  if (typeof askedEmail === "string") {
+    const holders = await prisma.lead.findMany({
+      where: {
+        workspaceId: before.workspaceId,
+        id: { not: id },
+        email: { equals: askedEmail, mode: "insensitive" },
+      },
+      select: { id: true, email: true },
+      // The oldest holder gets named: three spellings of one address leave the
+      // database free to return them in any order, and a refusal that names a row
+      // should name the same one every time the same press is made.
+      orderBy: { createdAt: "asc" },
+    });
+    const holder = emailCaseHolder(askedEmail, holders);
+    if (holder) return emailCaseConflict(holder, askedEmail);
+  }
   const lead = await prisma.lead.update({
     where: { id },
     data: {
