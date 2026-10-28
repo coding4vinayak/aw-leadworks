@@ -3544,6 +3544,12 @@ these 18; **no existing test was retargeted** — the two filter-word files
 for), `tsc --noEmit` exit 0, lint **0 errors / 13 warnings** (the same 13 `main` has, none on
 a line this round wrote), `check:contract` **8/8**, `check:llms-full` **unchanged** (the deep
 content file prints operation summaries, not query-parameter prose), build exit 0.
+Rebased onto `main` at `88bf6d2` after #100 and #102 landed: the same eighteen tests, **no test
+retargeted and none deleted**, suite **1254/1254**, `tsc` exit 0, lint **0 errors / 13 warnings**,
+`check:contract` **8/8**, `check:llms-full` unchanged. The rebase needed one decision, in
+`README.md`, where this section and #102's landed section had both been inserted immediately
+before `## Score` — both are kept, main's first. Nothing in `src/lib/openapi.ts` collided:
+#102 wrote the exports body and response blocks, this round wrote the `leads.list` parameters.
 
 What this does not claim:
 
@@ -3568,10 +3574,13 @@ What this does not claim:
   E8: `imported=1 duplicatesExisting=1` for a file holding `john@x.com` beside the `JOHN@X.COM`
   this workspace already had). Those two doors disagree about case today; #99 is where that
   disagreement is decided, not here.
-* **Nothing was merged by this round, and this branch does not carry #66.** Measured on this
-  build, a duplicate `POST` still answers `{"conflict":{"fields":[]}}` — the nameless 409,
-  because #66 is open. Once it lands, that answer names `email`, and the door this round
-  fixed is the one that can then do something with the name.
+* **#66 landed while this PR was open, so this branch now carries it.** Before the rebase, a
+  duplicate `POST` on this build answered the nameless `{"conflict":{"fields":[]}}`; on
+  `88bf6d2` it answers `{fields: ["email"]}` for a lead collision (`unique-index.test.ts` pins
+  both halves — `["email"]` for the pair a caller typed, and the second column's name for a
+  different index). That is the sentence this round said it wanted: the read door that now
+  obeys `?email=` is the one that can act on a name the write door finally gave, so the pair
+  is decided by #99's fold question, not by an unnamed collision.
 * **No UI calls `?email=` yet.** `git grep 'email='` across `src/app` pages, `demo` and
   `public` finds no caller, so this round changes what a hand-written request gets and
   nothing on the pages.
