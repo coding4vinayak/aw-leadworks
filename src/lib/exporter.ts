@@ -222,7 +222,10 @@ async function exportToCSV(leads: any[], fields: string[]): Promise<string> {
     return row;
   });
 
-  const csv = stringify(rows, { header: true });
+  // `columns` because `fields` is required at the door: the header is what the caller
+  // asked for, and csv-stringify otherwise builds it from the rows, so a crowd of zero
+  // measured `fileSize=0` — no header line, in a file the caller was told was `COMPLETED`.
+  const csv = stringify(rows, { header: true, columns: fields });
   const filePath = `/tmp/export_${Date.now()}.csv`;
   await import("fs/promises").then(fs => fs.writeFile(filePath, csv));
   return filePath;
@@ -266,7 +269,11 @@ async function exportToXLSX(leads: any[], fields: string[]): Promise<string> {
   });
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(data);
+  // The same rule as the CSV: `json_to_sheet` builds its header from the objects it is
+  // given, so an empty crowd produced a sheet with no cells at all (`<sheetData/>`,
+  // dimension A1) inside a 15 KB workbook. `fields` is required at the door, so the row
+  // this sheet lacks can always be written from what the caller declared.
+  const ws = data.length === 0 ? XLSX.utils.aoa_to_sheet([fields]) : XLSX.utils.json_to_sheet(data);
   XLSX.utils.book_append_sheet(wb, ws, "Leads");
 
   const filePath = `/tmp/export_${Date.now()}.xlsx`;

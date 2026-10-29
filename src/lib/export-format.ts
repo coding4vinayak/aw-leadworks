@@ -95,7 +95,8 @@ export function readExportFilter(raw: unknown): Record<string, unknown> {
     // and a body that asks to file a lead under `""` is a 400 — "every listIds entry
     // must be a non-empty string". Whether the stripped name *exists* is not this
     // function's question — it needs the database, and the door asks it — but what the
-    // caller meant by the bytes is.
+    // caller meant by the bytes is. (The zero bytes quoted above were the base build's
+    // second defect, since fixed: an empty crowd's CSV carries its declared header line.)
     const named = listId.trim();
     if (named === "") throw new Error(`${EXPORT_LIST_ID} must name a list; "" is not a list`);
     if (named !== listId) filter = { ...filter, listId: named };

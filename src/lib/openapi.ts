@@ -629,7 +629,7 @@ const PATHS: Record<string, PathItem> = {
       id: "exports.download",
       summary: "Download an export's file, while retention keeps it.",
       auth: "key",
-      responses: { "200": "The file.", "410": "The file's retention has passed." },
+      responses: { "200": "The file. A CSV names the columns its request declared on its first line even when no lead matched, as the import's problem report does; an empty JSON is `[]`.", "410": "The file's retention has passed." },
     },
   },
   "/api/webhooks": {
