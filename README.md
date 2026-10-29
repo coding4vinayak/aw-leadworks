@@ -2799,15 +2799,16 @@ What this does not claim:
 * `?select=`, `?include=` and `?fields[]=` still return the whole page. Same decision as #46,
   repeated because it is the same decision: one parameter, one vocabulary, and a door that learns a
   second synonym for it is a door that can answer them differently.
-* The order has no tiebreaker. `orderBy: { score: "desc" }` says nothing about rows that tie, and an
-  imported crowd ties everywhere: three reads of one URL inside one run answered the identical
-  105,536 bytes, and this round's matched pair happens to agree on that number on both sides, but
-  earlier independent runs of the same measurement over the same import shape answered 93,129 and
-  93,517 for the same page — which of the tied rows land on a page, and therefore how many nested
-  `listMemberships` it carries, moves. The ratios above are this pair's, not a property of every
-  page. #45 found this at the list door and gave that door `orderBy: { leadId: "asc" }`; picking a
-  secondary key for the lead door changes which rows a caller who asked for nothing sees, so it is a
-  separate round's decision and this round only measured it.
+* The order had no tiebreaker — *this is the limit #74 took*. `orderBy: { score: "desc" }` said
+  nothing about rows that tied, and an imported crowd tied everywhere: three reads of one URL inside
+  one run answered the identical 105,536 bytes, and #48's matched pair happened to agree on that
+  number on both sides, but earlier independent runs of the same measurement over the same import
+  shape answered 93,129 and 93,517 for the same page — which of the tied rows landed on a page, and
+  therefore how many nested `listMemberships` it carried, moved. The ratios above are that pair's,
+  not a property of every page. #45 found this at the list door and gave that door
+  `orderBy: { leadId: "asc" }`; picking a secondary key for the lead door changes which rows a caller
+  who asked for nothing sees, so #48 only measured it and named the decision for a later round. #74
+  made that decision, at all five paged doors and one more that had never been sliced fairly.
 * The unprojected page still embeds the whole `list` record inside every membership, `filterJson`
   included. Dropping that changes the shape of a documented response — the changelog's 30-days'-notice
   class of change — and this round only stops handing it to callers who named columns instead.
@@ -4125,10 +4126,124 @@ tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, l
 re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
 and the eight scored leads the tables above were measured over belong to it.
 
+### A page is a slice, and five doors were slicing a tie: `?page=1..totalPages` handed some rows twice and others not at all
+
+`GET /api/leads`, `/api/sources`, `/api/jobs`, `/api/exports` and `/api/lead-lists` all answer
+`{ rows, total, page, limit, totalPages }`, and all five cut their page with
+`skip: (page - 1) * limit, take: limit`. All five ordered by a column many rows share — the leads by
+`score desc`, the other four by `createdAt desc` — and `createdAt desc` ties more often than it
+sounds like it should: `now()` is the *transaction* timestamp, so an importer that writes a crowd in
+one transaction gives every row in that crowd exactly the same `createdAt`. Measured on
+`origin/main` (`ff38306`) on the running app first, in this session's own runtime (`:3435`, database
+`leadworks_r74`, Redis 6418, throwaway worktree) over crowds written one transaction each — 13 leads
+all at `score=50`, and nine sources, nine jobs, nine exports and nine lists all sharing one
+`createdAt` (`/tmp/opencode/r74_press.py` → `/tmp/opencode/r74_press_ab.log`):
+
+```
+GET /api/leads?limit=3, walked p1..p5  (total=13, totalPages=5)
+  p1 ld_r74_06 ld_r74_09 ld_r74_00 | p2 ld_r74_03 ld_r74_08 ld_r74_00 | p3 … 
+  -> 13 rows returned, 12 distinct: `ld_r74_00` on two pages, `ld_r74_02` on none
+GET /api/leads?limit=2                 -> 11 distinct of 13
+GET /api/leads?limit=4 / ?limit=5 / ?limit=7 -> all 13: the page size decides which tie lands where
+GET /api/{sources,jobs,exports,lead-lists}?limit=2 -> 8 distinct of 9, one row repeated
+GET /api/leads?limit=3&page=1                      -> tied06, tied09, tied00
+GET /api/leads?limit=3&page=1&fields=email,score   -> tied12, tied11, tied10
+  one door, one page, two answers, and it disagreed on all five pages
+```
+
+Nothing in the answer says so. `total=13` and `totalPages=5` are correct on every one of those
+requests, and the walk that obeys them returns 13 rows — which is why this is the worst shape a read
+door can have: a caller who pages through the crowd to export it gets some leads twice and others
+not at all, and every number beside the rows vouches for the answer. The projected/unprojected pair
+is the same fact one level nearer: `#47` and `#48` made both branches share one `pageWindow` so they
+could not disagree about the filter, and they did share it — they simply each got a different slice
+out of a tie, because nothing in `{ score: "desc" }` says which of thirteen equal rows is third.
+
+The fix is the rule this app already runs twice. `#45` ordered the membership window by `leadId`,
+which is unique inside a list, and `RULE_PRIORITY_ORDER` (`src/lib/rule-priority.ts`) ranks rules by
+`priority desc`, then `createdAt asc`, then `id asc` — its header says the tiebreak is there so "the
+same two rules produce the same plan every minute". `src/lib/pagination.ts` now carries that third
+key as `PAGED_TIEBREAK`, and the four doors that ordered a bare `{ createdAt: "desc" }` and the leads
+door's `pageWindow` each end their order with it: `[{ createdAt: "desc" }, PAGED_TIEBREAK]`,
+`[{ score: "desc" }, PAGED_TIEBREAK]`. Ascending, as the two precedents do, and on `id`, because
+every table here has one and the schema makes it unique — so the order is total, the slice is
+reproducible, and a page walk reaches each row once. No new parameter, no re-ranked default, no
+migration: the *primary* key is the one each door already used, which decides which crowd sorts
+first; only the order inside a band of ties is now decided rather than left to the sort.
+
+Two doors' silence in the map went with it, because a caller cannot walk a page they are not told
+about. `GET /api/lead-lists` pages — `skip`, `take`, `totalPages`, a default of 20 — and its
+contract entry documented `workspaceId` alone, and `GET /api/lead-lists/{id}` returns `memberPage`
+with `page`, `limit` and `totalPages` and documented neither `?page=` nor `?limit=`. Both now carry
+them, and the six collection operations' `page` line names the order the page is cut from, so the
+map says what the door guarantees. `public/llms-full.txt` was rebuilt from the contract rather than
+edited (8,447 → 8,531 bytes; the one line it gained is the list door's summary, because that file
+carries summaries and auth, not query descriptions — the same fact `#73` recorded).
+
+Live A/B over the same rows, nothing reseeded, fix build on `:3436` with its own Redis 6419: the
+leads walk at `limit=3` is **13 rows, 13 distinct, 0 repeated** and at `limit=2` **13 of 13** (was
+12 and 11), each of the four `createdAt` doors walks **9 of 9 at every page size tried** (was 8 at
+`limit=2`), and the two branches of the leads door now answer the *same* rows on all five pages —
+`tied00`–`tied02` on p1, `tied03`–`tied05` on p2, one row on p5 — where `main` disagreed on every one
+of them. What did not move is what the round promised would not: `total=13`, `totalPages=5` and the
+four `createdAt` doors' `total=9` on both builds, the table counts the same before and after each leg
+(`leads=14, sources=9, jobs=9, exports=9, lead-lists=9`), and the four legs that must answer
+identically on every build matched byte for byte (`/api/sources?limit=1` 358 bytes,
+`/api/jobs?limit=1` 391, tenant B's `/api/leads?limit=1` 776, and the keyless request's 64-byte
+refusal). The measurement also forced one disclosure the shape of this defect hides: **re-issuing the
+same URLs on `main` was stable** — walk 2 of `?page=1..5` was identical to walk 1, and the walk after
+an ordinary `PATCH` of one tied row was identical to the walk before it. The rows are lost *between*
+shapes of the same question (page size, and the projected/whole pair of one door), which is why the
+fix is a source-wide rule with a census over it rather than a second request to one URL. Disclosed
+rather than smoothed: **the two instances were sequential, not simultaneous** (one worktree holds one
+`.next`, so the trunk server was stopped by its exact PID before the branch was built); the crowd was
+seeded with hand-written ids (`ld_r74_00`…`_12`) rather than cuids, which makes the new tiebreak
+readable in the logs, and a cuid sorts just as totally; and **this makes the order reproducible, not
+static** — a caller who writes between page reads still sees rows move across a boundary, because a
+page over a changing crowd is a different problem and `#49`'s sweep cursor is this app's answer to
+that one.
+
+Pinned offline in `tests/unit/paged-list-order.test.ts` (15 tests, no network, no database): the
+shared key's value and the two rounds it comes from; **a census over every route file that slices**
+(`skip:` in its blanked source) requiring each Prisma call that skips to end its order on a column
+that is unique in that window, which names exactly the seven paging doors and finds no offender; the
+five collection doors each importing `PAGED_TIEBREAK` rather than re-typing `{ id: "asc" }`; the
+rules door already total through `RULE_PRIORITY_ORDER` and the membership window still unique through
+`leadId`; the same census turned the other way — every door that slices declares `page` in the
+contract, which is the claim that was false for two of them before this round; the six `page`
+sentences each naming the key their door sorts on; and the README's measured numbers, with negative
+pins on the four repeat/drop sentences. Non-vacuity measured on this tree, one perturbation at a time
+and each restored: dropping `PAGED_TIEBREAK` from the leads door fails **2 of 15** (the census test
+and the import test), replacing it with a re-typed `{ id: "asc" }` in all five doors fails **1 of 15**
+(the import test, which is the point — the rule is written once), and putting `leadLists.list`'s
+paging back out of the contract fails **2 of 15** (the `page`-sentences test and the reverse census
+that no slicing door is silent). Restored: 15/15.
+
+**One existing test was retargeted, and it is named here**: `tests/unit/leads-fields.test.ts:71`
+"shares the filter, the order and the window between the two branches" pinned
+`orderBy:\s*\{\s*score:\s*"desc"` and this round makes that order an array. The pin now requires
+`orderBy: [{ score: "desc" … }, PAGED_TIEBREAK]` — the same shared window, and additionally that the
+order it shares is total, so it is stricter than the one it replaces, and every clause it already
+demanded is still demanded. `README.md` likewise stops describing a `GET /api/leads?orderBy=` that no
+door has ever read (a stale sentence in the same neighbourhood as the ordering this round changed),
+and `#48`'s disclosed limit "The order has no tiebreaker" is now attributed to the build it was
+measured on, with the decision it deferred named as this round's.
+
+Gates: suite **1351/1351** on the pushed tree where `main` measures **1336/1336** at `ff38306` — the
+15 this round adds are the whole difference,
+`tsc` exit 0, lint **0 errors / the same 13 warnings**, `check:contract` **8/8**, `check:llms-full`
+reporting the shipped file as the builder's own output, `next build` exit 0, **no test deleted and
+none relaxed**. What this does not claim: no door takes a caller-chosen sort column (`?orderBy=` is
+still read by nobody, and this round did not add it); the dashboard's own queries are untouched, since
+they render a page of the UI rather than answer a caller who can ask for page 2; `total` still counts
+the whole filtered crowd, not the page; and **no demo step** — `aw-deploy`'s #96 (STEP 27) is still
+`CONFLICTING`.
+
 ## Score: one arithmetic, and who may change it
 
-`Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
-and a sentence in this README since the first migration, and no producer. Intake
+`Lead.score` has had a column, a sort order (the list door answers `score desc`, and no
+`?orderBy=` asks it for another — no door has ever read that name), and a sentence in this README
+since the first migration, and no producer. Intake
 left it at the column default of 0; the CSV importer left it at 0; the only
 automatic write was the validator subtracting 10 per failed check from whatever
 number happened to be there, which for every lead meant from 0 — so the same three

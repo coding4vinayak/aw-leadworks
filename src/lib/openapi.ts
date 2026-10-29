@@ -129,7 +129,7 @@ const PATHS: Record<string, PathItem> = {
         ["email", "One address, matched against the bytes the column holds: the shape `POST /api/leads` requires of the column is the shape this filter requires, so a misspelling is refused instead of answered with the whole crowd. It is exact, not folded — `JOHN@X.COM` finds the row written with those bytes and not the row written `john@x.com`."],
         ["minScore", "Only leads scoring at least this. A whole number from 0 to 100 — the score's own range — and nothing else is read as a number."],
         ["maxScore", "Only leads scoring at most this. Also a whole number from 0 to 100, and a `minScore` above it is refused rather than answered with an empty table."],
-        ["page", "1-based page number."],
+        ["page", "1-based page number, cut out of a total order — `score desc`, then `id asc` — so one row never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
         ["limit", "Page size; it caps at 100."],
         ["fields", "Comma-separated Lead columns to project each row onto — the same names Export.fields takes. Absent means the whole row, its list memberships and its counts."],
       ],
@@ -265,10 +265,12 @@ const PATHS: Record<string, PathItem> = {
   "/api/lead-lists": {
     get: {
       id: "leadLists.list",
-      summary: "The workspace's lists.",
+      summary: "The workspace's lists, one page of them at a time — the door answers 20 unless `?limit=` says otherwise.",
       auth: "key",
-      query: [["workspaceId", "The workspace to read. Defaults to the key's own."]],
-      responses: { "200": "The lists." },
+      query: [["workspaceId", "The workspace to read. Defaults to the key's own."],
+        ["page", "1-based page number, cut out of a total order — `createdAt desc`, then `id asc` — so one list never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
+        ["limit", "Page size; it caps at 100. The door answers 20 per page when neither is sent."]],
+      responses: { "200": "The lists, one page of them, with a total." },
     },
     post: {
       id: "leadLists.create",
@@ -294,8 +296,10 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["fields", "Comma-separated Lead columns to project each member's lead onto — the same names Export.fields takes. Absent means the whole row."],
+        ["page", "1-based page of the members, cut out of `leadId asc` — unique within a list, so one lead never lands on two pages and a walk of `?page=1..memberPage.totalPages` reaches each of them once."],
+        ["limit", "Members per page; the door answers 100 when it is not sent, and caps at 100."],
       ],
-      responses: { "200": "The list.", "400": "A `fields` entry that is not a Lead column, or names nothing." },
+      responses: { "200": "The list, one page of its members, and `memberPage` saying how many there are.", "400": "A `fields` entry that is not a Lead column, or names nothing." },
     },
     patch: {
       id: "leadLists.update",
@@ -352,7 +356,7 @@ const PATHS: Record<string, PathItem> = {
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["isActive", "Only the ones running or paused, asked with one word: true | false. Spaces around it trim; a digit, a capitalisation or a second word is refused rather than answered with the other state's page."],
-        ["page", "1-based page number."],
+        ["page", "1-based page number, cut out of a total order — `createdAt desc`, then `id asc` — so one row never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
         ["limit", "Page size."],
       ],
       responses: { "200": "The sources, with a total.", "400": "An `isActive` that is not exactly one word of the set above." },
@@ -428,7 +432,7 @@ const PATHS: Record<string, PathItem> = {
         ["type", `One job type: ${JOB_TYPES.join(" | ")}. Judged exactly as \`POST /api/jobs\` judges it — \`scrape\` is a 400 at both doors now.`],
         ["status", `One job status: ${JOB_STATUSES.join(" | ")}.`],
         ["sourceId", "Only one source's jobs — an id this workspace does not have is refused, not answered with an empty page."],
-        ["page", "1-based page number."],
+        ["page", "1-based page number, cut out of a total order — `createdAt desc`, then `id asc` — so one row never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
         ["limit", "Page size."],
       ],
       responses: {
@@ -496,7 +500,7 @@ const PATHS: Record<string, PathItem> = {
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["isActive", "Only the ones running or paused, asked with one word: true | false. Spaces around it trim; a digit, a capitalisation or a second word is refused rather than answered with the other state's page."],
-        ["page", "1-based page number."],
+        ["page", "1-based page number, cut out of a total order — the rule ranking: `priority desc`, then `createdAt asc`, then `id asc` — so one row never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
         ["limit", "Page size."],
       ],
       responses: { "200": "The rules, with a total.", "400": "An `isActive` that is not exactly one word of the set above." },
@@ -572,7 +576,7 @@ const PATHS: Record<string, PathItem> = {
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
         ["profileId", "Only one profile's exports — an id this workspace does not have is refused, not answered with an empty page."],
         ["status", `One export status: ${EXPORT_STATUSES.join(" | ")}. \`RUNNING\` is a job word, not an export one.`],
-        ["page", "1-based page number."],
+        ["page", "1-based page number, cut out of a total order — `createdAt desc`, then `id asc` — so one row never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
         ["limit", "Page size."],
       ],
       responses: {

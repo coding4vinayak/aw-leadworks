@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
-import { pageParams } from "@/lib/pagination";
+import { PAGED_TIEBREAK, pageParams } from "@/lib/pagination";
 import { scoreParam, scoreRangeProblem } from "@/lib/score-range";
 import { asStrings, idFilterParam, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
@@ -69,7 +69,7 @@ async function GET_impl(request: Request) {
     picked = input.data.fields as LeadExportField[];
   }
 
-  const pageWindow = { where, orderBy: { score: "desc" as const }, skip: (page - 1) * limit, take: limit };
+  const pageWindow = { where, orderBy: [{ score: "desc" as const }, PAGED_TIEBREAK], skip: (page - 1) * limit, take: limit };
 
   const [leads, total] = await Promise.all([
     picked

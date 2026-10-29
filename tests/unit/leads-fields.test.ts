@@ -70,7 +70,15 @@ describe("the leads door reads its own fields parameter, and reads nothing else"
 
   it("shares the filter, the order and the window between the two branches", () => {
     const window = GET.slice(GET.indexOf("const pageWindow"), GET.indexOf("const [leads, total]"));
-    assert.match(window, /orderBy:\s*\{\s*score:\s*"desc"/, "a projection must not reorder the page");
+    // Retargeted by #74, which gave the order its tiebreaker: the pin is stricter, not looser.
+    // It still requires one shared `pageWindow` feeding both branches, and now requires that the
+    // order it feeds them with is total — a projection that reordered the page was the old risk,
+    // and a page sliced out of a tie was the new one.
+    assert.match(
+      window,
+      /orderBy:\s*\[\s*\{\s*score:\s*"desc"(?: as const)?\s*\},\s*PAGED_TIEBREAK\s*\]/,
+      "a projection must not reorder the page, and the page must not be cut out of a tie",
+    );
     assert.match(window, /skip:\s*\(page\s*-\s*1\)\s*\*\s*limit/);
     assert.match(window, /take:\s*limit/);
     assert.match(window, /where,/, "the same filtered crowd on both branches");

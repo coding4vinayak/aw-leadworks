@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { boolParam } from "@/lib/bool-word";
 import { prisma } from "@/lib/db";
-import { pageParams } from "@/lib/pagination";
+import { PAGED_TIEBREAK, pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { SOURCE_CREATE } from "@/lib/fields";
 import { scheduleProblem } from "@/lib/cron-schedule";
@@ -25,7 +25,7 @@ async function GET_impl(request: Request) {
     prisma.source.findMany({
       where,
       include: { _count: { select: { jobs: true } } },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, PAGED_TIEBREAK],
       skip: (page - 1) * limit,
       take: limit,
     }),
