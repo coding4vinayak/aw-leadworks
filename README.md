@@ -4092,17 +4092,38 @@ and `?listId=a&listId=b` is its 400, and `?minScore=50&status=NEW&page=1&limit=3
   endpoint line. Nothing in the repository spells a bound in scientific notation, so the behaviour that
   changes belongs to an integration that was being handed the wrong crowd and now gets a 400 saying
   which word.
-  the wrong crowd and now gets a 400 saying which word.
 - **`?minScore=0` is now a real bound (`gte 0`) rather than "no filter"**, which answers the same
   eight leads either way; `?maxScore=100` likewise. Recorded because a future `score` column that
   could hold 101 would make those two cases differ.
-- **`listId` and `status` at this door are untouched** — the id belongs to #58 and the enum word to
-  #56, both open, and `?fields=` keeps its own refusal.
+- **`listId` and `status` at this door are untouched** — the id is #58's and the enum word #56's,
+  both long since on trunk, and `?fields=` keeps its own refusal.
 - **Nothing was migrated.** A lead already at 0 or 100 is unaffected; this is about a caller's
   question.
 - **Published contract copies keep the old document** until rebuilt: the base instance on this box
   still lists six parameters and no score bound at all.
 - **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
+
+Rebased a second time onto `main` at `15e100e`, the merge wave that took #101, #99, #98, #93,
+Dependabot's #89 and the README fix #103 while the next round was pressing. Trunk now reads
+`?email=` at this very door, so three files moved and nothing was re-decided. In
+`src/app/api/leads/route.ts` the address filter sits between `status` and the two bounds, each
+judged by its own rule, and the `where` now opens with `workspaceId`, `listMemberships`, `status`,
+`email` and then the score pair — and the only `intParam` left in that file is the word inside this
+round's own comment, which is what `score-range.test.ts:180` and `:207` pin (`route.ts` must not contain
+`intParam(searchParams, "minScore"`). In `src/lib/openapi.ts` the two bounds follow trunk's
+`email` parameter and the 400 sentence lists all six refusals at one door: a bad `fields` name, two
+`listId`s, a `status` word, an `email` shape, a bound that is not a whole number from 0 to 100 (or
+two of them), and a `minScore` above the `maxScore`. **One existing test was retargeted, and it is
+named here**: `tests/unit/lead-email-filter.test.ts:282` pins the documented query names as an exact
+list, and it was written when the door had seven; this branch adds `minScore` and `maxScore`, so the
+pin now expects nine in that order. The list changed because the door's surface changed — the pin is
+as exact as it was, not relaxed, and every name it already demanded is still demanded. The
+`README.md` conflict was the usual one: this section and #67's landed `?email=` section had both
+been inserted immediately before `## Score`, and both are kept, main's first. Gates on the rebased
+tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, lint **0 errors /
+13 warnings**, `check:contract` **8/8**, `check:llms-full` **unchanged**, build exit 0. No press was
+re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
+and the eight scored leads the tables above were measured over belong to it.
 
 ## Score: one arithmetic, and who may change it
 
