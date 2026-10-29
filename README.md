@@ -183,7 +183,12 @@ GET    /api/health                         # liveness + DB ping + whether this i
                                            # can scrape, no key
 GET    /api/sources?workspaceId=           # list; `?isActive=` takes one word — `true`
                                            # or `false` — and nothing else is the other
-                                           # state's page (see *A boolean is two words*)
+                                           # state's page (see *A boolean is two words*).
+                                           # `?type=` and `?lastRunStatus=` take one word
+                                           # of the column's own set each; until this round
+                                           # the door read neither and every spelling was
+                                           # the whole table (see *Two words the sources door
+                                           # had never been asked*)
 POST   /api/sources                        # create (web scraper, API, CSV, manual); a
                                            # `schedule` is refused unless some minute can
                                            # match it (see *the cadence somebody types*),
@@ -4124,6 +4129,150 @@ tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, l
 13 warnings**, `check:contract` **8/8**, `check:llms-full` **unchanged**, build exit 0. No press was
 re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
 and the eight scored leads the tables above were measured over belong to it.
+
+### Two words the sources door had never been asked: `?type=` and `?lastRunStatus=`
+
+`GET /api/sources` read three things from its query string — `workspaceId`, `isActive`, and the
+page pair — and let the rest of it fall on the floor. Measured on the running app before any of
+this shipped, in this round's own runtime (`:3415` over database `leadworks_r64`, a private
+Redis on 6406, logs `/tmp/opencode/r64_measure*.log` and `/tmp/opencode/r64_press_base.log`):
+six sources, every one of them created through `POST /api/sources` so that the write door's own
+validation is what put the rows there — one per `SOURCE_TYPES` value, plus a `WEB_SCRAPER` with
+`schedule = "* * * * *"`. That last row is where a real verdict came from: the in-process sweep
+minted two `SCRAPE` jobs for it across two minute boundaries, both failed for want of a browser
+(`this instance cannot run a scrape — no browser at …/chrome-linux-arm64/chrome`), and the
+worker stamped `Source.lastRunStatus = "FAILED"` with that sentence in `lastRunError`. So the
+`FAILED` press below was asked of a table that genuinely held one failed source and five
+sources that have never run at all — which is the only way that press could mean anything:
+
+```
+GET /api/sources?type=API              200 total=6   all five types back
+GET /api/sources?type=api              200 total=6   the word POST refuses in a body
+GET /api/sources?type=nonsense         200 total=6
+GET /api/sources?type=API&type=MANUAL  200 total=6
+GET /api/sources?lastRunStatus=FAILED  200 total=6   the one real verdict, plus five rows that have none
+GET /api/sources?lastRunStatus=SUCCESS 200 total=6
+GET /api/sources?lastRunStatus=PARTIAL 200 total=6
+GET /api/sources?lastRunStatus=nope    200 total=6
+GET /api/sources?isActive=true         200 total=6   control — the one word this door does judge
+POST /api/sources {"type":"api"}       400 type must be one of WEB_SCRAPER | API | DATABASE | CSV_UPLOAD | MANUAL, got "api"
+```
+
+Then one source was paused through `PATCH /api/sources/{id}`, so the door's own working filter
+could be separated from the two it did not have — `?isActive=true` answered `total=5` and
+`?isActive=false` answered `total=1`, both correctly, while `?type=MANUAL` answered `total=6`:
+all five types, the paused `MANUAL` row included, and five rows that are not `MANUAL` at all.
+
+This is not the silence #56 was written for. There, the word reached Prisma unchecked and a
+mistyped filter answered an empty page — a caller at least saw *something* wrong. Here the word
+never reached anything: `?type=API`, `?type=APIX` and no `type` were one answer, and the answer
+was the whole table. A filter this door does not have was sold to the caller as a page that
+happens to hold everything, and there is no empty page to notice. Meanwhile the write door on
+the same column, same instance, same minute, named all five words — the vocabulary existed, in
+`enums.ts` and in the schema comment, and what was missing was a reader using it. So the door
+now calls `filterParam` — imported, not re-spelled — once for `type` against `SOURCE_TYPES` and
+once for `lastRunStatus` against `SOURCE_RUN_STATUSES`, and the value that reaches the `where`
+is the one the judge returned.
+
+**`PARTIAL` is a disagreement, and it is kept in the open.** `Source.lastRunStatus`'s schema
+comment declares `SUCCESS | FAILED | PARTIAL`; the code stamps two of them — `scraper.ts:145` on
+the success path, `scraper.ts:161` on the failure path — and nothing anywhere writes the third
+(`tests/unit/source-filter.test.ts` walks `src/lib` and pins both halves: the two words the
+worker stamps, and the one word with no stamp). The set is transcribed from the comment, which
+is what `enums.ts`'s own rule says to do when a table and a comment disagree, so
+`?lastRunStatus=PARTIAL` is a word the door takes and answers `200 total=0` — the truthful answer
+to "has any source ever half-run", which no run in this app has. Narrowing the declared set to
+the two words the code writes would have made the table match the code and left the door
+refusing a word the column documents; that is the quieter of the two lies and it is not taken.
+
+The fix, pressed against the same six rows on the same database with nothing re-seeded
+(`/tmp/opencode/r64_press_fix.log`):
+
+```
+?type=API              base 200 total=6 [all six]        fix 200 total=1 [seed API]
+?type=api              base 200 total=6                  fix 400 …got "api"
+?type=nonsense         base 200 total=6                  fix 400 …got "nonsense"
+?type=API&type=MANUAL  base 200 total=6                  fix 400 type was given 2 words ("API", "MANUAL")
+?lastRunStatus=FAILED  base 200 total=6 [all six]        fix 200 total=1 [seed scheduled]
+?lastRunStatus=SUCCESS base 200 total=6                  fix 200 total=0 — no source ever succeeded here
+?lastRunStatus=PARTIAL base 200 total=6                  fix 200 total=0, and the word is accepted
+?lastRunStatus=nope    base 200 total=6                  fix 400 …got "nope"
+?type=%20WEB_SCRAPER%20 base 200 total=6                 fix 200 total=2 — the padding is not the word
+?type=                 base 200 total=6                  fix 200 total=6 — an empty value names nothing
+?type=WEB_SCRAPER&lastRunStatus=FAILED
+                       base 200 total=6                  fix 200 total=1 — two filters, one row
+?type=MANUAL           base 200 total=6 (paused row included, five others too)
+                       fix  200 total=1 [seed MANUAL]    ?isActive=true still 5, ?isActive=1 still 400
+```
+
+The legs that had to stay put stayed put, and two of them are the neighbours' own refusals:
+`?isActive=true` answers the same five rows on both builds, `?isActive=1` is a 400 on both, and
+`GET /api/jobs?type=scrape` is a 400 on this instance while `?type=SCRAPE` and `?status=FAILED`
+are 200s — #56's door, unbothered. Workspace isolation was pressed rather than assumed: the
+second tenant's key gets `total=0` from `?type=API`, `?lastRunStatus=FAILED` and no filter at
+all, because the `where` still starts from `workspaceId` and the new keys are added to it.
+
+Pinned offline: **1216/1216** — **14 new** in `tests/unit/source-filter.test.ts`, no browser, no
+database, no network. Both vocabularies are pinned word by word against their own schema
+comments; eleven measured non-words (a fold, a neighbour column's word, a comma-joined pair) are
+refused in the sentence the write door prints; the absent/empty/one-word trichotomy, the
+padding, the repeated word and the two-word refusal are pinned; the `where` is pinned to take
+each word from the judge and nowhere else, exactly once and inside its guard; and `PARTIAL`'s
+lack of a producer is pinned as its own test, so the day a run stamps it the failure message is
+the sentence that has to be re-measured. One census is the round's real inheritance: every
+`query` name in the contract is checked against the route file that serves it — **39 parameters
+across 15 operations**, each matched either by its own literal or by the helper that owns it
+(`pageParams` for the paging pair, `fieldsParam` for the projection) — so a door cannot keep
+advertising a parameter it never reads. tsc clean, lint **0 errors / 13 warnings** (unchanged
+from `main`, none on a line this round wrote), `check:contract` **8/8**, `check:llms-full`
+**unchanged**, build exit 0. Four builds were run: the base before the fix, the fix, the base
+rebuilt for the A/B above, and the fix again after restoring it; the first attempt at that
+third build **failed** the type check, because the new test imports `SOURCE_RUN_STATUSES` and the
+base does not export it — the test is pinned to the fix, and that failure is the pin working. No
+existing test was retargeted: `main`'s 1202 contain nothing that quotes the sources door's old
+silence. Re-checked after rebasing onto `main` at `88bf6d2` (which carries #100 and #102): still
+**no test retargeted and none deleted**, suite **1250/1250** with these 14 over main's now-1236,
+`tsc` exit 0, lint 0 errors / 13 warnings, `check:contract` **8/8**, `check:llms-full` unchanged.
+The rebase touched one file — `README.md`, where #102's landed section and this one were both
+inserted immediately before `## Score`; both are kept, main's first. `src/lib/openapi.ts` did not
+collide: #102 priced the exports body and responses, this round added the two sources parameters.
+Rebased a second time onto `main` at `15e100e`, the merge wave that landed while the next round
+was pressing: #101, #99, #98, #93, Dependabot's #89 and #103 are on trunk, so this branch now sits
+over the `?email=` read door, the write doors' case fold, the cadence refusal and the bullmq
+`6.3.15 → 6.4.0` bump. Suite **1327/1327** on that tree (trunk itself measures **1313/1313**),
+`tsc` exit 0, lint **0 errors / 13 warnings**, `check:contract` **8/8**, `check:llms-full`
+**unchanged**. One conflict again, in `README.md`: this section and #67's landed `?email=` section
+had both been inserted immediately before `## Score`, and both are kept, main's first. This
+round's own three files are byte-identical across that rebase —
+`git diff c89ccba HEAD -- src/app/api/sources/route.ts src/lib/enums.ts tests/unit/source-filter.test.ts`
+is empty, and `src/lib/openapi.ts` differs only because trunk's email parameters arrived under it.
+No press was re-run, and none of the numbers above is a re-measurement of `:3415`: this round's
+runtime was torn down at its close, the base press and the A/B quoted here belong to `e3fcc16`, and
+a re-press of a door whose code did not move would say nothing a `git diff` does not already say.
+
+What this does not claim:
+
+* **A `SUCCESS` leaves the old failure's words behind.** `scraper.ts:145` writes
+  `lastRunStatus: "SUCCESS"` and never clears `lastRunError`, so a source that failed and then
+  succeeded reads `SUCCESS` with the previous run's sentence still in the error column. That is
+  a real defect on a column this round just made filterable, and it is **read from the source,
+  not measured**: producing the state needs a scrape that succeeds, and this box has no browser
+  — the same two lines that made a truthful `FAILED` press possible cannot make a `SUCCESS` one.
+* **`?lastRunStatus=SUCCESS` answering `total=0` is a property of this instance, not of the
+  fix.** No source here ever completed a scrape. The empty page is the honest shape of the
+  answer; whether it is empty in someone else's deployment depends on their rows.
+* **Two words is not a query language.** One column, one word — `?type=API&type=MANUAL` is a
+  refusal, not a union, exactly as #56 and #57 left it for their columns. `name`, `schedule`,
+  `lastRunError`, `lastRunAt` and `totalLeadsFound` are still not filterable, and `?q=` and
+  `?sort=` do not exist on this door.
+* **`SOURCE_RUN_STATUSES` is the second reader-declared set, not a general rule.** It joins
+  `EXPORT_STATUSES` in `enums.ts`, and the file's opening paragraph now says why both broke the
+  "only sets a write route takes" rule. `EnrichmentLog.status`, `LeadActivity.type` and the two
+  role columns keep comment sets and still no vocabulary of their own, because no route reads
+  them from a query string.
+* **No demo step**, for the reason carried unbroken from #51: `aw-deploy`'s only open pair (#96,
+  STEP 27) is still `CONFLICTING` (`mergeStateStatus: DIRTY`, re-checked at the time of this
+  round's PR), so a step stacked on it would not be a direct child of that repo's `main`.
 
 ## Score: one arithmetic, and who may change it
 
