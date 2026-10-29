@@ -4203,11 +4203,45 @@ terms page already states for API keys ("Plaintext keys are shown once") and
 `src/lib/apikeys.ts` ships ("returned once and never persisted"). The column
 itself cannot be hashed away the way a key is: verification of a bearer token
 needs only its digest, while an HMAC delivery is signed with the value itself, so
-`src/lib/webhooks.ts` keeps reading it straight from the table. A subscription
-can name only
-the events this product emits — an unknown name is refused with the list
-rather than stored, because a subscription filtered on a name nothing sends
-is the same silence as no subscription at all:
+`src/lib/webhooks.ts` keeps reading it straight from the table.
+
+The rule was in the code and not in the map. `src/lib/openapi.ts` described
+`GET /api/webhooks` as *"The outbound subscriptions, with their signing secret
+previewed"*, and `public/llms-full.txt` repeats whatever the contract says — the
+file is generated from it by `scripts/build-llms-full.mts` — so one stale sentence
+was answering at three addresses: `/api/openapi`, `/openapi.json` and the
+deep-content file an agent is pointed at. None of the three asks for a key.
+Measured on `ff38306` (`:3433` over this session's own `leadworks_r73`, two tenants
+and one seeded subscription each, keys in `0600` files printed nowhere,
+`/tmp/opencode/r73_press_ab.log`): the contract is an **unauthenticated** read,
+`/api/openapi` and `/openapi.json` answer the identical 73,195 bytes, and both
+carried that promise while the three read doors printed no credential at all —
+`GET /api/webhooks` 434 bytes for two rows, `GET /api/webhooks/{id}` 204 and the
+reply to an unrelated `PATCH` 215, each row's keys exactly `WEBHOOK_READ_COLUMNS`,
+no row in any of them carrying a `secret` that matched the value the column holds.
+The `POST` that mints a subscription was the one answer carrying a 64-character
+`secret`. So the sentence an integrator reads before writing any code is the one
+sentence this product spent a round removing: a caller who lost a secret and
+believed the map would poll the list door for it does that forever, and a reviewer
+who trusts the map would read a list of subscriptions believing they had seen a
+credential they were never handed. The summary is the row now and
+`public/llms-full.txt` was rebuilt from the contract rather than edited by hand, so
+the two cannot disagree: the served document moves 73,195 → 73,241 bytes (sha
+`319930bc8c49` → `28da556aa53f`, both paths together) and the deep-content file
+8,447 → 8,493 (`f50b5e034596` → `6f71b07e1fa5`), while every door leg answers
+exactly as it did before — the seeded row's read `204` / sha `18ca1b5b27a6`, the
+other tenant's list `219` / `c1c4657b1062`, the keyless `401` in 64 bytes, the
+cross-tenant `404`, the `400` refusing a `secret` in a body, and the three lengths
+`434` / `214` / `215`. Each press ends by deleting the subscription it minted, and
+the list it then reads is byte-identical to the one it read first — `2a16fe56c0f3`
+on both builds. Disclosed rather than smoothed: the two instances were
+**sequential, not simultaneous** — one worktree holds one `.next`, so the trunk
+server was stopped by its exact PID before the branch was built — and the legs that
+did not move are what tie the two runs to one dataset.
+
+A subscription can name only the events this product emits — an unknown name is
+refused with the list rather than stored, because a subscription filtered on a
+name nothing sends is the same silence as no subscription at all:
 
 | Event | Fires when |
 |---|---|
@@ -4263,8 +4297,9 @@ subscription, so no attempt was extra and none was lost: the contract of one
 `lead.created` per row is not what could be shed, only the order they were made
 in. And the `answers 500` row is the other half: **0.018 s, and nothing said.**
 The door returned the same `201` with the same body it returns when the
-subscriber says yes; `GET /api/webhooks/{id}` afterwards prints the row — url,
-events, `isActive: true`, the signing secret — and no fact about a delivery,
+subscriber says yes; `GET /api/webhooks/{id}` afterwards printed the row as that
+build held it — url, events, `isActive: true`, the signing secret, a column
+`5ac46e3` took off every read door afterwards — and no fact about a delivery,
 because no delivery is recorded. The only place the 500 was written down is this
 instance's stdout: `webhook cmvo1su82… -> lead.created: 500 Internal Server
 Error`.

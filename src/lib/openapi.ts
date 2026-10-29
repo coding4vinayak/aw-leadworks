@@ -635,7 +635,7 @@ const PATHS: Record<string, PathItem> = {
   "/api/webhooks": {
     get: {
       id: "webhooks.list",
-      summary: "The outbound subscriptions, with their signing secret previewed.",
+      summary: "The outbound subscriptions, every column of the row but its signing secret, which the create door prints once.",
       auth: "key",
       query: [["workspaceId", "The workspace to read. Defaults to the key's own."]],
       responses: { "200": "The subscriptions." },
