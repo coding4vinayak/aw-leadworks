@@ -4291,14 +4291,36 @@ round's `profileId` sentence now points at.
   prints no verdict. That door is the next place this function belongs; the module is where the
   answer now lives, so it can be attached without re-deciding anything.
 - **The `?isActive=` filter is not on the new list door.** Two other read doors filter a boolean
-  column and got a vocabulary in #57; that module is open and unmerged, and a third door inventing
-  its own coercion is how this suite ends up with two answers for one question.
+  column and got a vocabulary in #57 — `src/lib/bool-word.ts`, which those two doors call. The
+  sentence above was written when that module was still an open pair; it shipped while this branch
+  was being pressed, so the door *could* take `?isActive=` by calling the same helper rather than
+  inventing a third coercion. This round still did not add it: a filter is a decision about what
+  the door means, and this PR was asked to open the two doors that read the table, not to widen
+  them.
 - **Nothing was migrated and no row was repaired.** `weekday-that-is-not` still holds a cadence no
   minute can match — it is now *legible*, not fixed; the cadence grammar refuses that word at every
   door that can write one, and this row predates them all.
 - **Published copies of the contract keep the old document** until that instance is rebuilt:
   `GET /api/openapi` on `:3391` has no profile path at all, and on `:3392` it has both.
 - **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
+
+Rebased a second time onto `main` at `15e100e`, the wave that took #101, #99, #98, #93, Dependabot's
+#89 and the README fix #103. Two of those matter to this branch specifically. #93 grew the cadence
+grammar by one cross-field check — `0 0 30 2 *` and its five siblings are refused at the doors that
+can *write* a schedule instead of stored and silently never matching — while the older field-range
+refusal this section quotes, `scheduleProblem` naming a day-of-week outside the range it names,
+arrived earlier and is trunk's own: `b03686a` put one cron grammar behind four doors, #57. Profiles
+still have no write door at all: this branch opened only the two reads, so `weekday-that-is-not` is
+exactly what the bullet above says it is — a stored cadence no minute can match, now legible through
+a door rather than visible only in a log, and with no profile door for either refusal to have arrived
+at. And this round edits `tests/unit/cron-schedule.test.ts`, the file #93 rewrote; the two applied
+without a conflict and the suite says they agree: **1334/1334** on the rebased tree, where trunk
+itself measures **1313/1313**. `tsc` exit 0, lint **0 errors / 13 warnings**, `check:contract` **8/8**,
+`check:llms-full` **unchanged** (the four lines this branch carries in that file are still the four
+lines the generator writes), build exit 0. The one conflict was `README.md` again: this section and
+#67's landed `?email=` section had both been inserted immediately before `## Score`, and both are
+kept, main's first. No press was re-run — `:3391` and `:3392`, the base and fix instances this section
+measured, were torn down at that round's close, and the two doors' code did not move in the rebase.
 
 ## Score: one arithmetic, and who may change it
 
