@@ -4229,11 +4229,13 @@ door has ever read (a stale sentence in the same neighbourhood as the ordering t
 and `#48`'s disclosed limit "The order has no tiebreaker" is now attributed to the build it was
 measured on, with the decision it deferred named as this round's.
 
-Gates: suite **1351/1351** on the pushed tree where `main` measures **1336/1336** at `ff38306` — the
-15 this round adds are the whole difference,
-`tsc` exit 0, lint **0 errors / the same 13 warnings**, `check:contract` **8/8**, `check:llms-full`
-reporting the shipped file as the builder's own output, `next build` exit 0, **no test deleted and
-none relaxed**. What this does not claim: no door takes a caller-chosen sort column (`?orderBy=` is
+Gates, every one of them measured on the pushed tree: suite **1351/1351** where `main` measures
+**1336/1336** at `ff38306` — the 15 this round adds are the whole difference — `tsc` exit 0, lint
+**0 errors / the same 13 warnings**, `check:contract` **8/8**, `check:llms-full` reporting the shipped
+file as the builder's own output, `next build` exit 0, **no test deleted and none relaxed**; and the
+fix leg above was re-run against the build this tree makes, where every line — the five walks, the
+five page sizes, the branch pair, the four legs that must not move — matched what is quoted here.
+What this does not claim: no door takes a caller-chosen sort column (`?orderBy=` is
 still read by nobody, and this round did not add it); the dashboard's own queries are untouched, since
 they render a page of the UI rather than answer a caller who can ask for page 2; `total` still counts
 the whole filtered crowd, not the page; and **no demo step** — `aw-deploy`'s #96 (STEP 27) is still
