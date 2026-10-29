@@ -9,18 +9,24 @@
  * promise was answering at three addresses — `/api/openapi`, `/openapi.json` and the
  * deep-content file an agent is pointed at — none of which asks for a key.
  *
- * Measured on `15e100e` before anything was written (`:3433` over this session's own
- * `leadworks_r73`, `webhook_r73_a` in tenant A and `webhook_r73_b` in tenant B, keys in
- * `0600` files printed nowhere; `/tmp/opencode/r73_press_ab.log`):
+ * Measured on `ff38306` before anything was written (`:3433` over this session's own
+ * `leadworks_r73`, `wh_r73_a` in tenant A and `wh_r73_b` in tenant B, keys in `0600`
+ * files printed nowhere; `/tmp/opencode/r73_press_ab.log`, legs re-taken on the fix
+ * build at `:3434` over the same two rows):
  *
- *   GET /api/openapi     200 72,351 B sha=cd1c8abc0219  webhooks.list.summary=…previewed
- *   GET /openapi.json    200 72,351 B sha=cd1c8abc0219  the same document, byte-identical
- *   GET /llms-full.txt   200  8,447 B  line 96 quotes the same sentence
+ *   GET /api/openapi     200 73,195 B sha=319930bc8c49  webhooks.list.summary=…previewed
+ *   GET /openapi.json    200 73,195 B sha=319930bc8c49  the same document, byte-identical
+ *   GET /llms-full.txt   200  8,447 B sha=f50b5e034596  line 96 quotes the same sentence
  *   POST /api/webhooks   201  keys include `secret`, 64 characters
  *   GET /api/webhooks    200    434 B  rows=2  secret printed=0  matches the column=0
- *   GET /api/webhooks/{id}       204 B  rows=1  secret printed=0  matches the column=0
+ *   GET /api/webhooks/{id}       204 B  rows=1  sha=18ca1b5b27a6  secret printed=0
  *   PATCH {isActive:false}       215 B  rows=1  secret printed=0  matches the column=0
  *   PATCH {secret:"0"×64}        400 "no field to update was sent"
+ *   DELETE the row the press minted → the list reads back 2a16fe56c0f3, byte-identical
+ *
+ * On the fix build the same press answers 73,241 B / sha=28da556aa53f for both contract
+ * paths and 8,493 B / sha=6f71b07e1fa5 for the deep-content file, and every door leg
+ * above the same bytes it answered before.
  *
  * So the promise was false in the one direction that costs something: the credential a
  * subscriber verifies deliveries with, advertised as readable on a list. A caller who
@@ -159,8 +165,10 @@ describe("#73 the rule is written where a caller or an agent reads it", () => {
     // Whitespace-flexible: README wraps at ~78 columns and a re-wrap is not a retraction.
     assert.match(readme, /with their signing secret\s+previewed/);
     assert.match(readme, /generated from it by `scripts\/build-llms-full\.mts`/);
-    assert.match(readme, /72,351 bytes/);
+    assert.match(readme, /73,195 → 73,241 bytes/);
+    assert.match(readme, /8,447 → 8,493/);
     assert.match(readme, /The\s+summary\s+is\s+the\s+row\s+now/);
+    assert.match(readme, /sequential, not simultaneous/);
   });
 
   it("and the older narrative no longer says a read prints the credential", () => {
