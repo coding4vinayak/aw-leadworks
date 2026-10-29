@@ -281,7 +281,11 @@ test("the contract advertises ?email=, names who judges it, and prices the wrong
   assert.ok((door.operation.responses ?? {})["400"].includes("`email`"), "and prices a wrong one");
   assert.deepEqual(
     (door.operation.query ?? []).map(([name]) => name),
-    ["workspaceId", "listId", "status", "email", "page", "limit", "fields"],
+    // RETARGETED on rebase onto `15e100e`: this branch adds `?minScore=` and `?maxScore=`, and
+    // the pin's question is the census — every name the door reads is documented and nothing it
+    // does not read is advertised. Answering it needs the two new names in the expected list;
+    // the list is not shortened, and no question the pin asked is dropped.
+    ["workspaceId", "listId", "status", "email", "minScore", "maxScore", "page", "limit", "fields"],
     "every parameter the door reads is documented, and nothing it does not read is",
   );
 });

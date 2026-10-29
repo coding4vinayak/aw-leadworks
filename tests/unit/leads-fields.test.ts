@@ -277,8 +277,15 @@ describe("the count, the window and the envelope stay one question either side o
   it("keeps the door's own page size: default 50, and the cap is the shared one", () => {
     assert.match(route, /pageParams\(searchParams, 50\)/, "the lead door still defaults to 50 rows");
     assert.equal((route.match(/pageParams\(/g) ?? []).length, 1, "no second paging decision in the file");
-    assert.match(route, /intParam\(searchParams, "minScore", 0, 0, 100\)/);
-    assert.match(route, /intParam\(searchParams, "maxScore", 100, 0, 100\)/);
+    // Retargeted by #60, not relaxed: this pin used to insist the two score bounds went through
+    // `intParam`, whose rule for a page size — an unreadable value falls back to a default — is
+    // wrong for a filter, because a default bound is a different crowd. The bounds now go
+    // through the rule that refuses instead; the paging assertions above are the page-size rule,
+    // unchanged, and still one of them in the file.
+    assert.match(route, /scoreParam\(searchParams, "minScore"\)/);
+    assert.match(route, /scoreParam\(searchParams, "maxScore"\)/);
+    assert.equal(route.includes('intParam(searchParams, "minScore"'), false, "no silent fallback left on a bound");
+    assert.equal(route.includes('intParam(searchParams, "maxScore"'), false, "and none on the other");
   });
 
   it("answers the same five envelope keys either side of the projection, plus one", () => {

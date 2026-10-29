@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
-import { intParam, pageParams } from "@/lib/pagination";
+import { pageParams } from "@/lib/pagination";
+import { scoreParam, scoreRangeProblem } from "@/lib/score-range";
 import { asStrings, idFilterParam, missingIds, unknownIdsError } from "@/lib/ids";
 import { validateBody, readJson } from "@/lib/validate";
 import { LEAD_CREATE, LEAD_EMAIL, LEAD_FIELD_PICK, type LeadExportField } from "@/lib/fields";
@@ -29,9 +30,19 @@ async function GET_impl(request: Request) {
   // by the same field the create door validates against — see `lib/list-filter.ts`.
   const email = textFilterParam(searchParams, "email", LEAD_EMAIL);
   if (email.error) return email.error;
-  const minScore = intParam(searchParams, "minScore", 0, 0, 100);
-  const maxScore = intParam(searchParams, "maxScore", 100, 0, 100);
   const { page, limit } = pageParams(searchParams, 50);
+
+  // The score bounds are judged by the same rule the export filter and the rule conditions
+  // already use. `intParam`'s page-size habit — an unreadable value falls back to a default —
+  // is wrong here: a default bound is a different crowd, and the caller could not tell.
+  const minScore = scoreParam(searchParams, "minScore");
+  if (minScore.error) return minScore.error;
+  const maxScore = scoreParam(searchParams, "maxScore");
+  if (maxScore.error) return maxScore.error;
+  if (minScore.value !== null && maxScore.value !== null) {
+    const contradiction = scoreRangeProblem(minScore.value, maxScore.value);
+    if (contradiction !== null) return NextResponse.json({ error: contradiction }, { status: 400 });
+  }
 
   // The list to filter by is resolved before it filters: `POST /api/leads` already
   // refuses an unknown `listIds` entry with a 422 naming it, and this door answered the
@@ -44,8 +55,8 @@ async function GET_impl(request: Request) {
   if (list.id) where.listMemberships = { some: { listId: list.id } };
   if (status.value) where.status = status.value;
   if (email.value) where.email = email.value;
-  if (minScore > 0) where.score = { ...where.score, gte: minScore };
-  if (maxScore < 100) where.score = { ...where.score, lte: maxScore };
+  if (minScore.value !== null) where.score = { ...where.score, gte: minScore.value };
+  if (maxScore.value !== null) where.score = { ...where.score, lte: maxScore.value };
 
   // Same parameter, same vocabulary, same refusal as `GET /api/lead-lists/{id}`:
   // a projected page carries the named columns and nothing else, so the nested
