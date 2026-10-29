@@ -3921,6 +3921,122 @@ What this does not claim:
 * **No demo step this round**, for the reason #51 through #66 recorded: `aw-deploy`'s open
   pair (#96, STEP 27) is still `CONFLICTING` and `DIRTY` — re-checked this round — so a step
   stacked on it is not a direct child of that repo's `main`.
+### The door that explains a score read the name it was given as raw bytes: a padded id was
+### `404 lead not found` for a row the tenant holds, and two ids were one row and a silence
+
+`GET /api/ai/explain-lead?id=` takes the lead to explain out of a query string. It read it with
+`searchParams.get("id")` and handed the result straight to `findFirst({ where: { id, workspaceId } })`,
+which compares those bytes literally. Every other door in this app that takes an id in a query string
+reads it through `idFilterParam` (`src/lib/ids.ts`), and that function trims, deduplicates, and refuses
+a key spelled twice.
+
+Measured on the running app before anything was written (`15e100e` built in a fresh worktree, served on
+**:3431** over this session's own database `leadworks_r72`, private Redis 6414, two workspaces, keys in
+`0600` files printed nowhere). Tenant A held `ld_r72_ana` (score 40) and `ld_r72_bo` (score 71), both on
+list `lst_r72_a`; tenant B held `ld_r72_cy` (score 88). The score is what tells the legs apart: this door
+echoes the column it read and no id, so a response says which row was actually fetched.
+`/tmp/opencode/r72_press_ab.log`:
+
+| press | answer |
+| --- | --- |
+| `?id=ld_r72_ana` | `200` 925 bytes `score=40` — the control |
+| `?id=%20ld_r72_ana%20` | **`404 "lead not found"`** — a row this tenant holds |
+| `?id=%20ld_r72_ana` | `404 "lead not found"` |
+| `?id=ld_r72_ana%20` | `404 "lead not found"` |
+| `?id=%20ld_r72_ana&id=ld_r72_ana` | `404 "lead not found"` — `get` returns the first spelling |
+| `?id=ld_r72_ana&id=ld_r72_bo` | **`200` 925 bytes `score=40`** — byte-identical to the control; `bo` dropped without a word |
+| `?id=…&id=…&id=nope` | `200 score=40` — three names given, one answered |
+| `?id=%20` | `404` — a space reached the database as an id |
+| `?id=ld_r72_cy` with A's key | `404 "lead not found"` — correct, and it stays |
+| `?id=nope` | `404 "lead not found"` — correct, and it stays |
+| `?id=` / no `id` at all | `400 "id required"` — correct, and it stays |
+
+The same build answered the identical bytes the other way at the sibling doors:
+`GET /api/leads?listId=%20lst_r72_a%20` returned the two leads on the trimmed list (2048 bytes),
+`?listId=lst_r72_a&listId=nope` was `400 listId was given 2 ids ("lst_r72_a", "nope"); this filter
+compares listId to one of them`, and `?listId=nope` was `422 listId is not an id this workspace has: nope`.
+One app, two answers for one spelling, because only one of the doors read its name through the rule.
+
+**What was decided.**
+
+- **The reading is split out of the resolution, not copied.** `oneIdParam(searchParams, name)` is
+  `idFilterParam`'s first half — `getAll`, trim, drop empties, deduplicate, refuse above one — and
+  `idFilterParam` now calls it before it resolves. The filter doors' behaviour, including the exact 400
+  sentence, is unchanged and pinned as unchanged; the sentence is typed once, so the two doors cannot
+  drift apart in wording either.
+- **The 404 stays a 404.** A door that *fetches* the row an id names is not a door that *filters* by one.
+  `GET /api/leads/{id}` answers `Not found` for the same shape, and a foreign id must mean exactly what a
+  typo means here — that is the scoping this door already had and this round did not touch it. So
+  `?id=nope` and `?id=<another tenant's lead>` are still `404`, and the fix does not borrow the filter's
+  422.
+- **Padding-only is "no id", which this door requires.** `?id=%20` moved from `404` to the door's own
+  `400 "id required"`, the same branch as `?id=` and no `id` at all, because a name that is only
+  whitespace names nothing and "not found" would be a different statement about a row nobody pointed at.
+- **The contract now says who judges the name.** `ai.explainLead`'s `id` line spells out the trim, the
+  two-names refusal and what a miss means, and the operation gains the `400` answer it already made twice
+  and never advertised: `No \`id\` at all, or one \`id\` given two different values.`
+
+**A/B over the same rows, nothing reseeded** (`select count(*)` before the fix press: `3` leads,
+`1` list, `2` members, `2` keys — the same rows the base press ran against), the fix build on **:3432**
+with its own Redis 6415. The two instances were sequential, not simultaneous — both builds live in this
+one worktree, so the base was stopped by PID before the rebuild; the control legs below are the check
+that the two runs describe one dataset.
+
+| press | base `15e100e` | fix |
+| --- | --- | --- |
+| `?id=ld_r72_ana` | `200` 925 `score=40` | `200` 925 `score=40` — byte-identical |
+| `?id=%20ld_r72_ana%20` (and each half) | `404` 26 | **`200` 925 `score=40`** |
+| `?id=%20ld_r72_ana&id=ld_r72_ana` | `404` 26 | `200` 925 `score=40` |
+| `?id=ana&id=bo` | `200` 925 `score=40` | **`400`** `id was given 2 ids ("ld_r72_ana", "ld_r72_bo"); this filter compares id to one of them` |
+| `?id=ana&id=bo&id=nope` | `200` 925 `score=40` | `400` naming all three |
+| `?id=%20` | `404` 26 | `400` 23 `id required` |
+| `?id=ld_r72_cy` with A's key | `404` 26 | `404` 26 — unmoved |
+| `?id=nope` | `404` 26 | `404` 26 — unmoved |
+| `?id=` / absent | `400` 23 | `400` 23 — unmoved |
+| tenant B, own row / A's row | `200` 925 `score=88` / `404` 26 | `200` 925 `score=88` / `404` 26 |
+| tenant B, `?id=%20ld_r72_cy%20` | `404` 26 | `200` 925 `score=88` |
+| the four sibling legs | `2048` / `400` 104 / `422` 78 / `422` 81 | byte-identical |
+
+Pinned offline in `tests/unit/ai-explain-lead-id.test.ts` (21 tests, no network, no database): the base
+read is reproduced first — `new URL(…).searchParams.get("id")` hands back `" ld_r72_ana "`, which is not
+the id the row is stored under — then the trim from either end, both ends and a tab/newline; absent,
+empty and whitespace-only all naming nothing; the same name twice being one name; two names refused with
+the exact sentence and the count of three; `idFilterParam` still emitting the identical 400 for
+`listId`, still trimming before it resolves (asserted by recording what the exists-callback was handed),
+still answering 422 for a name that resolves nowhere and `null` for an empty filter; the door's own source
+(read with its comments blanked) calling `oneIdParam`, returning its refusal, comparing `asked.value`
+inside a `where` that is still scoped, and never again calling `searchParams.get("id")`; the `404`, the
+`model` and `workspaceId` reads and the `withAuth(withAiAuth(…))` wrapper all left as they were; and a
+census that exactly one door in `src/app/api` reads a caller-named id without resolving it, and that door
+is this one.
+
+Gates: `npm test` **1334/1334** (0 fail, 0 skipped) where `main` at `15e100e` measures **1313/1313** —
+these 21 and nothing else; `tsc --noEmit` exit 0; `npx eslint .` **0 errors / 13 warnings**, the same 13
+trunk carries; `check:contract` **8/8**; `check:llms-full` **unchanged** (that file lists each operation
+with its summary and auth, not its parameter sentences, so a contract sentence cannot move it and did not);
+`next build` exit 0. **No test was retargeted and none deleted.**
+
+**What this does not claim.**
+
+- **It does not resolve the id against the workspace.** A typo is still `404`, not the `422` a filter
+  gives. That is the scoping this door shipped with, it matches `GET /api/leads/{id}`, and a fetch and a
+  filter are two questions with two honest answers.
+- **The other half of this door was left alone.** `?model=` is passed through to `lib/ai-score.ts`
+  unjudged, and `?workspaceId=` is judged by `resolveAiActor`; neither was measured as wrong here, so
+  neither was touched.
+- **`?id=` with an id that is not a cuid is a valid miss.** Nothing in this round claims a shape check on
+  a lead id: `ld_r72_ana` in this database is a hand-written id, and it reads fine.
+- **No LLM was configured on either instance**, which is why every leg is the `explained: false,
+  configured: false` answer carrying the deterministic score. The legs measure *which row the door read*,
+  and that is the same question with a model present or not; nothing here is a claim about model output.
+- **The scheduler and the queue are not this round's subject.** The one path that could reach this door
+  programmatically is a UI or a rep's curl; nothing was enqueued, and `queues.export` was not pressed.
+- **No demo step**: `aw-deploy`'s only open pair (#96, STEP 27) is still `CONFLICTING`, so a step stacked
+  on it would not be a direct child of that repo's `main`.
+
+Cleanup through the doors: `leadworks_r72` still holds its three seeded leads at the end of both legs —
+nothing was written by either press, which is what a read door owes. Nothing touched `:3300`,
+`leadworks_sim` or the shared `leadworks` database.
 
 ## Score: one arithmetic, and who may change it
 

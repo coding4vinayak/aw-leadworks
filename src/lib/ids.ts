@@ -121,6 +121,51 @@ export interface IdFilterError {
 }
 
 /**
+ * The reading half of `idFilterParam`, on its own: a name the caller spelled in a query
+ * string, trimmed, and refused when the same name is spelled more than once with different
+ * answers. Split out because a door that *fetches* the row an id names needs this and does
+ * not need the resolution step: `GET /api/ai/explain-lead?id=` scopes its own lookup, so a
+ * name this workspace does not hold is honestly `404 lead not found` — the answer
+ * `GET /api/leads/{id}` gives for the same shape — and turning that into the 422 an
+ * unresolvable *filter* earns would re-decide a scoping rule that is not this one's to move.
+ *
+ * Measured on the running app (`15e100e`, `:3431` over `leadworks_r72`, tenant A holding
+ * `ld_r72_ana` score 40 and `ld_r72_bo` score 71, tenant B holding `ld_r72_cy` score 88 —
+ * `/tmp/opencode/r72_press_ab.log`): `?id=ld_r72_ana` answered `200 score=40`;
+ * `?id=%20ld_r72_ana%20`, `%20ld_r72_ana` and `ld_r72_ana%20` each answered
+ * **`404 lead not found` for a row this workspace holds**; and
+ * `?id=ld_r72_ana&id=ld_r72_bo` answered **`200 score=40` in 925 bytes — byte-identical to
+ * the control**, the second row dropped without a word. On that same build
+ * `GET /api/leads?listId=%20lst_r72_a%20` returned the two leads on the trimmed list and
+ * `?listId=lst_r72_a&listId=nope` was a 400 naming both ids: one app, two answers for one
+ * spelling, because only one of the doors read its name through this rule.
+ */
+export interface OneId {
+  /** The id to read, trimmed, or null when the caller named none. */
+  value: string | null;
+  error: null;
+}
+export interface OneIdError {
+  value: null;
+  error: NextResponse;
+}
+
+export function oneIdParam(searchParams: URLSearchParams, name: string): OneId | OneIdError {
+  const asked = [...new Set(searchParams.getAll(name).map((one) => one.trim()).filter((one) => one !== ""))];
+  if (asked.length === 0) return { value: null, error: null };
+  if (asked.length > 1) {
+    return {
+      value: null,
+      error: NextResponse.json(
+        { error: `${name} was given ${asked.length} ids (${asked.map(short).join(", ")}); this filter compares ${name} to one of them` },
+        { status: 400 },
+      ),
+    };
+  }
+  return { value: asked[0], error: null };
+}
+
+/**
  * One caller-named id, trimmed, and resolved against this workspace before the route
  * builds its `where`. The three decisions, each taken to match a rule the app already runs:
  *
@@ -142,17 +187,9 @@ export async function idFilterParam(
   name: string,
   exists: (id: string) => Promise<boolean>,
 ): Promise<IdFilter | IdFilterError> {
-  const asked = [...new Set(searchParams.getAll(name).map((one) => one.trim()).filter((one) => one !== ""))];
-  if (asked.length === 0) return { id: null, error: null };
-  if (asked.length > 1) {
-    return {
-      id: null,
-      error: NextResponse.json(
-        { error: `${name} was given ${asked.length} ids (${asked.map(short).join(", ")}); this filter compares ${name} to one of them` },
-        { status: 400 },
-      ),
-    };
-  }
-  if (!(await exists(asked[0]))) return { id: null, error: unknownIdError(name, asked[0]) };
-  return { id: asked[0], error: null };
+  const asked = oneIdParam(searchParams, name);
+  if (asked.error) return { id: null, error: asked.error };
+  if (asked.value === null) return { id: null, error: null };
+  if (!(await exists(asked.value))) return { id: null, error: unknownIdError(name, asked.value) };
+  return { id: asked.value, error: null };
 }
