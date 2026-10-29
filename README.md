@@ -4236,6 +4236,19 @@ silence. Re-checked after rebasing onto `main` at `88bf6d2` (which carries #100 
 The rebase touched one file — `README.md`, where #102's landed section and this one were both
 inserted immediately before `## Score`; both are kept, main's first. `src/lib/openapi.ts` did not
 collide: #102 priced the exports body and responses, this round added the two sources parameters.
+Rebased a second time onto `main` at `15e100e`, the merge wave that landed while the next round
+was pressing: #101, #99, #98, #93, Dependabot's #89 and #103 are on trunk, so this branch now sits
+over the `?email=` read door, the write doors' case fold, the cadence refusal and the bullmq
+`6.3.15 → 6.4.0` bump. Suite **1327/1327** on that tree (trunk itself measures **1313/1313**),
+`tsc` exit 0, lint **0 errors / 13 warnings**, `check:contract` **8/8**, `check:llms-full`
+**unchanged**. One conflict again, in `README.md`: this section and #67's landed `?email=` section
+had both been inserted immediately before `## Score`, and both are kept, main's first. This
+round's own three files are byte-identical across that rebase —
+`git diff c89ccba HEAD -- src/app/api/sources/route.ts src/lib/enums.ts tests/unit/source-filter.test.ts`
+is empty, and `src/lib/openapi.ts` differs only because trunk's email parameters arrived under it.
+No press was re-run, and none of the numbers above is a re-measurement of `:3415`: this round's
+runtime was torn down at its close, the base press and the A/B quoted here belong to `e3fcc16`, and
+a re-press of a door whose code did not move would say nothing a `git diff` does not already say.
 
 What this does not claim:
 
