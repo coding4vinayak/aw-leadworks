@@ -31,3 +31,36 @@ export function pageParams(
     limit: intParam(searchParams, "limit", defaultLimit, 1, maxLimit),
   };
 }
+
+/**
+ * The second key every paged list sorts on, so that its order is total.
+ *
+ * A page is a slice — `skip: (page - 1) * limit, take: limit` — and a slice is only
+ * reproducible if the order it cuts is total. `#48` recorded this as a limit it would not
+ * pretend away ("The order has no tiebreaker"), and `#45` had already fixed it at one door by
+ * ordering members on `leadId`, which is unique within a list. This is that rule, taken to the
+ * five doors that page over a column many rows share.
+ *
+ * Measured on the running app before this was written (`ff38306`, `:3435` over this session's
+ * own `leadworks_r74`, `/tmp/opencode/r74_press_ab.log`) over crowds an importer would have
+ * written in one transaction — 13 leads all at `score=50`, nine sources, jobs, exports and lists
+ * all sharing one `createdAt`, because `now()` is the transaction timestamp:
+ *
+ * ```
+ *   GET /api/leads?limit=3  walked over 5 pages -> 13 rows, 12 distinct:
+ *        p1 ld_r74_06,09,00 | p2 ld_r74_03,08,00 | ...  `ld_r74_00` twice, `ld_r74_02` never
+ *   GET /api/leads?limit=2                        -> 11 distinct of 13
+ *   the same walk at limit=4, 5, 7                -> all 13, so the page size decides it
+ *   GET /api/{sources,jobs,exports,lead-lists}?limit=2 -> 8 distinct of 9, one row repeated
+ *   GET /api/leads?limit=3&page=1&fields=email,score -> tied12,11,10 where the same URL without
+ *        `fields` answered tied06,09,00: one door, one page, two answers, on all five pages
+ * ```
+ *
+ * Which of the tied rows lands on a page is the sort's accident, so a caller walking pages to
+ * export a crowd gets some rows twice and others not at all — the failure is silent because
+ * `total` and `totalPages` stay correct. `id` breaks the tie because every table here has one
+ * and it is unique by construction, which makes the order total and the walk reproducible.
+ * Ascending, the way both precedents are: `RULE_PRIORITY_ORDER` ends `{ id: "asc" }` and `#45` put
+ * `leadId asc` on the membership window, so every tie in this app resolves upward on a unique key.
+ */
+export const PAGED_TIEBREAK = { id: "asc" } as const;
