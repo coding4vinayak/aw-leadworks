@@ -93,7 +93,7 @@ The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 
 - `POST /api/exports/{id}` — Retry this export — ?action=retry. — needs the workspace's `x-api-key` key
 - `DELETE /api/exports/{id}` — Delete an export — its file goes with it. — needs the workspace's `x-api-key` key
 - `GET /api/exports/{id}/download` — Download an export's file, while retention keeps it. — needs the workspace's `x-api-key` key
-- `GET /api/webhooks` — The outbound subscriptions, with their signing secret previewed. — needs the workspace's `x-api-key` key
+- `GET /api/webhooks` — The outbound subscriptions, every column of the row but its signing secret, which the create door prints once. — needs the workspace's `x-api-key` key
 - `POST /api/webhooks` — Subscribe an address to events — each delivery is signed. — needs the workspace's `x-api-key` key
 - `GET /api/webhooks/{id}` — One subscription. — needs the workspace's `x-api-key` key
 - `PATCH /api/webhooks/{id}` — Edit a subscription's address or state. — needs the workspace's `x-api-key` key
