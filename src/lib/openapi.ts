@@ -689,10 +689,13 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["id", "The lead to explain."],
+        ["id", "One lead to explain. Spaces around it trim, and the same key spelled twice with two answers is refused rather than answered with whichever one the door happened to read first; a row this workspace does not hold is `404 lead not found`, which is what another tenant's id and a typo both mean here."],
         ["model", "The model to write the explanation with."],
       ],
-      responses: { "200": "The explanation, or why there is none." },
+      responses: {
+        "200": "The explanation, or why there is none.",
+        "400": "No `id` at all, or one `id` given two different values.",
+      },
     },
   },
   "/api/billing/checkout": {
