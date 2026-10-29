@@ -238,6 +238,15 @@ PATCH  /api/enrichment-rules/{id}          # change a rule; conditions and actio
 POST   /api/enrichment-rules/{id}?action=run  # run a rule now → { jobId, appliesTo }
 GET    /api/exports?workspaceId=           # list, filter by status — the four words an Export
                                            # row holds, not the five a Job row holds
+GET    /api/export-profiles?workspaceId=   # the saved profiles the weekly sweep reads, each with
+                                           # the `sweep` verdict that minute acts on: `scheduled`
+                                           # (and whether the cadence names this minute), `paused`,
+                                           # `unscheduled`, or `unreadable` with the grammar's
+                                           # complaint — the row that has produced nothing and the
+                                           # row that cannot are different answers here
+GET    /api/export-profiles/{id}           # one profile, its verdict, its `exportsCount`, and its
+                                           # five most recent exports; another workspace's row is
+                                           # the same 404 as a row that is not there at all
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF; a `filterJson.status`
                                            # no Lead column can hold is refused before the row
                                            # exists, not delivered as an empty file
@@ -4124,6 +4133,194 @@ tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, l
 13 warnings**, `check:contract` **8/8**, `check:llms-full` **unchanged**, build exit 0. No press was
 re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
 and the eight scored leads the tables above were measured over belong to it.
+
+
+### The profile the weekly sweep reads was not a thing the API could see: `GET /api/export-profiles`, and the verdict the minute acts on
+
+`ExportProfile` is the table a scheduled drop lives in. `scheduler.ts` reads it every minute,
+`GET /api/exports?profileId=` filters by it, and the README's own summary of exports sells
+"scheduled profiles for weekly drops". No door could read it. Measured on `origin/main`
+(`65bd942`) on the running app before anything was written, in this session's own runtime
+(`:3391`, database `leadworks_r59`, Redis 6398, throwaway worktree) over six rows seeded the way
+`prisma/seed.ts` seeds them — one whose cadence matches every minute, the demo's `0 9 * * 1`, one
+naming a weekday that does not exist, one paused, one with no cadence, and one held by a **second
+tenant** (`/tmp/opencode/r59_measure.log`, `r59_measure_b.log`, `r59_census.sql`):
+
+```
+GET    /api/export-profiles                 404, and the body was the Next.js HTML page
+GET    /api/export-profiles/xp_r59_broken   404, same
+POST / PATCH / DELETE on both paths         404, same
+contract paths mentioning a profile         NONE
+llms-full.txt lines matching export-profile 0
+GET    /api/exports?profileId=<each of six> 200 total=0 — a filter by an id no door grants
+```
+
+Nine of the instance's own sweep minutes produced **nine** exports for the every-minute profile
+and **nine** for the second tenant's, **zero** for the unreadable one, zero for the paused one,
+zero for the unscheduled one and zero for the weekly one that was not due. What the unreadable row
+did say was in the server's stdout, eight times:
+
+```
+Export profile xp_r59_broken is active and scheduled, but no minute matches it — day of week "9" holds 9, outside 0-7
+```
+
+…while the row itself still read `isActive = true`, `schedule = "0 9 * * 9"`. A weekly drop that
+will never happen and a weekly drop that happens were the same record to every door that existed,
+and only someone reading the log could tell them apart. `prisma.exportProfile.create` appears in
+exactly one file in the repository — `prisma/seed.ts`.
+
+## The fix
+
+`src/lib/export-profile.ts` answers one question about one row: what does this minute do with it.
+
+```ts
+profileSweep({ isActive, schedule }, now) → { takes, take, reason, problem }
+```
+
+`take` is one of four — `scheduled` (the cadence is readable; `takes` says whether it names *this*
+minute), `paused`, `unscheduled`, `unreadable` — and `reason` is always a sentence, so a UI has
+nothing to invent. `profileSkipWarning(id, verdict)` builds the log line out of that same sentence,
+and `scheduler.ts` now calls the verdict instead of asking the grammar beside it: the warning is
+byte-for-byte what this runtime printed before (`tests/unit/export-profile.test.ts` pins the whole
+line, and `cron-schedule.test.ts`'s wiring pins count three questions across the minute, one per
+leg that stores a cadence — the profile leg's now lives in the module, so the pin moved with the
+call, it did not loosen).
+
+Two read doors print it: `GET /api/export-profiles?workspaceId=&page=&limit=` (the workspace's
+profiles, newest first, each with `sweep` and `exportsCount`) and `GET /api/export-profiles/{id}`
+(the row, its `sweep`, its `exportsCount`, and its five most recent exports). Both are key-only,
+both are scoped — the list through `authedWorkspaceId`, so a claimed `workspaceId` is the 403 the
+other read doors give, and the detail through `assertOwns`, which answers another workspace's row
+with the *same* 404 as a row that does not exist, so ids cannot be walked to find out who holds
+them.
+
+## Verified on the shipped build, against the base build, same rows
+
+`:3392` runs the tree that carries these commits; `:3391` is still answering from `65bd942` over
+the same database and the same keys (`r59_after.log`, `r59_after_b.log`):
+
+```
+GET /api/export-profiles                base 404 (HTML)  →  fix 200 total=5
+   probe-this-minute    * * * * *  active → scheduled takes=true   exports=1
+   drops-every-minute   * * * * *  active → scheduled takes=true   exports=25
+   weekly-mon-9         0 9 * * 1  active → scheduled takes=false  exports=0
+   weekday-that-is-not  0 9 * * 9  active → unreadable takes=false exports=0  «…no minute matches it — day of week "9" holds 9, outside 0-7»
+   paused-every-minute  * * * * * paused  → paused       takes=false exports=0
+   no-cadence-at-all    (none)     active → unscheduled  takes=false exports=0
+GET /api/export-profiles/{id}           base 404 (HTML)  →  fix 200 per row, recentExports capped at 5
+   another workspace's row             fix 404 "Not found." — the same answer as no row at all
+   the owner's own key for that id     fix 200 exportsCount=25, recent=5
+   no key / claiming another tenant    fix 401 / 403
+```
+
+Then the agreement, live: the door was read, one sweep minute was waited out, and the door was read
+again. The two rows whose verdict said `takes=true` each gained exactly one export; the four whose
+verdict said anything else gained none — including the one the log has been complaining about for
+nine minutes, whose row still reads `isActive = true`:
+
+```
+moved  probe-this-minute      1 → 2      (takes=true)
+moved  drops-every-minute    25 → 26     (takes=true)
+moved  weekly-mon-9           0 → 0      (takes=false — not due this minute)
+moved  weekday-that-is-not    0 → 0      (unreadable)
+moved  paused-every-minute    0 → 0      (paused)
+moved  no-cadence-at-all      0 → 0      (unscheduled)
+```
+
+Two instances run a sweep against this database, so a due row can gain one export per instance per
+minute; the claim is about *which* rows move at all, not how fast. Eight legs this round must not
+have moved are byte-identical across the two builds (md5 over canonical JSON): `GET /api/health`
+with its own clock field dropped, the whole export page, `?profileId=xp_r59_broken`,
+`?profileId=nope`, sources, jobs, lead-lists and webhooks. One answer did change that is worth
+naming rather than smoothing: `POST`/`PATCH`/`DELETE` on the two new paths were a `404` on the base
+build because the path did not exist, and are a **`405`** on this one, because the path exists and
+the door does not take the method.
+
+## Pins
+
+`tests/unit/export-profile.test.ts` — 21 tests, offline: the four states, each from the row this
+runtime seeded (the same five cadences, the same Monday 09:00 `Date`); `takes` and `reason` for a
+readable cadence that is not due, which is where a working weekly drop spends six days and
+twenty-three hours; the warning pinned **byte-for-byte** to the line measured in
+`r59_boot_base.log`; the scheduler pinned to call `profileSweep`/`profileSkipWarning` and to no
+longer hold a second template for the same sentence; both doors pinned to the module rather than to
+the grammar themselves, to the `workspaceId` scope, to `pageParams`, to `withAuth`, to
+`exportsCount: _count.exports` (the first fix build answered `exportsCount: null`, because Prisma
+hands back `_count` and the door spread the row unchanged — caught by the press, then by the pin);
+the detail door pinned to *no* `403` anywhere, because the spec may not promise an answer the door
+does not give; and a census that no file under `src/` writes an `ExportProfile` — with comments
+stripped first, because this module's own docstring quotes the call it proves does not exist.
+
+`npm test` **999/999** (main's 978 + 21) · `npx tsc --noEmit` clean · `npm run lint` 0 errors / the
+13 pre-existing warnings · `npm run check:contract` 8/8 with the two new operations · `npm run
+check:llms-full` — this time the deep file *does* move: it lists every operation, so
+`public/llms-full.txt` grew its two lines and the 47-operation heading became 49 · build exit 0.
+
+**Rebased onto the `main` that moved while this was open** — `e3fcc16`, which carries #58's id
+resolution, #56/#57's filter vocabularies and #60's score rule — so the contract's `profileId` line
+was merged by hand to say both things now true of it: an id this workspace does not have is refused,
+and the ids a workspace has come from `GET /api/export-profiles`. The `sweep` verdict, the doors and
+the log line the round pinned are untouched by that base. Every gate re-ran on the rebased tree:
+`npm test` **1223/1223**, tsc clean, lint 0 errors / the same 13 warnings, `check:contract` 8/8,
+`check:llms-full` unchanged (the two operations are still the file's only addition over the base),
+build exit 0. Both doors were re-pressed on that build over seven rows — three active `* * * * *`,
+one `0 9 * * 1`, one paused, one with no cadence and one holding `0 9 * * 9`
+(`r63_press59.log`): the list answers `scheduled`/`takes=true` for the minute's own rows,
+`scheduled`/`takes=false` for Monday's, `paused`, `unscheduled`, and `unreadable` naming the field
+that cannot be matched; the detail door gives the same verdict per row; another workspace's row is
+the same 404 as a row that is not there; no key is 401 and a claimed foreign `workspaceId` is 403.
+`GET /api/exports?profileId=nope` on this base answers #58's 422 naming the id — the resolution this
+round's `profileId` sentence now points at.
+
+**Rebased a second time onto `main` at `88bf6d2`.** Nothing here had landed in the meantime — `git ls-tree -r origin/main src/app/api` has no `export-profiles/`, and the only `exportProfile` reads on trunk are `src/app/api/exports/route.ts:32` (a `count` behind `?profileId=`) and `:68` (a `findMany` resolving a body reference), both of which consume profiles rather than expose them. So the two doors, the `sweep` verdict and its log line are still this branch's own work, and they met main only at the README anchor: #102's section and this one were both appended in the same slot, and both are kept. `src/lib/openapi.ts` merged without conflict — main's landed `exports.create` 422 wording is verbatim, and this branch adds its two paths plus its own `profileId` sentence, with `SWEEP_TAKES` defined once, in `src/lib/export-profile.ts`. Every gate re-ran on the rebased tree: `npm test` **1257/1257** (main's 1236 plus these 21), `tsc --noEmit` clean, lint 0 errors / the same 13 warnings, `check:contract` 8/8 with the two new operations, `check:llms-full` unchanged (the 49-operation heading is still this file's only addition over the base). The `1223/1223` and the `e3fcc16` above describe the earlier rebase of this branch, not this one.
+
+## Said rather than smoothed
+
+- **No door writes this table yet.** `POST`, `PATCH` and `DELETE` stay absent and the paths answer
+  `405`; the rows are still what `prisma/seed.ts` and a direct database write make. This round made
+  the rows visible, not manageable, and the census asserts the half that is true rather than the
+  half somebody will want.
+- **`sweep.takes` is the state of *this* minute.** `GET /api/export-profiles` answers at the wall
+  clock of the request: `weekly-mon-9` says `takes=false` on a Monday at 10:00 and `takes=true` at
+  09:00, which is the truth for the minute you asked about and not a promise about the next one.
+- **A foreign row is a 404, not a 403.** The app's existing stance (`assertOwns`) is kept — no
+  answer tells a caller which tenant holds an id — and the contract advertises only the 404, after
+  the first press showed the door did not give the 403 this round's draft had promised.
+- **Sources have the same blind spot and this round did not fix it.** `scheduler.ts`'s source leg
+  warns for an unreadable cadence exactly the way the profile leg does, and `GET /api/sources/{id}`
+  prints no verdict. That door is the next place this function belongs; the module is where the
+  answer now lives, so it can be attached without re-deciding anything.
+- **The `?isActive=` filter is not on the new list door.** Two other read doors filter a boolean
+  column and got a vocabulary in #57 — `src/lib/bool-word.ts`, which those two doors call. The
+  sentence above was written when that module was still an open pair; it shipped while this branch
+  was being pressed, so the door *could* take `?isActive=` by calling the same helper rather than
+  inventing a third coercion. This round still did not add it: a filter is a decision about what
+  the door means, and this PR was asked to open the two doors that read the table, not to widen
+  them.
+- **Nothing was migrated and no row was repaired.** `weekday-that-is-not` still holds a cadence no
+  minute can match — it is now *legible*, not fixed; the cadence grammar refuses that word at every
+  door that can write one, and this row predates them all.
+- **Published copies of the contract keep the old document** until that instance is rebuilt:
+  `GET /api/openapi` on `:3391` has no profile path at all, and on `:3392` it has both.
+- **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
+
+Rebased a second time onto `main` at `15e100e`, the wave that took #101, #99, #98, #93, Dependabot's
+#89 and the README fix #103. Two of those matter to this branch specifically. #93 grew the cadence
+grammar by one cross-field check — `0 0 30 2 *` and its five siblings are refused at the doors that
+can *write* a schedule instead of stored and silently never matching — while the older field-range
+refusal this section quotes, `scheduleProblem` naming a day-of-week outside the range it names,
+arrived earlier and is trunk's own: `b03686a` put one cron grammar behind four doors, #57. Profiles
+still have no write door at all: this branch opened only the two reads, so `weekday-that-is-not` is
+exactly what the bullet above says it is — a stored cadence no minute can match, now legible through
+a door rather than visible only in a log, and with no profile door for either refusal to have arrived
+at. And this round edits `tests/unit/cron-schedule.test.ts`, the file #93 rewrote; the two applied
+without a conflict and the suite says they agree: **1334/1334** on the rebased tree, where trunk
+itself measures **1313/1313**. `tsc` exit 0, lint **0 errors / 13 warnings**, `check:contract` **8/8**,
+`check:llms-full` **unchanged** (the four lines this branch carries in that file are still the four
+lines the generator writes), build exit 0. The one conflict was `README.md` again: this section and
+#67's landed `?email=` section had both been inserted immediately before `## Score`, and both are
+kept, main's first. No press was re-run — `:3391` and `:3392`, the base and fix instances this section
+measured, were torn down at that round's close, and the two doors' code did not move in the rebase.
 
 ## Score: one arithmetic, and who may change it
 

@@ -5,6 +5,7 @@ import { asInputJson, asRecord } from "./json";
 import { leadWhere, readStoredConditions } from "./rule-conditions";
 import { actionsProblem, readRuleActions } from "./rule-actions";
 import { matchesSchedule, scheduleProblem } from "./cron-schedule";
+import { profileSkipWarning, profileSweep } from "./export-profile";
 import { RULE_PRIORITY_ORDER, planTick, type DueRule } from "./rule-priority";
 import {
   censusLog,
@@ -111,12 +112,15 @@ export async function runScheduledJobs(): Promise<void> {
     if (!profile.schedule) continue;
     // Named and skipped, the way a source is: a weekly drop whose cadence the matcher
     // cannot read is a weekly drop that never happens, and the profile says it is active.
-    const unreadable = scheduleProblem(profile.schedule);
-    if (unreadable !== null) {
-      console.warn(`Export profile ${profile.id} is active and scheduled, but no minute matches it — ${unreadable}`);
+    // The verdict is `lib/export-profile.ts`'s, which is also what `GET
+    // /api/export-profiles` prints, so the minute and the door cannot describe the same row
+    // differently — the warning is built out of that sentence rather than beside it.
+    const verdict = profileSweep(profile, now);
+    if (verdict.take === "unreadable") {
+      console.warn(profileSkipWarning(profile.id, verdict));
       continue;
     }
-    if (matchesSchedule(profile.schedule, now)) {
+    if (verdict.takes) {
       const job = await prisma.job.create({
         data: {
           workspaceId: profile.workspaceId,

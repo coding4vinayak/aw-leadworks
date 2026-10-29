@@ -563,6 +563,35 @@ const PATHS: Record<string, PathItem> = {
       responses: { "200": "The rule is gone." },
     },
   },
+  "/api/export-profiles": {
+    get: {
+      id: "exportProfiles.list",
+      summary: "The workspace's saved export profiles — the rows the weekly sweep reads.",
+      auth: "key",
+      query: [
+        ["workspaceId", "The workspace to read. Defaults to the key's own."],
+        ["page", "1-based page number."],
+        ["limit", "Page size; it caps at 100."],
+      ],
+      responses: {
+        "200": "The profiles, with a total. Each row carries `sweep` — what this minute does with it: `scheduled` (and whether the cadence names this minute), `paused`, `unscheduled`, or `unreadable` with the grammar's complaint — and `exportsCount`, the files it has already produced.",
+        "401": "No key.",
+        "403": "A `workspaceId` that is not the key's own.",
+      },
+    },
+  },
+  "/api/export-profiles/{id}": {
+    get: {
+      id: "exportProfiles.get",
+      summary: "One profile, its sweep verdict, and the exports it has run.",
+      auth: "key",
+      responses: {
+        "200": "The profile, its `sweep` verdict, its `exportsCount`, and its five most recent exports.",
+        "401": "No key.",
+        "404": "No profile with that id — and the same answer for a profile another workspace holds, so ids cannot be walked to find out who owns them.",
+      },
+    },
+  },
   "/api/exports": {
     get: {
       id: "exports.list",
@@ -570,7 +599,7 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["profileId", "Only one profile's exports — an id this workspace does not have is refused, not answered with an empty page."],
+        ["profileId", "Only one profile's exports — an id this workspace does not have is refused, not answered with an empty page; the ids a workspace has come from `GET /api/export-profiles`."],
         ["status", `One export status: ${EXPORT_STATUSES.join(" | ")}. \`RUNNING\` is a job word, not an export one.`],
         ["page", "1-based page number."],
         ["limit", "Page size."],
