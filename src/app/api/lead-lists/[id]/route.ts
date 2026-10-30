@@ -10,6 +10,7 @@ import { LEAD_FIELD_PICK, LEAD_LIST_PATCH, type LeadExportField } from "@/lib/fi
 import { listRefreshAsk, planListRefresh, readListFilter } from "@/lib/dynamic-list";
 import { describeConditions, leadWhere } from "@/lib/rule-conditions";
 import { asInputJson } from "@/lib/json";
+import { membershipReport } from "@/lib/membership-add";
 
 export const dynamic = "force-dynamic";
 
@@ -122,10 +123,17 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     const missing = missingIds(parsed.values, rows);
     if (missing.length) return unknownIdsError("leadIds", missing);
 
-    await prisma.leadListMember.createMany({
+    // Being on the list already is a fact about the caller's crowd, not a failed request: the
+    // `remove-leads` below answers `ok` for a pair that is already absent, and `POST /api/leads`
+    // folds a repeated id. Used to be one 409 for the pair that was already there, and the
+    // pairs that were not went back out with it, because `createMany` is one statement. The
+    // measurement and the arithmetic are `membership-add.ts`'s; the index settles which rows
+    // landed and the insert count is what makes the report add up.
+    const { count } = await prisma.leadListMember.createMany({
       data: parsed.values.map((leadId: string) => ({ listId: id, leadId })),
+      skipDuplicates: true,
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(membershipReport(parsed.values.length, count));
   }
 
   if (action === "remove-leads") {
@@ -157,20 +165,35 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     // The membership set is the indivisible unit here, so the two writes go as one transaction,
     // removal first: a reader between them would otherwise see a list that has lost its old
     // crowd and not yet gained the new one, and a refresh of a filter nobody left is a no-op.
+    // `skipDuplicates` is the crowd door's rule, for the same race one step further on: this
+    // plan was derived from a read of this table taken before the transaction, so a membership
+    // that landed in between is already true — and used to abort the whole refresh, its removals
+    // with it, as a 409. `added` then reports what was written, not what was planned.
     const writes = [];
     if (plan.remove.length > 0) {
       writes.push(prisma.leadListMember.deleteMany({ where: { listId: id, leadId: { in: plan.remove } } }));
     }
+    let addAt = -1;
     if (plan.add.length > 0) {
-      writes.push(prisma.leadListMember.createMany({ data: plan.add.map((leadId) => ({ listId: id, leadId })) }));
+      addAt = writes.length;
+      writes.push(
+        prisma.leadListMember.createMany({
+          data: plan.add.map((leadId) => ({ listId: id, leadId })),
+          skipDuplicates: true,
+        }),
+      );
     }
-    if (writes.length > 0) await prisma.$transaction(writes);
+    let added = plan.add.length;
+    if (writes.length > 0) {
+      const done = await prisma.$transaction(writes);
+      if (addAt >= 0) added = done[addAt].count;
+    }
 
     return NextResponse.json({
       ok: true,
       filter: describeConditions(stored.filter),
       matched: plan.matched,
-      added: plan.add.length,
+      added,
       removed: plan.remove.length,
       kept: plan.keep.length,
       members: plan.matched,

@@ -296,7 +296,11 @@ describe("the census: a body key that names a row is resolved by the door that t
       handler: "POST_impl",
       model: "leadList",
       refusal: /await assertOwns\(request, list\.workspaceId\)/,
-      write: /prisma\.leadListMember\.create\(/,
+      // #76 retargeted this pattern rather than relaxing it: the pair door writes through
+      // `createMany` with `skipDuplicates`, because a pair the list already holds is folded
+      // instead of refused. The claim being made is untouched — the list's lookup and its
+      // ownership check both sit before the membership write in the branch that takes `listId`.
+      write: /prisma\.leadListMember\.createMany\(/,
     },
   ];
 
