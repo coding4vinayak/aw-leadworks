@@ -4258,7 +4258,10 @@ served or named:
 `400` 26 `Unknown action` while the plain word answered `404` 22 `Not found.` — two different
 statuses for the same row depending on a space. The trimmed word now enters the same branch as the
 plain one, so both spellings answer `404` 22. A door that used to say "I could not read your word"
-about a row it does not hold says what a typo says.
+about a row it does not hold says what a typo says. The same thing happened at `leads`, one step
+down: a padded `add-to-list` at a row the tenant does not hold used to answer `400` 26 `Unknown
+action` where the plain word answered `400` 71 `"listId is required"` — the same code, a different
+sentence — and both spellings now answer the 71.
 
 **The map now says what the doors do.** Six `action` descriptions carry their own vocabulary plus
 one shared sentence — `Read as one word: padding is not part of it (%20run is run), the same word
