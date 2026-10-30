@@ -90,7 +90,7 @@ The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 
 - `GET /api/exports` — The workspace's exports. — needs the workspace's `x-api-key` key
 - `POST /api/exports` — Queue an export — the format, the fields it renders, and the filter it reads. — needs the workspace's `x-api-key` key
 - `GET /api/exports/{id}` — One export — its state, and where the file stands. — needs the workspace's `x-api-key` key
-- `POST /api/exports/{id}` — Retry this export — ?action=retry. — needs the workspace's `x-api-key` key
+- `POST /api/exports/{id}` — Retry this export, or ask for the file it already made — ?action=retry a FAILED one, ?action=download for the link. — needs the workspace's `x-api-key` key
 - `DELETE /api/exports/{id}` — Delete an export — its file goes with it. — needs the workspace's `x-api-key` key
 - `GET /api/exports/{id}/download` — Download an export's file, while retention keeps it. — needs the workspace's `x-api-key` key
 - `GET /api/webhooks` — The outbound subscriptions, with their signing secret previewed. — needs the workspace's `x-api-key` key

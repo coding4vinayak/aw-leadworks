@@ -7,6 +7,7 @@ import { readJson, validateBody } from "@/lib/validate";
 import { rowAfterWrite, scoredWriteData } from "@/lib/lead-score";
 import { emailCaseConflict, emailCaseHolder } from "@/lib/lead-email";
 import { LEAD_ADD_TO_LIST, LEAD_PATCH } from "@/lib/fields";
+import { LEAD_ACTIONS, actionParam } from "@/lib/action-word";
 
 export const dynamic = "force-dynamic";
 
@@ -89,7 +90,8 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
 async function POST_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
+  const asked = actionParam(searchParams, LEAD_ACTIONS);
+  const action = asked.action;
 
   if (action === "enrich") {
     const _owned = await prisma.lead.findUnique({ where: { id }, select: { workspaceId: true } });
@@ -143,7 +145,12 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  // `actionParam` refused this spelling, and it is refused on the same line this door has always
+  // reached when no branch matched — which is above both branches' own lookups, so a word no
+  // branch serves is refused identically about a row this workspace holds and one it does not.
+  // What a *served* word does is untouched: `?action=enrich` at another tenant's lead is still
+  // `404 "Not found"` and `?action=add-to-list` there is still `400 "listId is required"`.
+  return asked.error ?? NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
 async function DELETE_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {

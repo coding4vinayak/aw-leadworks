@@ -30,6 +30,17 @@ const NONE: Record<string, string[]>[] = [];
 const QUEUE_REFUSED =
   "The queue refused the row this door just wrote: `{ error, jobId }`, and that row already reads `FAILED` with the reason. `?action=retry` on the id is an ordinary retry once the queue is back.";
 
+/**
+ * The `?action=` reading rule, said once because it is one rule at six doors (#75). Each door
+ * names its own vocabulary in front of this; the sentence is what the door does with the bytes it
+ * was handed, measured on `ff38306` at `:3437` against a word the door itself serves.
+ */
+const ACTION_WORD =
+  " Read as one word: padding is not part of it (`%20run` is `run`), the same word twice is one word, " +
+  "two different words are refused `400` naming both, a word that is not one of this door's is refused " +
+  "`400` naming this door's own, and nothing named at all — `?action=`, `?action`, no `action` — is " +
+  "refused `400` too. Case is not padding: `RUN` is not `run`, and says so.";
+
 type Method = "get" | "post" | "patch" | "put" | "delete";
 
 interface Operation {
@@ -246,14 +257,14 @@ const PATHS: Record<string, PathItem> = {
       id: "leads.enrich",
       summary: "Act on one lead — ?action=enrich — run the workspace's enrichment rules on this lead, or ?action=add-to-list — put it on one list.",
       auth: "key",
-      query: [["action", "enrich — run the workspace's enrichment rules on this lead; add-to-list — put it on one list."]],
+      query: [["action", "enrich — run the workspace's enrichment rules on this lead; add-to-list — put it on one list." + ACTION_WORD]],
       body: {
         description: "For add-to-list: the list. For enrich: nothing.",
         properties: {
           listId: { type: "string", description: "The list to add the lead to (action=add-to-list only)." },
         },
       },
-      responses: { "200": "What the action did.", "422": "The list does not exist.", "503": QUEUE_REFUSED },
+      responses: { "200": "What the action did.", "400": "The word `action` was given is not one this door takes, or more than one word was given, or none was named — each sentence names this door's two, and it is answered above the lookup, so a row another workspace holds hears it the same way. `add-to-list` with no `listId` in the body answers here too, and so does that same missing `listId` at a row another workspace holds, because this door judges the body before it reads the row.", "422": "The list does not exist.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "leads.delete",
@@ -318,7 +329,7 @@ const PATHS: Record<string, PathItem> = {
       summary: "Move leads in or out, or re-run the filter a dynamic list declares — ?action=add-leads, ?action=remove-leads, ?action=refresh.",
       auth: "key",
       query: [
-        ["action", "add-leads — put the leads on the list; remove-leads — take them off; refresh — re-run the `filterJson` this row stores, which adds the crowd it names and removes the members it no longer names. The refresh branch asks the **row** whether it is dynamic (`#44`), so an `isDynamic` in the body changes nothing: a static list is refused 400 and a dynamic one re-runs whatever column it holds."],
+        ["action", "add-leads — put the leads on the list; remove-leads — take them off; refresh — re-run the `filterJson` this row stores, which adds the crowd it names and removes the members it no longer names. The refresh branch asks the **row** whether it is dynamic (`#44`), so an `isDynamic` in the body changes nothing: a static list is refused 400 and a dynamic one re-runs whatever column it holds." + ACTION_WORD],
       ],
       body: {
         description: "The leads to move. `refresh` asks for none — the crowd comes from the row's own filter.",
@@ -328,7 +339,7 @@ const PATHS: Record<string, PathItem> = {
       },
       responses: {
         "200": "The list as it now reads.",
-        "400": "A static list has no filter to re-run, or the `leadIds` a move needs are missing.",
+        "400": "A static list has no filter to re-run, or the `leadIds` a move needs are missing, or `action` was given a word this door does not take or more than one word (after the row is looked up and the workspace checked).",
         "409": "`refresh` on a dynamic list whose stored filter cannot be read — the refusal quotes the row.",
         "422": "A leadId that does not exist, named.",
       },
@@ -403,11 +414,12 @@ const PATHS: Record<string, PathItem> = {
       id: "sources.run",
       summary: "Run this source now — ?action=run.",
       auth: "key",
-      query: [["action", "run — the only action."]],
+      query: [["action", "run — the only action." + ACTION_WORD]],
       // Two refusals share the code and are not the same news: the browser one arrives before
       // any row exists, the queue one after a row that now says `FAILED`.
       responses: {
         "200": "The job, queued.",
+        "400": "The word `action` was given is not `run`, or more than one word was given, or none was named — the sentence names `run`, and it is answered above the lookup, so a row another workspace holds hears it the same way. A scrape this instance cannot keep its promise with answers here too, before any row is written.",
         "503": "Two refusals share this code, and they are not the same news: this instance has no browser to scrape with — nothing was written — or " + QUEUE_REFUSED,
       },
     },
@@ -478,8 +490,8 @@ const PATHS: Record<string, PathItem> = {
       id: "jobs.lifecycle",
       summary: "Act on a job — ?action=retry a FAILED one, or ?action=cancel one still queued.",
       auth: "key",
-      query: [["action", "retry — queue it again; cancel — stop it where it stands."]],
-      responses: { "200": "The id of the job the action produced.", "409": "The action is for a state this job is not in.", "503": QUEUE_REFUSED },
+      query: [["action", "retry — queue it again; cancel — stop it where it stands." + ACTION_WORD]],
+      responses: { "200": "The id of the job the action produced.", "400": "The word `action` was given names nothing this door takes, or two words were given — both answered on a job this workspace holds, because the row is looked up and checked first; or `cancel` on a job that has already finished. `retry` on a `PENDING` job is the `409`, not this `400`.", "409": "The action is for a state this job is not in.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "jobs.delete",
@@ -553,8 +565,8 @@ const PATHS: Record<string, PathItem> = {
       id: "rules.run",
       summary: "Run this rule now — ?action=run queues its job.",
       auth: "key",
-      query: [["action", "run — the only action."]],
-      responses: { "200": "The job, queued, and what the rule applies to.", "400": "The rule cannot run: its conditions or its actions do not read.", "503": QUEUE_REFUSED },
+      query: [["action", "run — the only action." + ACTION_WORD]],
+      responses: { "200": "The job, queued, and what the rule applies to.", "400": "The rule cannot run: its conditions or its actions do not read. A word this door does not take, or more than one word, or none named answers here too — above the lookup, so it is answered the same way about a rule another workspace holds.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "rules.delete",
@@ -612,10 +624,13 @@ const PATHS: Record<string, PathItem> = {
     },
     post: {
       id: "exports.retry",
-      summary: "Retry this export — ?action=retry.",
+      summary: "Retry this export, or ask for the file it already made — ?action=retry a FAILED one, ?action=download for the link.",
       auth: "key",
-      query: [["action", "retry — the only action."]],
-      responses: { "200": "The id of the new attempt.", "400": "This export is not a failed one.", "503": QUEUE_REFUSED },
+      // The operationId stays `exports.retry`: it is a handle a client keys on, and renaming it is
+      // a breaking change this round has no need for. What moved is the prose, which claimed the
+      // door took one action while it answers 200 with a `downloadUrl` for another.
+      query: [["action", "retry — re-queue this row as a new attempt, and only a `FAILED` one; download — `{ downloadUrl }` for the file this row already wrote, the same link the streaming route below serves, refused here with the verdict that route would give it." + ACTION_WORD]],
+      responses: { "200": "The id of the new attempt, or `{ downloadUrl }` for the file this row holds.", "400": "This export is not a failed one, or `action` was given a word this door does not take or more than one word (after the row is looked up and the workspace checked).", "404": "`download` on a row that holds no file — `File not found`.", "410": "`download` on a file whose retention has passed: the row stands, the bytes do not.", "503": QUEUE_REFUSED },
     },
     delete: {
       id: "exports.delete",
