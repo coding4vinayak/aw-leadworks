@@ -4125,6 +4125,190 @@ tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, l
 re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
 and the eight scored leads the tables above were measured over belong to it.
 
+### A pair the list already holds is nothing to do: `?action=add-leads` answers for the whole crowd now, and says what it wrote
+
+Two doors put a lead on a list, and they disagreed about what "it is already there" means.
+Measured on the running app first — `ff38306` built in this session's own worktree, **:3439** over
+the throwaway database `leadworks_r76` with private Redis 6422, keys read from `0600` files and
+printed nowhere. The crowd is five leads and four lists, with hand-written ids so the rows are
+readable in `/tmp/opencode/r76_press_ab.log`: `ld_r76_1`…`ld_r76_4` in workspace A plus
+`ld_r76_foreign` in workspace B; `lst_r76_partial` (static, holding `ld_r76_1` and nothing else),
+`lst_r76_open` (static, empty), `lst_r76_full` (dynamic, `{"status":"NEW"}`, holding all four), and
+`lst_r76_foreign`. Twenty-nine legs, chosen so that each one either refuses or is already true —
+so both builds read the same five membership rows:
+
+```
+POST /api/lead-lists/{partial}?action=add-leads   {"leadIds":["ld_r76_1"]}                         409 / 130
+POST /api/lead-lists/{partial}?action=add-leads   {"leadIds":["ld_r76_1","ld_r76_1"]}              409 / 130
+POST /api/lead-lists/{full}?action=add-leads      {"leadIds":["ld_r76_2"]}                         409 / 130
+POST /api/lead-lists/{full}?action=add-leads      {"leadIds":["ld_r76_1","ld_r76_2","ld_r76_3"]}   409 / 130
+POST /api/leads/{ld_r76_1}?action=add-to-list     {"listId":"…partial"}                            409 / 130
+POST /api/leads/{ld_r76_1}?action=add-to-list     {"listId":"…full"}                               409 / 130
+```
+
+every one of them `{"error":"A LeadListMember with this listId + leadId already exists in this
+workspace.","conflict":{"fields":["listId","leadId"]}}` — the pair named by its **columns**, never
+by the id, so a caller who sent twelve ids is told that one of them is present and not which. And
+the same door, `?action=remove-leads`, asked to take off a lead it was not holding:
+**`200 / 11 {"ok":true}`**. Already-true is a no-op in one direction and a failure in the other, at
+one and the same handler.
+
+The failure is not only a status code. The crowd is written with a single `createMany`, so
+`ld_r76_2` went back out with `ld_r76_1`'s collision — pressed separately, one leg at a time, each
+with its own reset and the list's membership set printed before and after
+(`/tmp/opencode/r76_press_extra.log`):
+
+```
+base  POST /api/lead-lists/{partial}?action=add-leads {"leadIds":["ld_r76_1","ld_r76_2"]}
+        lst_r76_partial holds before: ld_r76_1
+        -> 409 / 130   … already exists …
+        lst_r76_partial holds after:  ld_r76_1        <- ld_r76_2 never arrived
+```
+
+This app already had the answer twice over. `POST /api/leads` folds a repeated `listIds` entry —
+the header of `src/lib/ids.ts` records that it used to answer `409 "a LeadListMember with this
+listId + leadId already exists"`, "about a lead that did not exist yet" — and `csv-import.ts` hands
+`createMany` `skipDuplicates: true` and then counts what the index settled, "so the report always
+adds up". `src/lib/membership-add.ts` is that arithmetic, written once: `membershipReport(requested,
+added)` answers `{ ok, requested, added, already }`. Both doors now add with `skipDuplicates: true`
+and report it, so a pair that is already true is `200` with `added: 0`, the crowd's other half is
+written, and `requested` is the deduplicated crowd as `asStrings` reads it (a lead named twice is
+asked for once). The `?action=refresh` writer got the same flag and now reports the transaction's
+insert count as `added`: its plan comes from a read of this table taken *before* that transaction,
+so a membership that lands in between used to abort the whole refresh — its removals included, since
+the two writes are one unit — and leave the list holding rows its filter no longer names.
+
+## Checked against the base build, over the same rows
+
+The fix build on **:3440**, its own Redis 6423, nothing reseeded, the same five rows:
+
+```
+add-leads  ["ld_r76_1"]                  409 / 130  →  200 / 47  {"ok":true,"requested":1,"added":0,"already":1}
+add-leads  ["ld_r76_1","ld_r76_1"]       409 / 130  →  200 / 47  requested 1, already 1  (the repeat folded before the index)
+add-leads  ["ld_r76_2"] at {full}        409 / 130  →  200 / 47  requested 1, already 1
+add-leads  ["ld_r76_1","ld_r76_2","ld_r76_3"] at {full}
+                                         409 / 130  →  200 / 47  {"ok":true,"requested":3,"added":0,"already":3}
+add-to-list {listId:"…partial"}          409 / 130  →  200 / 47  requested 1, already 1
+add-to-list {listId:"…full"}             409 / 130  →  200 / 47  requested 1, already 1
+```
+
+and the crowd that was being dropped is not dropped any more:
+
+```
+fix   POST /api/lead-lists/{partial}?action=add-leads {"leadIds":["ld_r76_1","ld_r76_2"]}
+        lst_r76_partial holds before: ld_r76_1
+        -> 200 / 47 {"added":1,"already":1,"ok":true,"requested":2}
+        lst_r76_partial holds after:  ld_r76_1 ld_r76_2
+```
+
+Six legs moved, and they are the six above. **Twenty-three of the twenty-nine are byte-identical
+across the two builds**: the `403 / 49` for another workspace's lead id, the `422 / 105` naming an id
+nobody has, the four body refusals (`400 / 28` for `[]`, `400 / 47` for a string, `400 / 58` for
+`[42]`, `400 / 28` for a bare array), `404 / 22` for a tenant-B key and for a foreign list, the
+`200 / 11` no-op removals that this round argues from, `200 / 88` for a `refresh` of a dynamic list
+that is already current (`{"ok":true,"filter":"status NEW","matched":4,"added":0,"removed":0,
+"kept":4,"members":4}` — its writer never ran, so its numbers did not move), the static list's
+`400 / 143`, the leads door's `404 / 26` "List not found", `400 / 101` for a numeric `listId`,
+`400 / 71` for none, and the two `404 / 22` and `400 / 26` legs beside them. Each leg's own record
+prints every table's counts **and each row's state** before and after, and both builds ended every
+leg with `nothing was written; no state moved` — a count alone would not have caught a leg that
+flips a membership in place.
+
+The contract prose moved with the answer, at both doors: `leadLists.members` no longer claims
+`"200": "The list as it now reads"` (it never returned a list) and now describes what each of its
+three actions answers; `leads.enrich` says the pair is answered as arithmetic. Nothing else in the
+document changed: the served contract is **73,195 B `319930bc8c49` on `ff38306`** and **73,748 B
+`e719f952035a` here**, `/api/openapi` and `/openapi.json` byte-identical on this build, and
+`public/llms-full.txt` is **unchanged at 8,447 bytes** — the builder says so, because that file
+carries summaries and auth, not response prose.
+
+## Pins
+
+`tests/unit/membership-idempotent.test.ts` — **23 tests** (sixteen for the rule, seven for this
+section's own claims), no network and no database: the
+arithmetic itself (a fresh crowd, an already-true pair, and every `requested`/`added` pair the index
+can hand back, `added + already === requested` with no negative crowd); that a lead the caller typed
+twice is **one** request, pinned through `asStrings` and its trimming; **a census over every
+membership add in `src/app`, `src/lib` and `src/components`** — the scanner from
+`tests/unit/route-handlers.ts` blanks comments and reads each call's arguments, so the census sees
+exactly the **three** `prisma.leadListMember.createMany` sites (two in the crowd door, one in the
+pair door) and requires each to carry `skipDuplicates: true`, and a fourth site added without the
+flag fails by name; that `POST /api/leads`' nested `listMemberships: { create: … }` is *not* one of
+them, because its lead id is created in the same statement and cannot collide; that both doors
+**import** `membershipReport` rather than re-typing the fields (neither may contain `already:`); that
+`remove-leads` still answers `{ ok: true }` and gained no arithmetic, so the leg this round compares
+against did not move under it; that the workspace check, the 422 and the empty-crowd refusal all sit
+**before** the fold, and the pair door's `List not found` and `assertOwns` too — `skipDuplicates`
+must not be allowed to quietly fold a stranger into `already`; that `conflictFor` still stands for
+the models that really collide, and is gone from these two doors; that the refresh answer still
+carries its other five numbers and still writes one unit, removal first; and the contract's `200`
+sentences naming `requested`/`added`/`already`, the old claim refused by name, and the `409` at
+`leadLists.members` pinned to the refresh refusal and to nothing else.
+
+**Two existing pins retargeted, each with the reason written where it is read.**
+`tests/unit/dynamic-list.test.ts:266` required `\badded:` in the refresh answer; `added` is now a
+variable — the transaction's insert count — so the key is written as the shorthand `added,`. The
+pattern widened to accept a key with no value after it; the six fields it demands are the same six,
+and it was proved to still bite by deleting `kept: plan.keep.length` outright (2 of the 57 tests in
+those two files fail, 55 pass). `tests/unit/export-list-id.test.ts:303` orders the list's lookup
+and its ownership check against `prisma.leadListMember.create(`; that call is a `createMany` now, and
+the claim is the same one — proved by renaming the call back to `create`, which fails 3 of the 46
+tests in that file and this round's. Nothing was deleted and nothing was relaxed.
+
+**Non-vacuity, one rule at a time, each file restored verbatim from the bytes read before the edit**
+(`/tmp/opencode/r76_perturb.log`), each one leaving exactly the tests that name it failing: deleting
+the crowd door's fold — 1 of 23; the pair door's — 1; the refresh writer's — 1; a door re-typing its
+own arithmetic — 1; the 422 taken out from in front of the write — 1; the removal side given
+arithmetic it was not owed — 1; either door's `200` sentence put back — 1 each; the pair door writing
+before it asked whose list — 2 of the 46 across this file and the retargeted census. **One measurement is
+the one worth reading:** re-advertising the collision in the contract's `409` line as *"or a lead the
+list already holds"* passed the pin as first written, which only looked for
+`already exists|duplicate` — so the pin now requires the sentence to *be* the refresh refusal,
+and both wordings of the re-advertising (`"or a lead the list already holds"` and `"or a
+LeadListMember that already exists"`) fail it. Fourteen measurements, twelve rules.
+
+Gates on the pushed tree: suite **1359/1359**, where `main` at `ff38306` measures **1336/1336** — the
+23 new tests are the whole difference; `tsc --noEmit` exit 0; lint **0 errors / the same 13
+warnings**; `check:contract` **8/8**; `check:llms-full` reporting the shipped file as the builder's
+own output; build exit 0; no lockfile in the diff.
+
+## Said rather than smoothed
+
+- **The two instances were sequential, not simultaneous.** One worktree holds one `.next`, so the
+  trunk server on `:3439` was stopped by the exact PID `ss` reported for that port before the branch
+  was built and started on `:3440`. It is the *rows* the A/B holds fixed, and every leg prints its
+  state fingerprint to prove they are the same rows.
+- **The refresh race was not pressed.** Nothing reachable from a client puts a membership between
+  `planListRefresh`'s read and its transaction without a delay this app does not have, so that flag
+  is fixed by the same rule, pinned offline (the census counts its call site), and **not measured
+  live**. What was measured live is that the refresh answer did not change when the flag arrived:
+  the current dynamic list still says `200 / 88` with `added: 0`, byte for byte.
+- **The duplicate-in-body leg moves for a different reason than the other five.** On the base build
+  `["ld_r76_1","ld_r76_1"]` is refused by the index; here `asStrings` has already folded it, so the
+  door asks for one pair and the index has nothing to settle. Same answer as the single-id leg, by
+  a different route, and both say `requested: 1`.
+- **`remove-leads` keeps its `{"ok":true}`** — no `requested`, no `removed`. It is the baseline this
+  round argues from, and moving it would have moved a byte-identical control. Giving it the same
+  arithmetic is a real question (a crowd of twelve where two were present is a fact a caller may
+  want) and it is not this round's to answer half-way.
+- **`already` is `requested - added`, so it says nothing about *why* a pair was not written** — the
+  row was there before this call, or it arrived in the same statement. The pair is unique in the
+  schema, and the answer does not pretend to know more than the index does.
+- **The pair door still judges the body before it asks whose lead this is**
+  (`src/app/api/leads/[id]/route.ts:134`, unchanged by this round: `validateBody` runs three lines
+  before the row is read at `:137`), so an empty body at a row the tenant does not hold is `400 "listId is
+  required"` rather than `404`. Read off the source, not pressed — the pressed shape of that leg is
+  the `404 / 22` in the table above. Left for the round that takes the ordering of these doors.
+- **No status, column, index or migration was invented.** The unique pair `@@unique([listId,
+  leadId])` stays exactly as it was; what changed is who is allowed to answer it.
+- **`aw-leadworks#110` (this session's #75, the `?action=` reader) touches all three files this
+  round touches** — `git merge-tree` says clean against `main`, #109, #108, #107, #106, #97 and #87,
+  and conflicting against #110 on `lead-lists/[id]/route.ts`, `leads/[id]/route.ts` and
+  `src/lib/openapi.ts`. Whichever of the two lands second carries the anchor rebase.
+- **No demo step**: [`aw-deploy#96`](https://github.com/coding4vinayak/aw-deploy/pull/96) (STEP 27)
+  is still `CONFLICTING`.
+
+Nothing touched `:3300`, `leadworks_sim` or the shared `leadworks` database.
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
