@@ -7,6 +7,7 @@ import { readJson, validateBody } from "@/lib/validate";
 import { rowAfterWrite, scoredWriteData } from "@/lib/lead-score";
 import { emailCaseConflict, emailCaseHolder } from "@/lib/lead-email";
 import { LEAD_ADD_TO_LIST, LEAD_PATCH } from "@/lib/fields";
+import { membershipReport } from "@/lib/membership-add";
 
 export const dynamic = "force-dynamic";
 
@@ -139,8 +140,11 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     const list = await prisma.leadList.findUnique({ where: { id: listId }, select: { workspaceId: true } });
     if (!list) return NextResponse.json({ error: "List not found" }, { status: 404 });
     await assertOwns(request, list.workspaceId);
-    await prisma.leadListMember.create({ data: { listId, leadId: id } });
-    return NextResponse.json({ ok: true });
+    // The same fold as `POST /api/lead-lists/{id}?action=add-leads`, and the same numbers: a
+    // pair the list already holds is nothing left to do, not a refusal. One statement, so the
+    // index settles it and the insert count says which way it went.
+    const { count } = await prisma.leadListMember.createMany({ data: [{ listId, leadId: id }], skipDuplicates: true });
+    return NextResponse.json(membershipReport(1, count));
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
