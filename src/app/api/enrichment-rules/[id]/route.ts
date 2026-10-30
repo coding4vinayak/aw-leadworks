@@ -9,6 +9,7 @@ import { normalizeProviders, providersProblem } from "@/lib/enrichment-providers
 import { actionsProblem, normalizeActions, readRuleActions, ruleDeclarationProblem } from "@/lib/rule-actions";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
 import { markNeverQueued } from "@/lib/queue-refusal";
+import { RULE_ACTIONS, actionParam } from "@/lib/action-word";
 
 export const dynamic = "force-dynamic";
 
@@ -73,7 +74,8 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
 async function POST_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
+  const asked = actionParam(searchParams, RULE_ACTIONS);
+  const action = asked.action;
 
   if (action === "run") {
     const rule = await prisma.enrichmentRule.findUnique({ where: { id } });
@@ -128,7 +130,10 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     return NextResponse.json({ jobId: job.id, appliesTo: describeConditions(stored.conditions) });
   }
 
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  // `actionParam` refused this spelling, and it is refused here — above the lookup, which is
+  // where this door has always put its `Unknown action`: `?action=%20run` at another tenant's
+  // rule was `400` and `?action=run` at the same rule was `404`, and both orders still do.
+  return asked.error ?? NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
 async function DELETE_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
