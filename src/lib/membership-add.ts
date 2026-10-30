@@ -20,9 +20,9 @@
  *     409, same body
  *
  * — while the door two lines below the first one, asked to remove a lead that
- * was not on the list, answered `200 {"ok":true}`, and `POST /api/leads` folds a
- * repeated `listIds` entry with `skipDuplicates` rather than letting the index
- * refuse it. So the same truth about a pair — already true, nothing left to do —
+ * was not on the list, answered `200 {"ok":true}`, and `POST /api/leads`
+ * de-duplicates a repeated `listIds` entry before it reaches the index
+ * (`asStrings`, `src/lib/ids.ts`) rather than letting it be refused. So the same truth about a pair — already true, nothing left to do —
  * was a no-op at one door, a folded duplicate at another and a refusal that
  * discarded the rest of the crowd at these two.
  *

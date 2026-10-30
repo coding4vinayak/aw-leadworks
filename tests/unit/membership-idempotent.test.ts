@@ -182,6 +182,71 @@ describe("what must not be folded with it", () => {
   });
 });
 
+describe("the README carries this round's answer, and only this round's answer", () => {
+  const readme = at("../../README.md");
+  const lines = readme.split("\n");
+  const from = lines.findIndex((l) => l.startsWith("### A pair the list already holds is nothing to do"));
+  const to = lines.findIndex((l) => l.startsWith("## Score: one arithmetic"));
+  const section = lines.slice(from, to).join("\n");
+
+  it("lands its section before the Score anchor, as every round's has", () => {
+    assert.ok(0 < from && from < to, `section not found between the headings (${from}, ${to})`);
+  });
+
+  it("quotes the six legs that moved, in the bytes the press wrote down", () => {
+    for (const leg of ['["ld_r76_1","ld_r76_1"]', '["ld_r76_2"] at {full}', '["ld_r76_1","ld_r76_2","ld_r76_3"] at {full}']) {
+      assert.ok(section.includes(leg), `${leg} is not in the A/B table`);
+    }
+    assert.match(section, /409 \/ 130/);
+    assert.ok(section.includes('{"ok":true,"requested":1,"added":0,"already":1}'), "the moved answer is quoted wrong");
+    assert.ok(section.includes('{"ok":true,"requested":3,"added":0,"already":3}'), "the whole-crowd answer is quoted wrong");
+    assert.ok(section.includes("Twenty-three of the twenty-nine"), "the count that did not move is not stated");
+  });
+
+  it("quotes the refresh answer that did not move, byte for byte", () => {
+    assert.ok(section.includes('"filter":"status NEW"'), "the 200 / 88 refresh leg is not quoted");
+    assert.match(section, /200 \/ 88/);
+  });
+
+  it("says what the contract costs and what it did not touch", () => {
+    for (const size of ["73,195", "73,748", "e719f952035a", "319930bc8c49"]) {
+      assert.ok(section.includes(size), `${size} is missing from the contract paragraph`);
+    }
+    assert.match(section, /public\/llms-full\.txt`? is \*\*unchanged at 8,447 bytes/);
+  });
+
+  it("points at the two retargeted pins, and the lines it names are the pins", () => {
+    assert.ok(section.includes("tests/unit/dynamic-list.test.ts:266"), "the retargeted arithmetic pin is not named by line");
+    assert.ok(section.includes("tests/unit/export-list-id.test.ts:303"), "the retargeted census is not named by line");
+    // The lines the README points at are the pins it says they are.
+    assert.match(at("./dynamic-list.test.ts").split("\n")[265], /answers with the arithmetic a caller can check/);
+    assert.match(at("./dynamic-list.test.ts"), /\$\{field\}\[:,\]/);
+    assert.ok(
+      at("./export-list-id.test.ts").includes(String.raw`write: /prisma\.leadListMember\.createMany\(/`),
+      "the census entry no longer orders against the write this round renamed",
+    );
+    // And the line the README names is that line.
+    assert.ok(at("./export-list-id.test.ts").split("\n")[302].includes(String.raw`createMany\(/`));
+  });
+
+  it("reports the refresh race as unpressed, and the sequential pair of instances", () => {
+    assert.match(section, /\*\*The refresh race was not pressed\.\*\*/);
+    assert.match(section, /sequential, not simultaneous/);
+    assert.ok(section.includes("aw-deploy#96") && /still `CONFLICTING`/.test(section), "the no-demo-step clause moved");
+  });
+
+  it("does not claim the base build answered a 500, nor that this round moved the removal side", () => {
+    // The hypothesis this round started from was a 500; what the instance served was a 409, and a
+    // README that repeats the hypothesis would be a claim the press does not support.
+    assert.doesNotMatch(section, /answers 500|a 500 for a duplicate|500 \| 130/);
+    // The removal side is disclosed as unchanged, and the pin is that no leg of it is quoted with
+    // this round's arithmetic — the one control this round must not move.
+    assert.match(section, /\*\*`remove-leads` keeps its `\{"ok":true\}`\*\*/);
+    assert.doesNotMatch(section, /remove-leads[^\n]{0,60}200 \/ 47/);
+    assert.doesNotMatch(section, /8,528|8,531/, "llms-full claimed to have grown");
+  });
+});
+
 describe("what the contract tells a caller the answer is", () => {
   const operation = (id: string) => openapiOperations.find((o) => o.operation.id === id)!.operation;
   const answers = (id: string) => operation(id).responses as Record<string, string>;
