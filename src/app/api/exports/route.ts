@@ -3,7 +3,7 @@ import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
 import { markExportNeverQueued, markNeverQueued } from "@/lib/queue-refusal";
-import { pageParams } from "@/lib/pagination";
+import { PAGED_TIEBREAK, pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { EXPORT_CREATE } from "@/lib/fields";
 import { idFilterParam, unknownIdError } from "@/lib/ids";
@@ -40,7 +40,7 @@ async function GET_impl(request: Request) {
     prisma.export.findMany({
       where,
       include: { profile: { select: { id: true, name: true } } },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, PAGED_TIEBREAK],
       skip: (page - 1) * limit,
       take: limit,
     }),

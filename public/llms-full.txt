@@ -63,7 +63,7 @@ The same document `https://leadworks.abetworks.in/openapi.json` serves (OpenAPI 
 - `PATCH /api/leads/{id}` — Edit a lead. `score` writes the override (0–100) the ranking walks; everything else is the column it is. — needs the workspace's `x-api-key` key
 - `POST /api/leads/{id}` — Act on one lead — ?action=enrich — run the workspace's enrichment rules on this lead, or ?action=add-to-list — put it on one list. — needs the workspace's `x-api-key` key
 - `DELETE /api/leads/{id}` — Forget a lead. — needs the workspace's `x-api-key` key
-- `GET /api/lead-lists` — The workspace's lists. — needs the workspace's `x-api-key` key
+- `GET /api/lead-lists` — The workspace's lists, one page of them at a time — the door answers 20 unless `?limit=` says otherwise. — needs the workspace's `x-api-key` key
 - `POST /api/lead-lists` — Create a list — static, or dynamic with a filter the workspace re-evaluates. — needs the workspace's `x-api-key` key
 - `GET /api/lead-lists/{id}` — One list, with its members. — needs the workspace's `x-api-key` key
 - `PATCH /api/lead-lists/{id}` — Edit a list's name, filter or kind. — needs the workspace's `x-api-key` key
