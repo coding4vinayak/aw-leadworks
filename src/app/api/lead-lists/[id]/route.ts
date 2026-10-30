@@ -10,6 +10,7 @@ import { LEAD_FIELD_PICK, LEAD_LIST_PATCH, type LeadExportField } from "@/lib/fi
 import { listRefreshAsk, planListRefresh, readListFilter } from "@/lib/dynamic-list";
 import { describeConditions, leadWhere } from "@/lib/rule-conditions";
 import { asInputJson } from "@/lib/json";
+import { LEAD_LIST_ACTIONS, actionParam } from "@/lib/action-word";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +88,8 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
 async function POST_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
+  const asked = actionParam(searchParams, LEAD_LIST_ACTIONS);
+  const action = asked.action;
   const raw = await readJson(request);
   if (!raw.ok) return raw.error;
   const body = raw.body as Record<string, unknown>;
@@ -177,7 +179,11 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     });
   }
 
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  // `actionParam` refused the word: it sat under padding this door did not read, or the caller
+  // gave two of them and one was dropped silently (`?action=add-leads&action=refresh` measured
+  // `400 "leadIds required"` from the add-leads branch, `refresh` never mentioned). It stays
+  // below the ownership check, where this door has always answered it.
+  return asked.error ?? NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
 async function DELETE_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {

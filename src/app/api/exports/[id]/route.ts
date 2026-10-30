@@ -6,6 +6,7 @@ import { asInputJson } from "@/lib/json";
 import { enqueueJob, QueueUnavailableError } from "@/lib/queue";
 import { markExportNeverQueued, markNeverQueued } from "@/lib/queue-refusal";
 import { planRowDelete, retentionVerdict, retiredExportError } from "@/lib/export-retention";
+import { EXPORT_ACTIONS, actionParam } from "@/lib/action-word";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,8 @@ async function GET_impl(request: Request, { params }: { params: Promise<{ id: st
 async function POST_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
+  const asked = actionParam(searchParams, EXPORT_ACTIONS);
+  const action = asked.action;
 
   // One lookup, one ownership check, before either action reads the row. The
   // download branch used to sit above the only `assertOwns` in this handler, so
@@ -80,7 +82,10 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     return NextResponse.json({ jobId: job.id });
   }
 
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  // `actionParam` refused this spelling — the word sat under padding, or two words were given,
+  // or the word is not one of this door's two. Refused here rather than above the lookup, which
+  // is where `404 "Not found."` for another tenant's export is answered today.
+  return asked.error ?? NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
 /**

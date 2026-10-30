@@ -315,6 +315,10 @@ describe("the door's order, and what it refuses to touch", () => {
       [
         "src/app/api/exports/[id]/route.ts",
         "src/app/api/jobs/[id]/route.ts",
+        // #75 moved the two words these doors take out of the doors and into one reader, so the
+        // vocabulary is spelled in code here: `JOB_ACTIONS` and `EXPORT_ACTIONS` hold the literal
+        // `retry` the census finds. Retargeted, not relaxed — the census still names every hand.
+        "src/lib/action-word.ts",
         "src/lib/export-stop.ts",
         "src/lib/job-retry.ts",
         // #50's sentence to the caller of a door the queue refused: "…can be retried once the

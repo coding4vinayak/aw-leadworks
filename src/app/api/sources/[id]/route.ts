@@ -8,6 +8,7 @@ import { NO_TARGET_REASON, scrapeTarget, scrapeTargetProblem } from "@/lib/scrap
 import { readBrowserProbe } from "@/lib/scraper";
 import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
 import { markNeverQueued } from "@/lib/queue-refusal";
+import { SOURCE_ACTIONS, actionParam } from "@/lib/action-word";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,8 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
 async function POST_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
+  const asked = actionParam(searchParams, SOURCE_ACTIONS);
+  const action = asked.action;
 
   if (action === "run") {
     const source = await prisma.source.findUnique({ where: { id }, select: { workspaceId: true, config: true } });
@@ -119,7 +121,10 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     return NextResponse.json({ jobId: job.id });
   }
 
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  // `actionParam` refused this spelling: it named nothing, or it named more than one word,
+  // or it named a word this door does not take. The old sentence is kept for a word that is
+  // in `SOURCE_ACTIONS` and reached no branch, which the census test prevents.
+  return asked.error ?? NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
 async function DELETE_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
