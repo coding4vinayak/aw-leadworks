@@ -4270,7 +4270,10 @@ LeadListMember that already exists"`) fail it. Fourteen measurements, twelve rul
 Gates on the pushed tree: suite **1359/1359**, where `main` at `ff38306` measures **1336/1336** — the
 23 new tests are the whole difference; `tsc --noEmit` exit 0; lint **0 errors / the same 13
 warnings**; `check:contract` **8/8**; `check:llms-full` reporting the shipped file as the builder's
-own output; build exit 0; no lockfile in the diff.
+own output; build exit 0; no lockfile in the diff. The press was then re-run against the build
+this tree makes (`2dfee20` on :3440, Redis 6423): all twenty-nine pinned legs and all five
+writing legs came back identical, line for line, and the membership table ended at its five
+seeded rows.
 
 ## Said rather than smoothed
 
