@@ -5,7 +5,7 @@ import { queues, enqueue, QueueUnavailableError } from "@/lib/queue";
 import { markNeverQueued } from "@/lib/queue-refusal";
 import { readJson, validateBody } from "@/lib/validate";
 import { rowAfterWrite, scoredWriteData } from "@/lib/lead-score";
-import { emailCaseConflict, emailCaseHolder } from "@/lib/lead-email";
+import { emailCaseConflict, emailCaseHolder, emailFold } from "@/lib/lead-email";
 import { LEAD_ADD_TO_LIST, LEAD_PATCH } from "@/lib/fields";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +64,7 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
       where: {
         workspaceId: before.workspaceId,
         id: { not: id },
-        email: { equals: askedEmail, mode: "insensitive" },
+        email: emailFold(askedEmail),
       },
       select: { id: true, email: true },
       // The oldest holder gets named: three spellings of one address leave the

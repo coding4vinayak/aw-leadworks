@@ -4125,6 +4125,143 @@ tree: suite **1336/1336** (trunk itself measures **1313/1313**), `tsc` exit 0, l
 re-run — this round's runtime (`:3401` over `leadworks_r60`, Redis 6399) was torn down at its close,
 and the eight scored leads the tables above were measured over belong to it.
 
+## One address, one answer: the read door folds the case the write doors fold
+
+Measured on `origin/main` (`ff38306`) on the running app first, in this round's own runtime
+(`:3441`, database `leadworks_r77`, Redis 6424, throwaway worktree) over a workspace seeded with ten
+addresses written by hand — `John@X.com`, `bob@x.com`, `AMY@X.COM`, `John.Smith+tag@X.com`, a
+phone-only row, `twin@x.com` and `Twin@X.COM` (the pair that predates #99), `abc@x.com`,
+`50%@x.com`, `50Z@x.com` — plus a second workspace holding its own `john@x.com`
+(`/tmp/opencode/r77_press_ab.log`):
+
+```
+GET  /api/leads?email=John@X.com       200 total=1  ld_r77_mixed    the stored spelling
+GET  /api/leads?email=john@x.com       200 total=0                  an address nobody holds
+GET  /api/leads?email=JOHN@X.COM       200 total=0                  same
+GET  /api/leads?email=JoHn@x.CoM       200 total=0                  same
+POST /api/leads {"email":"john@x.com"} 409  … as ld_r77_mixed: "john@x.com" is "John@X.com"
+                                            with the case changed
+```
+
+Two doors, one workspace, two answers to the same question. `#99` (`7ecf030`) had already made the
+two write doors fold case — they refuse a second spelling with a 409 that names the row —
+`csv-import.ts` has folded since it existed, and `dedupe.ts` calls two spellings duplicates by
+definition. The read door was the one place that still compared bytes. The caller could not guess
+the stored spelling either: `POST /api/leads` keeps the bytes it was sent and
+`POST /api/leads/import` stores the address lower-cased, so the same address has two stored
+spellings depending on which door wrote it.
+
+The fix is the write doors' own rule, named once in `src/lib/lead-email.ts` and called by all four
+comparisons — the read filter, the two holder lookups and the importer's page of addresses:
+
+```ts
+export function emailFold(asked: string): { equals: string; mode: "insensitive" } {
+  return { equals: likeValue(asked), mode: "insensitive" };
+}
+```
+
+Measured on the fixed build over the same rows, nothing reseeded (`r77_press_fix.log`): every
+spelling now finds the row —
+
+```
+john@x.com  JOHN@X.COM  JoHn@x.CoM              200 total=1  ld_r77_mixed
+BOB@X.COM   Bob@x.com                            200 total=1  ld_r77_lower
+amy@x.com   Amy@X.com                            200 total=1  ld_r77_upper
+john.smith+tag@x.com  JOHN.SMITH%2BTAG%40X.COM   200 total=1  ld_r77_local
+```
+
+— the two pre-#99 twins (`twin@x.com`, `Twin@X.COM`) answer `total=2` for every spelling, because
+one row per row is what a read returns; the paged legs split them across `page=1`/`page=2`; and the
+composite filters still work (`?email=john@x.com&status=NEW` is `1`, `&status=ENRICHED` is `0`,
+`&listId=lst_r77_mixed` is `1`, `&minScore=71` is the one twin scored 71).
+
+### The fold's first cut answered patterns, and is in the table because it did
+
+`mode: "insensitive"` is `ILIKE` on Postgres, and `%` and `_` are that operator's wildcards. The
+first cut of the fold was the bare comparison; run against it deliberately, these legs say what
+"matches the address" was missing (`r77_press_unescaped.log`):
+
+```
+?email=%@x.com        200 total=9   every @x.com row
+?email=a_c@x.com      200 total=1   abc@x.com — a_c is a pattern, not an address
+?email=50%@x.com      200 total=2   50%@x.com beside 50Z@x.com
+```
+
+So the helper escapes the pattern's own syntax (`%`, `_` and `\`) before the folded match. The
+same three legs on the shipped build are `0`, `0` and the one stored row, and `?email=50Z@x.com`
+is still the neighbour. The write side benefits too: `POST {email:"%@x.com"}` is a `201` on both
+builds (a row nobody held, matched by the read door as itself), and the importer's `in` — the
+fourth caller — now imports `A_C@x.com` beside the stored `abc@x.com`
+(`imported=1, duplicatesExisting=0`, `r77_press_import.log`) where `ILIKE ANY` matched
+`abc@x.com` for that value (psql over the same rows, `r77_import_psql.log`). `ABC@x.com` is still
+the duplicate (`duplicatesExisting=1`), so the `in` half folds as well as escapes.
+
+### The write doors answer exactly as they did
+
+All ten write replies in the paired run are byte-identical in status and size across `ff38306` and
+the fix build (`r77_press_extra.log`, `r77_press_extra_fix.log`): the five `409`s for a second
+spelling of `john`/`bob`/`amy` name the same row in the same words, `POST {email:"%@x.com"}` and
+`{email:"a_c@x.com"}` are still `201`s, a third `twin` spelling is still the `409`, `POST` still
+stores `New.Person@X.com` as sent and the importer still stores `ZOE@X.COM` lower-cased — and each
+leg restored the table to its fingerprint. Of the ten follow-up reads, the two pattern legs were
+already `total=1` on both builds (the just-created row, spelled as sent), and the other eight
+differ: `total=0` on the base build for rows the write door had just refused as duplicates. That
+pair is the round.
+
+### What it costs
+
+The fold is not served by `@@unique([workspaceId, email])`, and neither is its `workspaceId`
+prefix. Measured on a 30,000-row scratch table carrying the same index (`r77_explain.log`): the
+byte-exact predicate is an `Index Only Scan`; the folded one is a `Seq Scan` filtered on
+`email ILIKE … AND "workspaceId" = …`. That is the cost the file door has paid since it folded and
+the two write doors pay per address they take; the read door pays it per page requested, over a
+column that is not indexed for it.
+
+## Pins
+
+`tests/unit/lead-email-fold.test.ts` — 11 new tests, offline: the helper's shape (the caller's
+bytes, `mode: "insensitive"`, no JavaScript lower-casing); the ILIKE escape, including `\` so a
+caller's backslash cannot escape the `%` after it; the `in` half escaping every address and
+leaving the caller's array untouched; each of the four call sites; a census that `emailFold(In)?\(`
+is called in exactly those four places and that `mode: "insensitive"` is written in exactly one
+file; the scraper's byte-exact `findUnique` named as the holdout rather than silently folded in;
+the contract sentence (folded, not exact; not wildcards); no door lower-casing an address; and all
+four comparisons still scoped to the caller's workspace.
+
+Six existing pins were **retargeted rather than relaxed**, each with its reason beside it:
+`lead-email-filter.test.ts` retargets three (the `where.email = emailFold(email.value)` text, the
+same in the "shared judge" pin, and the ordering pin above `const pageWindow`) and the contract pin
+from "says the match is byte-exact" to "says it is folded"; `lead-email-case.test.ts` retargets the
+two door-lookup regexes to the helper call, widens the "no third door" list to the importer that
+now imports the rule, and rewrites the fold census from "three doors spell it" to "one module
+writes it, three doors call it". No pin was deleted, and none was weakened: each still asks its
+original question of the code that answers it now.
+
+`npm test` **1347/1347** (trunk's 1336 + 11) · `tsc --noEmit` clean · `npm run lint` 0 errors / the
+13 pre-existing warnings · `npm run check:contract` 8/8 · `npm run check:llms-full` unchanged (the
+deep file prints each operation's summary and auth, not its query prose) · build exit 0. The served
+contract moved from 73,195 B (`319930bc8c49`) to 73,421 B (`55403abd…`), and the 226-byte
+difference is exactly the rewritten `email` sentence — measured by diffing the two lines, so no
+other document text moved.
+
+## Said rather than smoothed
+
+- **A pre-#99 workspace can answer two rows for one address**, and the door says so: the twins
+  above return both rows for every spelling, and `?limit=1` splits them across two pages. Folding
+  the read door did not merge them; `runDedupeJob` does that, and the dedupe report is what a
+  caller reads to know it happened.
+- **`src/lib/scraper.ts` still looks a scraped address up byte-exactly** with
+  `findUnique({ where: { workspaceId_email: … } })`, so a scrape of `JOHN@X.COM` beside
+  `john@x.com` still creates a second row. It is not an HTTP door, its address is a provider's field
+  rather than a caller's, and this round did not measure it; the census names it instead of folding
+  it in quietly.
+- **`?phone=` and `?company=` are still not filters.** This round folds the one column whose write
+  doors refuse a second spelling.
+- **The 30,000-row index measurement is a scratch table**, dropped after the run, not this
+  database's `Lead` table: the mechanism (`ILIKE` cannot use the btree) is the same, the timing is
+  not claimed.
+- **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
