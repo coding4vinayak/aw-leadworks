@@ -12,6 +12,7 @@ import { describeConditions, leadWhere } from "@/lib/rule-conditions";
 import { asInputJson } from "@/lib/json";
 import { LEAD_LIST_ACTIONS, actionParam } from "@/lib/action-word";
 import { membershipReport } from "@/lib/membership-add";
+import { membershipRemoval } from "@/lib/membership-remove";
 
 export const dynamic = "force-dynamic";
 
@@ -154,9 +155,15 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     if (!parsed.values.length) return NextResponse.json({ error: "leadIds required" }, { status: 400 });
 
     // Deleting ids that are not in the list is a no-op, not an error: the
-    // caller's goal (these leads out of this list) is true either way.
-    await prisma.leadListMember.deleteMany({ where: { listId: id, leadId: { in: parsed.values } } });
-    return NextResponse.json({ ok: true });
+    // caller's goal (these leads out of this list) is true either way. It is still
+    // a fact, so the answer carries it: the branch used to answer the same
+    // `{"ok":true}` for a removal of three, a removal of one and a list that held
+    // none of the ids, and `deleteMany` already returns the rows it matched in the
+    // statement — the arithmetic and the measurement are `membership-remove.ts`'s.
+    const { count } = await prisma.leadListMember.deleteMany({
+      where: { listId: id, leadId: { in: parsed.values } },
+    });
+    return NextResponse.json(membershipRemoval(parsed.values.length, count));
   }
 
   if (action === "refresh") {
