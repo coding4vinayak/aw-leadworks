@@ -232,7 +232,10 @@ describe("the two doors that take an address ask the fold before they write", ()
     );
 
   it("POST /api/leads looks for the folded holder, scoped to the caller's workspace", () => {
-    assert.match(create, lookup(`workspaceId, email: \\{ equals: askedEmail, mode: "insensitive" \\}`));
+    // Retargeted by #77, with the reason: the fold moved from this door's inline object into
+    // `lead-email.ts`'s `emailFold()`, so the door now names the rule instead of spelling it.
+    // Everything else in the shape — the scope, the two columns, oldest first — is unchanged.
+    assert.match(create, lookup(`workspaceId, email: emailFold\\(askedEmail\\)`));
     assert.match(create, /if \(typeof askedEmail === "string"\)/);
     assert.match(create, /const holder = emailCaseHolder\(askedEmail, holders\);/);
     assert.match(create, /if \(holder\) return emailCaseConflict\(holder, askedEmail\);/);
@@ -256,11 +259,10 @@ describe("the two doors that take an address ask the fold before they write", ()
   });
 
   it("PATCH /api/leads/{id} asks the same question of the other rows only", () => {
+    // Retargeted by #77 with the POST lookup above: one helper, two doors.
     assert.match(
       edit,
-      lookup(
-        `workspaceId: before\\.workspaceId,\\s*id: \\{ not: id \\},\\s*email: \\{ equals: askedEmail, mode: "insensitive" \\}`,
-      ),
+      lookup(`workspaceId: before\\.workspaceId,\\s*id: \\{ not: id \\},\\s*email: emailFold\\(askedEmail\\)`),
     );
     assert.match(edit, /if \(typeof askedEmail === "string"\)/);
     assert.ok(
@@ -279,10 +281,18 @@ describe("the two doors that take an address ask the fold before they write", ()
   });
 
   it("no third door reaches for this module", () => {
+    // Retargeted by #77, with the reason: `csv-import.ts` already folded case with an inline
+    // `{ in, mode: "insensitive" }`; the refactor moved that spelling into `emailFoldIn()` here, so
+    // the importer now imports the rule (relatively, as a sibling lib file) instead of re-typing it.
+    // The list is not widened to "anyone" — it is still exactly the doors that take an address.
     const importers = sourceTree().filter(
-      (file) => file !== "src/lib/lead-email.ts" && /@\/lib\/lead-email/.test(fromRoot(file)),
+      (file) => file !== "src/lib/lead-email.ts" && /from "(?:@\/lib\/|\.\/)lead-email"/.test(fromRoot(file)),
     );
-    assert.deepEqual(importers, ["src/app/api/leads/[id]/route.ts", "src/app/api/leads/route.ts"]);
+    assert.deepEqual(importers, [
+      "src/app/api/leads/[id]/route.ts",
+      "src/app/api/leads/route.ts",
+      "src/lib/csv-import.ts",
+    ]);
   });
 });
 
@@ -349,15 +359,22 @@ describe("the census: who decides whether an address is new", () => {
     ]);
   });
 
-  it("folds case at every door an address can arrive through, and nowhere else", () => {
-    // Comment-blanked, so the module that documents the fold without performing it is not
-    // counted: `src/lib/lead-email.ts` explains `mode: "insensitive"` and queries nothing.
+  it("writes the fold once, and every door that takes an address asks for it", () => {
+    // Retargeted by #77, with the reason. This census used to expect `mode: "insensitive"` inline in
+    // each of the three doors, which was true while three doors each spelled the rule. #77 folded
+    // the read door too, and four spellings of one rule is exactly how they drift, so the claim now
+    // has one home — `lead-email.ts` — and the census asks that every address-taking door calls it.
     const folders = sourceTree().filter((file) => /mode: "insensitive"/.test(blankComments(fromRoot(file))));
-    assert.deepEqual(folders, [
+    assert.deepEqual(folders, ["src/lib/lead-email.ts"], "the fold is written once, and nowhere else");
+    for (const door of [
       "src/app/api/leads/[id]/route.ts",
       "src/app/api/leads/route.ts",
       "src/lib/csv-import.ts",
-    ]);
+    ]) {
+      assert.match(blankComments(fromRoot(door)), /\bemailFold(In)?\(/, `${door} asks the shared fold`);
+    }
+    // The read door's own caller: the comparison this round was opened for.
+    assert.match(blankComments(fromRoot("src/app/api/leads/route.ts")), /emailFold\(email\.value\)/);
   });
 
   it("keeps the importer the only place that also rewrites the bytes it stores", () => {

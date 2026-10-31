@@ -3,6 +3,7 @@ import { dispatchWebhookBatch, emptyTally, type DeliveryTally } from "./webhooks
 import { parseLeadCsv } from "./csv-parse";
 import { MAX_REPORTED_PROBLEMS } from "./import-limits";
 import { scoredWriteData } from "./lead-score";
+import { emailFoldIn } from "./lead-email";
 import type { ParsedLeadCsv } from "./csv-parse";
 
 /**
@@ -58,11 +59,13 @@ export async function importLeadCsv(workspaceId: string, text: string): Promise<
   // The unique index is `[workspaceId, email]`, so that is the duplicate the
   // product actually refuses. Case is folded here because the index is not:
   // importing `John@X.com` when `john@x.com` exists would otherwise create a
-  // second row the product treats as a different person.
+  // second row the product treats as a different person. The comparison is
+  // `lead-email.ts`'s, so this door and the two that take one address cannot
+  // drift into meaning "same person" two ways.
   const emails = [...new Set(parsed.rows.map((r) => r.email).filter((e): e is string => !!e))];
   const existing = emails.length
     ? await prisma.lead.findMany({
-        where: { workspaceId, email: { in: emails, mode: "insensitive" } },
+        where: { workspaceId, email: emailFoldIn(emails) },
         select: { email: true },
       })
     : [];
