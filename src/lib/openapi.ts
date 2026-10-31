@@ -327,7 +327,7 @@ const PATHS: Record<string, PathItem> = {
         },
       },
       responses: {
-        "200": "The list as it now reads.",
+        "200": "`remove-leads` answers what it did, not the list: `requested` (the distinct ids asked for), `removed` (rows actually deleted) and `absent`, so taking off a lead the list did not hold answers 200 with `removed: 0` rather than the same bare `ok` a removal of three used to get — already absent is success, said. `refresh` answers the crowd it re-ran: `filter`, `matched`, `added`, `removed`, `kept`, `members`.",
         "400": "A static list has no filter to re-run, or the `leadIds` a move needs are missing.",
         "409": "`refresh` on a dynamic list whose stored filter cannot be read — the refusal quotes the row.",
         "422": "A leadId that does not exist, named.",
