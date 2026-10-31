@@ -10,7 +10,7 @@ import { fieldsParam, leadSelect } from "@/lib/list-fields";
 import { filterParam, textFilterParam } from "@/lib/list-filter";
 import { LEAD_STATUSES } from "@/lib/enums";
 import { scoredWriteData } from "@/lib/lead-score";
-import { emailCaseConflict, emailCaseHolder } from "@/lib/lead-email";
+import { emailCaseConflict, emailCaseHolder, emailFold } from "@/lib/lead-email";
 import { dispatchWebhookEvent } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +54,15 @@ async function GET_impl(request: Request) {
   const where: any = { workspaceId };
   if (list.id) where.listMemberships = { some: { listId: list.id } };
   if (status.value) where.status = status.value;
-  if (email.value) where.email = email.value;
+  // One address, one person — the fold `POST /api/leads` and `PATCH /api/leads/{id}` already
+  // refuse a second spelling of, and `csv-import.ts` looks up with. A bare `where.email = value`
+  // compares bytes, so the two doors gave one address two answers: measured on `ff38306` over a
+  // row stored as `John@X.com`, `?email=john@x.com` was `200 total=0` while `POST {email:
+  // "john@x.com"}` was `409 "A Lead with this email already exists in this workspace as ld_… —
+  // "john@x.com" is "John@X.com" with the case changed"`. Guessing the spelling is not available
+  // either, because the two write doors store different bytes: the one-lead door keeps what it was
+  // sent, the file door lower-cases.
+  if (email.value) where.email = emailFold(email.value);
   if (minScore.value !== null) where.score = { ...where.score, gte: minScore.value };
   if (maxScore.value !== null) where.score = { ...where.score, lte: maxScore.value };
 
@@ -112,7 +120,7 @@ async function POST_impl(request: Request) {
   const askedEmail = input.data.email;
   if (typeof askedEmail === "string") {
     const holders = await prisma.lead.findMany({
-      where: { workspaceId, email: { equals: askedEmail, mode: "insensitive" } },
+      where: { workspaceId, email: emailFold(askedEmail) },
       select: { id: true, email: true },
       // The oldest holder gets named: three spellings of one address leave the
       // database free to return them in any order, and a refusal that names a row

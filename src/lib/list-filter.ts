@@ -177,15 +177,30 @@ function bad(message: string): NextResponse {
  *    nothing and returns the whole page; two different values under one name is
  *    a question with two answers and is refused in the same sentence.
  *
- * What it does not do: it matches the bytes the column holds, so
- * `?email=JOHN@X.COM` finds the row written with those bytes and not the one
- * written as `john@x.com`. That is what the unique index on the column is
- * (`@@unique([workspaceId, email])`, byte-exact), and a read door answering one
- * spelling while a write door accepts a different one would leave this app with
- * two answers to "do I already have this person". Folding case is open as #99;
- * when it lands, `?email=` keeps working for the bytes it was given and the
- * twin it would have found stops existing. A `mode: "insensitive"` filter here
- * would also cost the composite index.
+ * What it matches: every spelling of the address, because the door that writes one refuses a
+ * second spelling. `#66`'s PR — merged as `7ecf030` — made `POST /api/leads` and
+ * `PATCH /api/leads/{id}` answer a case-changed collision with a 409 naming the row, and this file
+ * then said, of itself, that it "matches the bytes the column holds" on the premise that a second
+ * spelling is a second row. That premise is gone: `@@unique([workspaceId, email])` still compares
+ * bytes, but no door will write a second one, so a workspace holds one row per address and which
+ * case that row is in is decided by whoever wrote it — the one-lead door stores what it was sent,
+ * the file door stores it lower-cased. Measured on `ff38306`, over a row stored as `John@X.com`:
+ * `?email=john@x.com` was `200 total=0` (the same body as an address nobody has) while
+ * `POST {email:"john@x.com"}` was `409 "already exists in this workspace … with the case changed"`.
+ * So the filter is `emailFold()` from `lead-email.ts` — the same rule `csv-import.ts` looks up with
+ * and the two write doors refuse a second spelling with — and `GET /api/leads?email=` now answers
+ * the question the write door answers.
+ *
+ * Two things this costs, both already being paid elsewhere in this app. The fold goes through
+ * `ILIKE`, whose `%` and `_` are wildcards; `emailFold()` escapes them, and that escape is not
+ * decoration — the fold's first cut without it answered `?email=%@x.com` with every `@x.com` row
+ * (`total=9` on this round's seeded table), `?email=a_c@x.com` with `abc@x.com`, and
+ * `?email=50%@x.com` with two rows, the stored `50%@x.com` beside its neighbour `50Z@x.com`.
+ * Escaped, those three legs answer `0`, `0` and the one row, which is what "matches the address"
+ * means. And the fold is no longer served by the composite index, `workspaceId` prefix included:
+ * measured on a 30,000-row scratch table with the same unique index, the byte-exact predicate is an
+ * `Index Only Scan` and the folded one a `Seq Scan` filtered on both columns. That is the cost the
+ * file door has paid since it folded, and the write doors pay per address they take.
  */
 export function textFilterParam(
   searchParams: URLSearchParams,

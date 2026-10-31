@@ -33,6 +33,55 @@ export interface EmailHolder {
 }
 
 /**
+ * The address with `ILIKE`'s metacharacters escaped to themselves.
+ *
+ * `mode: "insensitive"` is Prisma's spelling of `ILIKE` on Postgres, and `%` and `_` are that
+ * operator's wildcards rather than characters of the address. Measured on the fix build before this
+ * function existed, over the seeded rows: `?email=%@x.com` answered `total=9` — every `@x.com` row —
+ * `?email=a_c@x.com` answered `total=1`, naming `abc@x.com`, and `?email=50%@x.com` answered two
+ * rows, the stored `50%@x.com` beside its neighbour `50Z@x.com`. A door that answers a pattern is a
+ * second door: it returns addresses the caller did not name. Backslash is escaped too, because it is
+ * `LIKE`'s own escape character (the default, so `\%` is a literal percent without an `ESCAPE`
+ * clause); escaping it first is what keeps a caller-supplied `\` from escaping the `%` after it.
+ */
+function likeValue(asked: string): string {
+  return asked.replace(/[\\%_]/g, (pattern) => `\\${pattern}`);
+}
+
+/**
+ * How one caller-named address is compared to the ones the workspace holds — written once, because
+ * four doors ask the same question and a fifth would ask it differently.
+ *
+ * `Lead.email` is `@unique` with `workspaceId` on **bytes**, while the product's answer to "is this
+ * the same person" has always been case-folded: `csv-import.ts` looks up with `mode: "insensitive"`
+ * before it inserts, `dedupe.ts` calls two spellings duplicates by definition, and the two write
+ * doors refuse a case-changed collision with a 409 naming the row (`emailCaseConflict` below). A
+ * read door that compared bytes instead answered `200 total=0` for exactly those bytes — measured on
+ * `ff38306`, `GET /api/leads?email=john@x.com` found nobody while `POST /api/leads
+ * {email:"john@x.com"}` said `already exists in this workspace … with the case changed`.
+ *
+ * The value stays the caller's own address; nothing here lower-cases it. What does change is the
+ * pattern's own syntax: `%`, `_` and `\` are escaped by `likeValue` so the insensitive comparison
+ * matches the address's characters and nothing wider. Without that step the fold is a wildcard
+ * filter — measured, quoted above `likeValue` — and `?email=%` would be "every address".
+ *
+ * What it costs is the composite index, and the `workspaceId` prefix with it. Measured on a
+ * 30,000-row scratch table carrying the same `@@unique([workspaceId, email])`: the byte-exact
+ * predicate is an `Index Only Scan`, and the folded one is a `Seq Scan` filtered on both columns —
+ * `ILIKE` cannot use the btree at all. That is the cost `csv-import.ts` has paid since it folded,
+ * and the two write doors pay it per address they take; the door this round fixed pays it per page
+ * requested.
+ */
+export function emailFold(asked: string): { equals: string; mode: "insensitive" } {
+  return { equals: likeValue(asked), mode: "insensitive" };
+}
+
+/** The same comparison for a page of addresses, as one file's worth of them arrives at a time. */
+export function emailFoldIn(asked: string[]): { in: string[]; mode: "insensitive" } {
+  return { in: asked.map(likeValue), mode: "insensitive" };
+}
+
+/**
  * The holder of `asked` that is not the same string, or `null` when there is none.
  *
  * `holders` is the result of a `mode: "insensitive"` lookup scoped to the caller's workspace, so
