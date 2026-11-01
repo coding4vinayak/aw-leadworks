@@ -5,6 +5,7 @@ import { resolveAiActor, withAiAuth } from "@/lib/ai-actor";
 import { isLlmConfigured } from "@/lib/llm";
 import { explainLeadScore } from "@/lib/ai-score";
 import { computeLeadScore, readScoreLedger } from "@/lib/lead-score";
+import { oneIdParam } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +24,17 @@ export const dynamic = "force-dynamic";
  */
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
+  // The name is read the way this app reads every name in a query string — trimmed, and
+  // refused when the same key is spelled twice with two different answers. Measured on the
+  // build before this line (`15e100e`, `:3431`): `?id=%20ld_r72_ana%20` answered
+  // `404 lead not found` for a lead tenant A holds, while `GET /api/leads?listId=%20…%20`
+  // answered that same padding with the rows it names; and `?id=<ana>&id=<bo>` explained
+  // `ana` in bytes identical to the control and dropped `bo` without a word.
+  const asked = oneIdParam(searchParams, "id");
+  if (asked.error) return asked.error;
   const model = searchParams.get("model") ?? undefined;
 
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  if (asked.value === null) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   const actor = await resolveAiActor(request, {
     // A query-string claim can only ever be `string | null`, so this app is not
@@ -37,8 +45,10 @@ async function GET_impl(request: Request) {
   });
 
   // Scoped in the query: another tenant's lead is not found, not fetched-then-refused.
+  // The refusal stays a 404 rather than the 422 an unresolvable *filter* earns, because
+  // this door reads the row it was named, which is what `GET /api/leads/{id}` does too.
   const lead = await prisma.lead.findFirst({
-    where: { id, workspaceId: actor.workspaceId },
+    where: { id: asked.value, workspaceId: actor.workspaceId },
     include: {
       source: { select: { name: true, type: true } },
       enrichmentLogs: { orderBy: { createdAt: "desc" }, take: 5 },
