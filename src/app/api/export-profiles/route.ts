@@ -20,8 +20,10 @@ export const dynamic = "force-dynamic";
  * `exportsCount` is what the row has already produced, which is how "active since Monday and
  * has never emitted a file" is answerable at all.
  *
- * No door writes this table yet: `POST`, `PATCH` and `DELETE` on these paths stay 404 and the
- * contract says so. The rows are what the demo seed and a direct database write make.
+ * No door writes this table yet: `POST` and `PATCH` on these paths answer `405 / 0` — the path is a
+ * GET route and nothing else — where the same calls on `aa2e380` were the `404` HTML page, because
+ * there was no path at all. The contract says the same thing: it declares one `get` per profile
+ * path. The rows are what the demo seed and a direct database write make.
  */
 async function GET_impl(request: Request) {
   const { searchParams } = new URL(request.url);

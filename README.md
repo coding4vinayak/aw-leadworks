@@ -251,7 +251,8 @@ GET    /api/export-profiles?workspaceId=   # the saved profiles the weekly sweep
                                            # row that cannot are different answers here
 GET    /api/export-profiles/{id}           # one profile, its verdict, its `exportsCount`, and its
                                            # five most recent exports; another workspace's row is
-                                           # the same 404 as a row that is not there at all
+                                           # refused with the app's not-found `404`, not a `403`
+                                           # naming an owner it could probe
 POST   /api/exports                        # export to CSV/JSON/XLSX/PDF; a `filterJson.status`
                                            # no Lead column can hold is refused before the row
                                            # exists, not delivered as an empty file
@@ -4759,11 +4760,86 @@ one `0 9 * * 1`, one paused, one with no cadence and one holding `0 9 * * 9`
 (`r63_press59.log`): the list answers `scheduled`/`takes=true` for the minute's own rows,
 `scheduled`/`takes=false` for Monday's, `paused`, `unscheduled`, and `unreadable` naming the field
 that cannot be matched; the detail door gives the same verdict per row; another workspace's row is
-the same 404 as a row that is not there; no key is 401 and a claimed foreign `workspaceId` is 403.
+refused with the app's not-found `404` — `404 / 22`, against the missing row's `404 / 21`, trunk's
+own two replies, differing by a period and not by an owner; no key is 401 and a claimed foreign
+`workspaceId` is 403.
 `GET /api/exports?profileId=nope` on this base answers #58's 422 naming the id — the resolution this
 round's `profileId` sentence now points at.
 
 **Rebased a second time onto `main` at `88bf6d2`.** Nothing here had landed in the meantime — `git ls-tree -r origin/main src/app/api` has no `export-profiles/`, and the only `exportProfile` reads on trunk are `src/app/api/exports/route.ts:32` (a `count` behind `?profileId=`) and `:68` (a `findMany` resolving a body reference), both of which consume profiles rather than expose them. So the two doors, the `sweep` verdict and its log line are still this branch's own work, and they met main only at the README anchor: #102's section and this one were both appended in the same slot, and both are kept. `src/lib/openapi.ts` merged without conflict — main's landed `exports.create` 422 wording is verbatim, and this branch adds its two paths plus its own `profileId` sentence, with `SWEEP_TAKES` defined once, in `src/lib/export-profile.ts`. Every gate re-ran on the rebased tree: `npm test` **1257/1257** (main's 1236 plus these 21), `tsc --noEmit` clean, lint 0 errors / the same 13 warnings, `check:contract` 8/8 with the two new operations, `check:llms-full` unchanged (the 49-operation heading is still this file's only addition over the base). The `1223/1223` and the `e3fcc16` above describe the earlier rebase of this branch, not this one.
+
+**Rebased a third time onto `main` at `aa2e380`** — the trunk that now carries #108, #107, #115 and
+#79 — and pressed again on that tree, in this session's own runtime: database `leadworks_q87`, Redis
+6430, the branch's build on `:3471` and `aa2e380` built in a second checkout on `:3472`, both against
+the same six profiles (`39c6460ff5e7…` is the table fingerprint each press opens and closes on).
+Nineteen legs, every one a read — nothing in this press writes, so the two runs are the same rows by
+construction (`q87_press_base.log`, `q87_press_fix.log`, and `q87_press_ab.log` for the diff: 18 legs
+move, one holds).
+
+| the leg | `aa2e380` answers | this branch answers |
+| --- | --- | --- |
+| keyed `GET /api/export-profiles` | `404 / 11049` `text/html` | `200 / 2357` sha `e9bcb3548876`, five profiles |
+| the same path with no key | `404 / 11049` `text/html` | `401 / 64` sha `57e51726f411` |
+| `?page=2&limit=2` | `404 / 11049` `text/html` | `200 / 1051`, two profiles, `totalPages=3` |
+| `GET /api/export-profiles/xp_q87_minute` (the caller's own) | `404 / 11049` | `200 / 730` sha `0f7f9693fb4d`, `sweep=scheduled/takes=true` |
+| `GET /api/export-profiles/xp_q87_foreign` (the tenant next door's) | `404 / 11049` | `404 / 22` sha `58e46b31fc6d` |
+| `GET /api/export-profiles/xp_never_seeded` | `404 / 11049` | `404 / 21` sha `c8d3eae160a8` |
+| `xp_q87_foreign` with **its own** tenant's key | `404 / 11049` | `200 / 728` sha `735a9b0cf933` |
+| the cadence `0 9 * * 9` | `404 / 11049` | `200 / 538`, `sweep=unreadable/takes=false` |
+| the paused row / the row with no cadence | `404 / 11049` | `200 / 436` `paused`, `200 / 444` `unscheduled` |
+| `POST`, `PATCH`, `DELETE` on both paths | `404 / 11049` | `405 / 0` at all six calls |
+| `GET /api/exports?profileId=xp_q87_minute` | `200 / 1006` sha `28667ca7cba9` | `200 / 1006` sha `28667ca7cba9` — the same bytes, pressed in the same minute |
+| `GET /api/openapi` | `75,013 B` sha `d9fad003d779`, 21 paths, none naming a profile | `78,543 B` sha `a7bc5d0bfe7a`, 23 paths, two naming a profile |
+
+The base's contract number is round #79's own trunk measurement, reproduced here independently: same
+bytes, same digest, on a runtime neither of them shared. The words the list door judges behave like
+the rest of the app's — `?page=nonsense` reads back `page: 1` and `?limit=99999` is clamped to `100`
+(`pageParams`, landed as #107), and a `?workspaceId=` naming another tenant is `403 / 56` from
+`authedWorkspaceId` before any row is read.
+
+**Part of what this press printed was the press's own doing, and a later re-press of the same build
+says so.** After the A/B above the final tree was built and pressed again (`:3471`,
+`q87_press_fix_final.log`) to check that the two comment corrections had not moved a byte: seven legs
+moved — the list door grew 2 357 → 2 358 B, the detail door 730 → 1 109 B, and
+`GET /api/exports?profileId=` went 1 006 → 4 799 B. Nothing in the replies' *shape* moved — same keys,
+same `sweep` verdict per row — and `psql` explains the bytes: the two `* * * * *` profiles now hold
+**ten exports each** and `xp_q87_broken` holds **none**, queued by `scheduler.ts` while the two
+instances were up — and `q87_press_repress.log` is that comparison: 12 legs byte-identical between
+the two runs of this build, the seven that changed being exactly the ones whose body carries an export
+row or a count of them (A1, B1, B4, C1, D1, D2, D6). So the minutes between the two runs are in those
+replies, and the honest reading of the table above is that the export-carrying legs can only be
+compared byte-for-byte inside one minute — which is the same property `sweep.takes` has, stated in the bullet below, now with a measurement
+against it. The cadence verdicts themselves reproduce what this round measured at `65bd942` on a trunk
+nine commits later: the every-minute rows get taken, the row whose day-of-week is `9` never does, and
+the door is the only place a caller can see the difference.
+
+**Two sentences in this branch's own comments were wrong and the press is what said so.** The list
+door said `POST`, `PATCH` and `DELETE` "stay 404"; on this build they answer `405 / 0` — `404` was
+trunk's reply to a path that was no route at all, and it is not what a GET-only route does. The
+detail door said `assertOwns` makes another workspace's row "the same 404" as a row that is not there;
+the two replies are `404 / 22 {"error":"Not found."}` and `404 / 21 {"error":"Not found"}`, one byte
+apart, and that pair is trunk's own at every `[id]` door (round #79 pressed it). What a caller walking
+ids still cannot learn here is *which* workspace holds a row — which is the property the door keeps —
+so both comments now say the measured thing. That edit is itself one of the two prose corrections the
+press forced, and it broke this branch's own guard, which read `/403/` out of the whole source file
+including its comments: the pin is retargeted to `blankComments(detail)` — the same treatment the
+file's writer census already gives a comment that mentions `delete` — so it still fails if a `403`
+answer is constructed, and no longer fails because the file says it does not construct one.
+
+**The census moved because this branch adds doors, and the pins were retargeted with the reason
+rather than relaxed.** `tests/unit/owns-before-words.test.ts` measures `aa2e380` at 49 handlers and 24
+units that judge a caller's words; this tree scans **51 handlers** and **25 units**. The two handlers
+are `export-profiles/route.ts GET` and `export-profiles/[id]/route.ts GET`; the one new unit is the
+list door, which judges `?page`/`?limit` through `pageParams` — after `authedWorkspaceId`, and against
+a `where` that is already the caller's own workspace. So `offenders` is still empty, and it is the
+ordering assertion, not the count, that the count exists to protect.
+
+Every gate re-ran on the rebased tree: `npx tsx --test tests/unit/*.test.ts` **1443/1443** where that
+trunk measures **1422/1422** (the 21 pins this branch brought, and the two census counts it moved
+still leaving every other test standing),
+`npx tsc --noEmit` exit 0, `npm run lint` 0 errors / the same 13 pre-existing warnings, `npm run
+check:contract` **8/8** with the two new operations, `npm run check:llms-full` unchanged, build exit
+0. `:3300`, `leadworks_sim` and the shared `leadworks` database were not touched by any of it.
 
 ## Said rather than smoothed
 

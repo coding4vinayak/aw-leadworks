@@ -9,9 +9,12 @@ export const dynamic = "force-dynamic";
  * GET /api/export-profiles/{id}
  *
  * One profile, the same `sweep` verdict the list prints and the sweep acts on, and the
- * exports it has run. Another workspace's row is answered exactly as a row that is not there
- * at all — `assertOwns` makes the two the same 404 on purpose, so a caller cannot walk ids
- * and find out which tenant holds them.
+ * exports it has run. Another workspace's row is refused with the app's not-found `404`, not a
+ * `403` naming an owner it could probe: `assertOwns` answers `404 / 22 {"error":"Not found."}` and
+ * the missing-row branch above answers `404 / 21 {"error":"Not found"}` — measured on this build
+ * (`q87_press_fix.log`, `:3471` over `leadworks_q87`). Those two bytes are trunk's own pair, the
+ * same pair every `[id]` door gives, so what a caller walking ids cannot learn from this door is
+ * which workspace holds the row it found.
  */
 async function GET_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

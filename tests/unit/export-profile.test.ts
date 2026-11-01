@@ -164,7 +164,12 @@ describe("the doors read the verdict the minute acts on", () => {
     assert.match(detail, /prisma\.exportProfile\.findUnique\(\{\s*where: \{ id \}/);
     assert.match(detail, /if \(!row\) return NextResponse\.json\(\{ error: "Not found" \}, \{ status: 404 \}\)/);
     assert.match(detail, /await assertOwns\(request, row\.workspaceId\)/, "the app's own 404-for-a-foreign-row check");
-    assert.doesNotMatch(detail, /403/, "no answer distinguishes another tenant's row from no row at all");
+    // Blank the comments first: what this guard is about is the answer the door constructs, and the
+    // file now *names* the `403` it refuses to give — measured at `:3471` (`q87_press_fix.log`: a
+    // foreign row is `404 / 22`, a missing one `404 / 21`, and neither is a 403), so a bare `/403/`
+    // over the whole source would fail on prose. Same treatment the census-writers check below
+    // already gives a comment that mentions `delete`.
+    assert.doesNotMatch(blankComments(detail), /403/, "no answer distinguishes another tenant's row from no row at all");
     assert.match(detail, /take: 5/, "the recent exports are a page, not the crowd");
     assert.match(detail, /export const GET = withAuth\(GET_impl\)/);
   });
