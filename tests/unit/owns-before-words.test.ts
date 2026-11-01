@@ -263,9 +263,18 @@ describe("the pair door: whose lead, then what body", () => {
     assert.ok(enrich.indexOf("assertOwns(request, _owned.workspaceId)") < enrich.indexOf("prisma.job.create"), "that branch is the model, not the target");
   });
 
-  it("still answers an unknown action after the dispatch, which is disclosed rather than fixed", () => {
-    assert.match(code, /return NextResponse\.json\(\{ error: "Unknown action" \}, \{ status: 400 \}\);/);
-    assert.ok(code.indexOf("Unknown action") > code.indexOf("add-to-list"), "the tail is where the press measured it: after both branches");
+  it("answers an unknown action above the dispatch now, because #75 wrote the reader this tail deferred to", () => {
+    // Retargeted, not deleted, and by the round that made it true. This pin existed because the pair
+    // door answered `400 "Unknown action"` at the *end* of `POST_impl` — after both branches, so an
+    // anonymous or padded ask about a row another tenant held was refused below the lookup that knows
+    // the row. #79 disclosed that rather than fixing it (`README.md:4581`, "still a 400 at both
+    // builds"); `actionParam` is what closed it, and the two assertions below are the order #75
+    // promised: the reader runs above both branches, and the old literal survives only as the
+    // fallback a passed-but-unhandled spelling would reach.
+    const reader = code.indexOf("actionParam(searchParams, LEAD_ACTIONS)");
+    assert.ok(reader >= 0, "the pair door no longer reads the action word through this app's reader");
+    assert.ok(reader < code.indexOf('action === "enrich"'), "the word is judged above the branches, not after them");
+    assert.match(code, /return asked\.error \?\? NextResponse\.json\(\{ error: "Unknown action" \}, \{ status: 400 \}\);/);
   });
 });
 
@@ -350,9 +359,15 @@ describe("the document already promised the key, and still does", () => {
     assert.match(get.slice(0, 900), /"400": "A `fields` entry that is not a Lead column, or names nothing\."/);
   });
 
-  it("does not advertise a status the doors do not answer", () => {
+  it("advertises the 400 the pair door answers, and still not the 401", () => {
+    // The other half of the same retarget. #79 pressed that this door's `400` and `401` were both
+    // absent from the document — the refusal a caller hits most often, unadvertised — and pinned the
+    // absence because that was the measured state. #75 put the `400` in, with the sentence naming the
+    // three spellings `actionParam` refuses, so the pin now holds the document to what changed: the
+    // `400` is promised, and the `401` is the disclosure still open.
     const post = spec.slice(spec.indexOf('id: "leads.enrich"'), spec.indexOf('id: "leads.delete"'));
-    assert.doesNotMatch(post, /"40[01]":/, "the pair door's 400 and 401 are not in the document either way");
+    assert.match(post, /"400": "[^"]*action[^"]*/, "the word refusal is advertised where the door answers it");
+    assert.doesNotMatch(post, /"401":/, "the auth status is still not in the document, and this round did not change that");
   });
 
   it("still documents listId as the list to add to", () => {

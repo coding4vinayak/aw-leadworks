@@ -233,7 +233,18 @@ test("every parameter a read door documents is a parameter that door reads", () 
   // counts as read when the route's own text asks for it, either by that literal name or
   // through the helper that owns it (`pageParams` for the paging pair, `fieldsParam` for the
   // projection), because that is where the decision lives.
-  const helperOwned: Record<string, RegExp> = { page: /pageParams\(/, limit: /pageParams\(/, fields: /fieldsParam\(/ };
+  //
+  // `action` joins that table because #75 gave the word a reader of its own: six doors now call
+  // `actionParam(searchParams, …)` where each of them used `searchParams.get("action")`, so a scan
+  // that recognises only the literal would report six doors advertising a parameter they read — the
+  // opposite of what this census is for. The pattern is keyed on the call taking *this* door's own
+  // `searchParams`, so a door that documents `action` and gets it from somewhere else still offends.
+  const helperOwned: Record<string, RegExp> = {
+    page: /pageParams\(/,
+    limit: /pageParams\(/,
+    fields: /fieldsParam\(/,
+    action: /actionParam\(\s*searchParams/,
+  };
   const judged = (code: string, name: string): boolean =>
     new RegExp(`searchParams\\.get\\("${name}"\\)`).test(code) ||
     new RegExp(`\\(\\s*searchParams,\\s*"${name}"`).test(code) ||
