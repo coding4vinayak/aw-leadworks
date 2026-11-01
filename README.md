@@ -5089,6 +5089,335 @@ What this does not claim:
   pair (#96, STEP 27) is still `CONFLICTING`, so a step stacked on it is not a direct child of
   that repo's `main`.
 
+### The word a door acts on: six doors read `?action=` as raw bytes, and one map line denied a branch that answers
+
+Six write doors do something because the query string says so, and all six read that word with
+`searchParams.get("action")` — a raw byte compare, the only read of a caller's word in this app
+that gets none of the rules the other word readers have. Measured on the running app first, before
+anything was written (`ff38306` built in a fresh worktree, **:3437** over this session's own
+`leadworks_r75`, private Redis 6420, two workspaces, keys in `0600` files printed nowhere;
+`/tmp/opencode/r75_press_ab.log` holds both legs of the run, 87 legs each, plus three extra legs
+pressing the pairs the base run answered by writing):
+
+```
+POST /api/sources/src_r75_notarget?action=run                400 134 "a scrape navigates to the
+                                                                    address in config.url…"
+POST /api/sources/src_r75_notarget?action=%20run             400  26 "Unknown action"
+POST /api/sources/src_r75_notarget?action=run%20             400  26 "Unknown action"
+POST /api/sources/src_r75_notarget?action=%09run             400  26 "Unknown action"
+POST /api/sources/src_r75_notarget?action=RUN                400  26 "Unknown action"
+POST /api/sources/src_r75_notarget?action=                    400  26 "Unknown action"
+POST /api/sources/src_r75_notarget?action                    400  26 "Unknown action"
+POST /api/sources/src_r75_notarget                           400  26 "Unknown action"
+POST /api/sources/src_r75_notarget?action=run&action=run     400 134   — the same word twice is one
+POST /api/sources/src_r75_notarget?action=run&action=cancel  400 134   — `cancel` dropped
+POST /api/sources/src_r75_notarget?action=cancel&action=run  400  26   — `cancel` judged, dropped
+POST /api/jobs/job_r75_done?action=cancel                    400  39 "Cannot cancel completed job"
+POST /api/jobs/job_r75_done?action=%20cancel                 400  26 "Unknown action"
+POST /api/jobs/job_r75_pending?action=cancel&action=retry    200  11 {"ok":true}   ← it WRITES
+POST /api/jobs/job_r75_pending?action=retry&action=cancel    409 132 "a PENDING job has not
+                                                                    stopped yet…" — `cancel` dropped
+POST /api/exports/exp_r75_file?action=download               200  52 {"downloadUrl":"…"}
+POST /api/exports/exp_r75_file?action=%20download            400  26 "Unknown action"
+POST /api/exports/exp_r75_file?action=download&action=retry  200  52   — `retry` dropped
+POST /api/exports/exp_r75_file?action=retry&action=download  400  41 "Can only retry failed exports"
+                                                                    — `download` dropped
+POST /api/leads/ld_r75_a?action=%20add-to-list               400  26 "Unknown action"
+POST /api/lead-lists/lst_r75_static?action=refresh           400 141 "this list is not dynamic…"
+POST /api/lead-lists/lst_r75_static?action=%20refresh        400  26 "Unknown action"
+POST /api/lead-lists/lst_r75_static?action=add-leads&action=refresh
+                                                             400  28 "leadIds required"
+POST /api/enrichment-rules/rule_r75_unreadable?action=run    400 164 "rule cannot run: conditions
+                                                                    must be an object…"
+POST /api/enrichment-rules/rule_r75_unreadable?action=%20run 400  26 "Unknown action"
+GET  /api/openapi → /api/exports/{id} post `action`          "retry — the only action."
+```
+
+One row, one door, two answers: the same two words in the other order do the other thing, and on
+`jobs` the order decided whether anything was written at all — `?action=cancel&action=retry` on a
+`PENDING` job is `200 {"ok":true}`, and the row reads `CANCELLED` afterwards. `%20run` is not `run`
+for the door whose only action is `run`, and the `26`-byte sentence a caller lands on names neither
+the word they sent nor the words that would have worked. Meanwhile the machine-readable map on the
+same build said `exports/{id}` takes one action — that door answers `200` with a `downloadUrl` for
+`download`, and has ever since the branch was added, in a section of this README and in
+`export-retention.ts`'s own header.
+
+**That pair was measured, then taken out of the table.** The first press ran `cancel&action=retry`
+on the `PENDING` row like any other leg, and it wrote: the row read back
+(`select id, status from "Job"`) as `job_r75_pending | CANCELLED`, and the log recorded that
+branch's own 11-byte `{ "ok": true }`. (The same update also sets `completedAt` — that one is from
+the source at `ff38306`, `jobs/[id]/route.ts:78`, not a second read.) The row was reset
+(`update "Job" set status='PENDING', "completedAt"=null where id='job_r75_pending'`), the leg was
+removed from `LEGS` with the reason written above it in the script, and the guard that says
+"nothing was written" was changed from a row **count** to a state
+**fingerprint** of every seeded row (`Job`/`Export`/`Lead`/`Source`/`LeadList`/`LeadListMember`/
+`EnrichmentRule`/`EnrichmentLog` as `id=status/extra` strings, compared before and after) — a count
+cannot see a status flip in place, and that is exactly what this leg did. Both legs now print
+`nothing was written; no state moved`. The write is reported here and in the fix leg below, not
+smoothed over by re-running it until it looks harmless.
+
+The rule is the app's own, and it is already typed three times: `boolParam` (`bool-word.ts:103`)
+does `getAll`, trims, drops empties, deduplicates, refuses above one and then judges the word;
+`idFilterParam` (`ids.ts:145`) does the same reading before it resolves an id; `short()`
+(`validation-engine.ts:450`) trims before it quotes. `src/lib/action-word.ts` is the fourth copy of
+that reading, for the six doors that act: `actionParam(searchParams, X_ACTIONS)` returns the one
+word or a `400` refusal, and the vocabulary lives beside it as `SOURCE_ACTIONS`, `JOB_ACTIONS`,
+`EXPORT_ACTIONS`, `LEAD_ACTIONS`, `LEAD_LIST_ACTIONS`, `RULE_ACTIONS`. Three decisions, each one
+taken to match a neighbour:
+
+- **Padding is not part of the word.** `%20run`, `run%20`, `%09run` are `run`, as they are at
+  `?isActive=` and `?fields=`. Case is not padding: `RUN` stays refused, because `TRUE` is refused
+  at the boolean doors — but now it is refused by a sentence that names `run`.
+- **An empty value names no action.** `?action=`, `?action` and no name at all are three spellings
+  the base build could not tell apart (`""`, `""`, `null` — the first two are the same to `get`),
+  and all three get `action must be one of run, got nothing`. This is where this reader *differs*
+  from `boolParam` on purpose: an empty `?isActive=` is "no opinion" because the column has an
+  `@default` to fall back on, and a door that has to do something has no default. The `400` the
+  door already answered stays a `400`; no status moves anywhere in this round.
+- **A word repeated is a question with two answers.** The same word twice is one word —
+  `?action=download&action=download` still downloads — and two different words are refused naming
+  both, in the caller's order, with their count.
+
+The refusal is answered **on the line where each door answered `Unknown action` today**, which is
+not the same place twice: `jobs`, `exports` and `lead-lists` look the row up and `assertOwns` first,
+so their word refusal sits below that, and `sources`, `leads` and `enrichment-rules` judge the word
+first, so theirs sits above. Each door keeps `const action = asked.action;` and its own branches,
+and its tail is `asked.error ?? NextResponse.json({ error: "Unknown action" }, …)` — the old bytes
+survive for a word that is in the door's vocabulary and has no branch, which the census below
+refuses to let happen.
+
+**A/B over the same rows, nothing reseeded** (`3` jobs / `4` exports / `2` leads / `2` sources /
+`2` lists / `2` rules before either press, the state fingerprint identical at both ends). The fix
+build ran on **:3438** with its own Redis 6421 on the same database. What was refused before is now
+served or named:
+
+- every padded spelling reaches its branch: `%20run`, `run%20`, `%20run%20`, `%09run` at
+  `sources` are all `400` 134 — **the same 134 bytes as the plain control** — `%20cancel` and
+  `cancel%20` and `%09cancel` at `jobs` are `400` 39, `%20retry` at `jobs` is the `409` 132, every
+  padded `download` at `exports` is `200` 52, `%20add-to-list` at `leads` is `400` 71, `%20refresh`
+  at `lead-lists` is `400` 141, `%20run` at `enrichment-rules` is `400` 164;
+- two words are refused with both named in the caller's order — 89 bytes at `sources`
+  (`("run", "cancel")` and `("cancel", "run")`), 91 at `jobs`, 93 at `exports`, 97 at `leads`, 96 at
+  `lead-lists`, 90 at `rules` — including the pairs that used to answer one of the two:
+  `?action=download&action=retry` was `200` 52 and is now `400` 93, `?action=retry&action=download`
+  was `400` 41 and is now `400` 93, `?action=add-leads&action=refresh` was `400` 28 and is now
+  `400` 96, and **the pair whose first word was `cancel`** — `?action=cancel&action=retry` on the
+  `PENDING` row, which on the base run answered with that branch's own 11-byte body (`{"ok":true}`,
+  from `NextResponse.json({ ok: true })` after the update) instead of refusing the pair — is a
+  two-word `400` (the same 91 bytes this door spends on the pair in either order) with the row still
+  reading `job_r75_pending=PENDING/-` afterwards;
+- a word outside a door's vocabulary is refused by name and set: `RUN` is
+  `action must be one of run, got "RUN"` (50), `CANCEL` 64, `DOWNLOAD` 68, `ADD-TO-LIST` 75,
+  `REFRESH` 85, and `?action=run` at `jobs` — a real word, at a door that does not take it — is
+  `action must be one of retry | cancel, got "run"` (61);
+- nothing named is refused too: `?action=`, `?action` and no name at all are 50/61/63/67/81/50 bytes
+  on the six doors, each `… got nothing`;
+- and what must not move does not: `action=run` 134 at `sources`, `cancel` 39 and `retry`-on-PENDING
+  409/132 at `jobs`, `download` 200/52 and retired `410` 91 and no-file `404` 26 at `exports`,
+  `add-to-list` 71 at `leads`, `refresh` 141 at `lead-lists`, `run` 164 at `rules`, and every tenant
+  B / foreign-row leg at all six doors, all byte-identical to the base run.
+
+**One change is a behaviour change, not just a sentence, and it is in the callers' favour.** At
+`sources` and `enrichment-rules` a *padded* word at a row the tenant does not hold used to answer
+`400` 26 `Unknown action` while the plain word answered `404` 22 `Not found.` — two different
+statuses for the same row depending on a space. The trimmed word now enters the same branch as the
+plain one, so both spellings answer `404` 22. A door that used to say "I could not read your word"
+about a row it does not hold says what a typo says. The same thing happened at `leads`, one step
+down: a padded `add-to-list` at a row the tenant does not hold used to answer `400` 26 `Unknown
+action` where the plain word answered `400` 71 `"listId is required"` — the same code, a different
+sentence — and both spellings now answer the 71.
+
+**The map now says what the doors do.** Six `action` descriptions carry their own vocabulary plus
+one shared sentence — `Read as one word: padding is not part of it (%20run is run), the same word
+twice is one word, two different words are refused 400 naming both…` — typed once as `ACTION_WORD`
+beside the existing `QUEUE_REFUSED`. `exports/{id}` no longer claims one action: its `action`
+description names `retry` *and* `download`, and its operation gained the `404` (`download` on a row
+with no file) and the `410` (`download` on a retired file) that it answers and never advertised, and
+its summary — the line `llms-full.txt` carries — names both too. `sources.run`, `jobs.lifecycle` and `leads.enrich` gained the `400` line they were already making
+and not listing; `rules.run` and `leadLists.members` already listed a `400` for their own reasons,
+and each line now says a refused word is answered there too. The `operationId`
+stays `exports.retry`: it is the handle an SDK generates a method name from, and renaming it is a
+breaking change for a client that already keys on it — the prose was wrong, not the handle. The
+served contract read 73,075 characters on the base instance and 78,403 on this one (78,559 bytes
+over the wire); `public/llms-full.txt` went 8,447 → 8,528 bytes and `check:llms-full` says
+`unchanged` after the rebuild, which is the whole claim: one summary line moved and nothing else in
+that file did.
+
+Pinned offline in `tests/unit/action-word.test.ts` (33 tests, no network, no database, no server):
+the base read first — `searchParams.get("action")` handing back `" run"` for `?action=%20run` and
+comparing that to `"run"`, `?action=` and `?action` both being `""` where only an absent name is
+`null`, and `get()` returning the first of two words while the second disappears; then the six
+vocabularies and the exact sentences (`action must be one of retry | cancel, got "RUN"`,
+`action was given 2 words ("cancel", "retry"); this door acts on one of them`, `… given 3 words`
+with all three quoted, `… got nothing`); then `actionParam` over the padded, tabbed, newline-carrying,
+doubled, emptied and case-shifted spellings, an inner space kept as part of the word (`ru%20n` is
+not `run`), and a second key in the query string (`?action=run&run=cancel`) not counting as a second
+word; then the doors themselves — a census over every `.ts` under `src/` with its comments stripped,
+requiring that **no file still contains `searchParams.get("action")`**, that each of the six reads
+through `actionParam(searchParams, X_ACTIONS)`, keeps `const action = asked.action;` and refuses on
+the `asked.error ?? …` line, and that the words its `if (action === "…")` branches serve are
+*exactly* its exported vocabulary in order (the exports door's `plan.action === "none"` is a
+different value and is not counted); then the map — every one of the six `action` descriptions
+containing every word of its door's vocabulary and the shared reading sentence, `exports.retry`
+naming `download` and *not* containing `the only action`, and all six advertising a `400` that
+mentions the word, with `exports.retry` also advertising its `404` and `410`.
+
+Non-vacuity measured, three ways, each restored to the bytes that were committed: taking
+`.map((one) => one.trim())` out of the reader fails **5 of 33**; letting two words through
+(`asked.length > 1` → `> 2`) fails **3 of 33**; putting the raw `searchParams.get("action")` back in
+the `jobs` door fails **2 of 33** — the door's own pin and the census.
+
+**Gates, all of them measured on the tree that was pushed:** suite **1369/1369** where trunk
+measures **1336/1336** at `ff38306` (the 33 new pins, nothing else added), `tsc` exit 0, lint **0
+errors / the same 13 warnings**, `check:contract` **8/8**, `check:llms-full` **unchanged**, build
+exit 0, no lockfile in the diff. **One existing test was retargeted, and it is named here:**
+`tests/unit/job-retry.test.ts:303` is a census of every file under `src/` that spells the word
+`retry` in code, and this round moved the two retry words out of the two doors into one module, so
+`src/lib/action-word.ts` is now on that list. The list grew by one name and every name it already
+demanded is still demanded — the census is as exact as it was, not relaxed, and nothing was deleted.
+
+**Said rather than smoothed:**
+- **The two instances were sequential, not simultaneous.** Both builds live in this one worktree, so
+  the base server was stopped by its exact PID (`ss -ltnp | grep ':3437'` → `kill -TERM 3780066`)
+  before the fix build, and the byte-identical controls above are what tie the two runs to one
+  dataset.
+- **The `?action=` vocabulary did not change anywhere.** No door gained or lost an action; `download`
+  was already served and is now already described. Nothing was migrated, and no door's *success*
+  bytes moved.
+- **`remove-leads` and `enrich` were never pressed**, because both write on a well-formed request:
+  they appear in this round only as dropped second words and as vocabulary in the contract. The legs
+  that reach them (`add-to-list` with no body, `refresh` on a static list) are the refusals.
+- **The leads door still judges the body before the row.** `?action=add-to-list` with `{}` at a row
+  another workspace holds is `400` 71 `"listId is required"` on both builds — the same bytes a
+  tenant gets about its own typo. That is a separate door-ordering finding, measured here, and left
+  alone by this change; `422` for a list that resolves nowhere is unchanged too.
+- **No shape check on a word is claimed.** `add-to-list` and `remove-leads` are this app's words; a
+  word that happens to be one of them at a door that takes it is served, however the caller got it.
+- **Nothing was enqueued, and `queues.export` was not pressed.** The state fingerprint at both ends
+  of both legs is the evidence: `Job=3, Export=4, Lead=2, LeadListMember=0, EnrichmentLog=0,
+  Webhook=0, LeadActivity=0, Source=2` with each row's own `id=status/extra` string identical.
+- **No UI change, and no UI leg**: the dashboard's own buttons are server actions
+  (`<form action={submit}>`), not query strings against these six doors; `grep` over `src/` finds no
+  caller that sends `?action=` to them.
+- **No demo step** — `aw-deploy`'s #96 (STEP 27) is still `CONFLICTING`.
+
+Nothing touched `:3300`, `leadworks_sim` or the shared `leadworks` database, and no port, database or
+Redis instance belonging to another session was used: this round's runtime was `:3437`/`:3438`,
+`leadworks_r75`, Redis 6420/6421, all created by `/tmp/opencode/r75_setup.sh` and torn down with it.
+
+### Rebased onto `4007a11` for the landing pass, and pressed against that trunk again
+
+While this PR sat open, `main` took three rounds — `#79` (`aa2e380`), `#87` (`86e537d`) and `#106`
+(`4007a11`). `#79` is the one that collides in substance rather than in text: it pressed this round's
+own door at its own tail and **disclosed the finding instead of closing it** (`README.md:4581`,
+"`?action=nope` with no key is still a `400` … at both builds. The tail sits after the dispatch and
+names no vocabulary, so it is not this round's leak"), and it pinned that tail in
+`tests/unit/owns-before-words.test.ts`. `actionParam` is what closes it, so three of `#79`'s pins were
+retargeted here — each with the reason written where the pin lives, none deleted, none loosened:
+
+| pin | was holding | now holds |
+| --- | --- | --- |
+| `owns-before-words` · "the pair door … after the dispatch" | the literal `Unknown action` tail, below both branches | `actionParam(searchParams, LEAD_ACTIONS)` **above** `action === "enrich"`, with the old literal surviving only as the `asked.error ?? …` fallback |
+| `owns-before-words` · "does not advertise a status the doors do not answer" | neither `400` nor `401` in the document for the pair door | the `400` **is** documented (this round put it in, naming the spellings the reader refuses) and the `401` still is **not** |
+| `source-filter` · "every parameter a read door documents is a parameter that door reads" | `page`/`limit`/`fields` recognised through their helpers | `action` recognised through `actionParam(\s*searchParams`, or six doors would be reported as advertising a word they read |
+
+Each retarget was checked to still bite: moving the reader below the `enrich` branch, putting the
+`400` back out of the document, and reverting the source door to `searchParams.get("action")` each
+fail the suite; all three were restored to the committed bytes and the suite is green on the tree
+below. The README met `main` only at its own anchor — `#79`'s section and this one were appended in
+the same slot, both are kept, `main`'s first (`5640 → 5637` lines, zero markers left).
+
+Everything was measured again on that tree, in a runtime this session created for it
+(`/tmp/opencode/q110_setup.sh`: `leadworks_q110_base` and `leadworks_q110_fix` seeded by the **same**
+script with the **same** rows — two workspaces, 2 leads, 2 sources, 3 jobs, 3 exports, 3 lists, 1 rule
+per side — Redis 6433/6434, four keys in `0600` files printed nowhere, base `4007a11` on **:3475**
+and this branch on **:3476**, built sequentially because one worktree holds one `.next`). 37 legs,
+`/tmp/opencode/q110_press_base.log` and `q110_press_fix.log`, **22 answers move and 15 hold
+byte-identical** (`S1 S10 J1 J5 J6 X1 X3 X6 L1 L3 D1 D3 D5 R1 R3`):
+
+| leg | `?action=` | base `4007a11` | this branch |
+| --- | --- | --- | --- |
+| `S2` | `%20run` | `400 / 26 "Unknown action"` | `400 / 136 "a scrape navigates to the address in config.url…"` |
+| `S3` | `run%20` | `400 / 26 "Unknown action"` | `400 / 136` same row verdict |
+| `S4` | `%09run` | `400 / 26 "Unknown action"` | `400 / 136` same row verdict |
+| `S5` | `RUN` | `400 / 26 "Unknown action"` | `400 / 50 "action must be one of run, got \"RUN\""` |
+| `S6` | *(empty)* | `400 / 26 "Unknown action"` | `400 / 50 "… got nothing"` |
+| `S7` | `x` | `400 / 26 "Unknown action"` | `400 / 48 "… got \"x\""` |
+| `S8` | *(name absent)* | `400 / 26 "Unknown action"` | `400 / 50 "… got nothing"` |
+| `S9` | `run&action=cancel` | `400 / 136` — `cancel` dropped | `400 / 89 "action was given 2 words (\"run\", \"cancel\")…"` |
+| `S11` | `%20run` at **another tenant's** source | `400 / 26 "Unknown action"` | `404 / 22 "Not found."` |
+| `J2` | `%20cancel` | `400 / 26 "Unknown action"` | `200 / 11 {"ok":true}` — **it writes** |
+| `J3` | `cancel&action=retry` | `200 / 11` — **it writes** | `400 / 91` naming both words |
+| `J4` | `retry&action=cancel` | `409 / 134` — `cancel` dropped | `400 / 91` naming both words |
+| `X2` | `%20download` | `400 / 26 "Unknown action"` | `200 / 53 {"downloadUrl":…}` |
+| `X4` | `retry&action=download` | `400 / 41 "Can only retry failed exports"` | `400 / 93` naming both words |
+| `X5` | `download&action=retry` | `200 / 53` — `retry` dropped | `400 / 93` naming both words |
+| `L2` | `%20add-to-list` | `400 / 26 "Unknown action"` | `400 / 42 "request body is not valid JSON"` |
+| `L4` | `%20add-to-list` at **another tenant's** lead | `400 / 26 "Unknown action"` | `400 / 42`, the same bytes `L3`'s plain word gives |
+| `L5` | `nope`, **no key** | `400 / 26 "Unknown action"` | `400 / 68 "action must be one of enrich \| add-to-list, got \"nope\""` |
+| `L6` | `enrich&action=add-to-list` | `200 / 37 {"jobId":…}` — **it writes, and enqueues** | `400 / 97` naming both words |
+| `D2` | `%20add-leads` | `400 / 26 "Unknown action"` | `400 / 28 "leadIds required"` |
+| `D4` | `add-leads&action=remove-leads` | `400 / 28` — `remove-leads` dropped | `400 / 101` naming both words |
+| `R2` | `%20run` | `400 / 26 "Unknown action"` | `400 / 166` the rule's own `conditions` verdict |
+
+Three legs write on trunk (`J1` the plain cancel, `J3` the doubled one, `L6` the doubled enrich) and
+two write here (`J1`, and `J2` — the padded cancel, which the caller actually asked for); the two
+doubled-word writes are simply gone, which is the finding in one line: on trunk a second word was
+silently dropped and the row acted on the first, so one request could cancel a job or enqueue an
+enrichment walk while the caller's own bytes said two different things. Every leg that wrote was put
+back before the next one pressed it, and the state
+fingerprint at the close of both legs equals the one at its open (`True` on both builds) — the press
+counts each row's content with `updatedAt`/`createdAt` stripped, because *any* write stamps them and a
+fingerprint carrying them calls a put-back a drift; the first version of that fingerprint also needed
+`scoredAt`/`lastEnrichedAt`/`scoreBreakdown` in the reset, which is what `L6`'s `enrich` actually
+writes on trunk.
+
+`GET /api/openapi` on the same two instances: **`78,693` bytes, sha `fecbc15ef713`** on the base
+build — byte-for-byte the digest `#106` recorded for trunk, which is the cross-check that the base
+instance is that build — and **`84,057`, sha `3f4108b3615c`** here (`+5,364` B). Six operations
+document `?action=` on both builds; on this branch all six carry the reading sentence and their own
+door's vocabulary (`exports.retry` gained `download` as well as `retry`).
+
+**Said rather than smoothed, on this rebased tree:**
+
+- **`L5` hands an unauthenticated caller the door's vocabulary now.** Trunk's tail said `Unknown
+  action` and named nothing; `#79` relied on exactly that when it chose not to hoist the row read
+  above the dispatch, and that reasoning is void here: the fix answers `400 / 68 "action must be one
+  of enrich | add-to-list, got \"nope\""` with no key sent. What is **not** new is the disclosure —
+  the same press read `GET /api/openapi` with no key at all and got `200` with all six vocabularies
+  printed, on both builds. The ordering (`400` before `401`, word before key) is untouched by this
+  round and is still `#79`'s open finding, now with a wider sentence in it.
+- **The leads door still judges a body that cannot be parsed before it reads the row.** `L1`/`L3` are
+  byte-identical at both builds (`400 / 42 "request body is not valid JSON"`, the caller's own lead
+  and the neighbour's alike), and the padded twins `L2`/`L4` now reach those same bytes instead of
+  the word refusal that used to hide them. `readJson` stays in front; this round borrows a word rule,
+  it does not re-declare `#79`'s ordering.
+- **Four doors, four shapes of the foreign-row answer.** Before this round a padded word at a row
+  another tenant holds was `400 "Unknown action"` at the source door and `404` at the jobs, exports
+  and list doors (`J6`, `X6`, `D5` hold at `404 / 22` on both builds); after it all four are the app's
+  one stance — a foreign row is `404 / 22 "Not found."`, no answer that says which tenant holds it.
+- **Two numbers in this section's own `Said rather than smoothed` list are superseded by the press
+  above, and are left standing as what was measured then.** `enrich` was recorded there as "never
+  pressed" because it writes on a well-formed request; `L6` pressed it at a doubled word and the base
+  build did write (`200 / 37 {"jobId":…}` plus the row's score columns), which is the same hazard one
+  spelling wider. And the body-before-row bullet quoted `400 / 71 "listId is required"` for
+  `?action=add-to-list` with `{}`; this pass sent no body at all, so the pair it measured is
+  `400 / 42 "request body is not valid JSON"` (`L1`/`L3`, identical at both builds). The finding is the
+  same one; only the bytes of the ask differ, and the `{}`-body leg was not re-pressed here.
+- **The two instances were sequential, not simultaneous**, and both servers were stopped by the exact
+  PID read from `ss -ltnp | grep ':3475'` / `':3476'` at the close of the round.
+
+**Gates, all of them on the tree that was pushed:** `npm test` **1493/1493** where trunk measures
+**1460/1460** at `4007a11` (the difference is exactly this round's 33 pins, plus `#79`'s three
+retargeted ones counting where they already counted), `tsc --noEmit` exit 0, lint **0 errors / the
+same 13 warnings**, `check:contract` **8/8**, `check:llms-full` **unchanged**, `npm run build` exit 0
+for both the base and the fix tree, no lockfile in the diff. **No demo step** — `aw-deploy#96` was
+re-checked at the landing pass and is still `OPEN` / `CONFLICTING` / `DIRTY`.
+
+Nothing here touched `:3300`, `leadworks_sim` or the shared `leadworks` database, and no resource
+belonging to another session was used: this pass's runtime was `:3475`/`:3476`,
+`leadworks_q110_base`/`leadworks_q110_fix`, Redis 6433/6434, created and torn down by this session.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)

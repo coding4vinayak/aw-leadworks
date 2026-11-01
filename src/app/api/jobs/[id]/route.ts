@@ -7,6 +7,7 @@ import { jobReport } from "@/lib/job-report";
 import { retryAsk, retryRow } from "@/lib/job-retry";
 import { enqueueJob, hasRunner, QueueUnavailableError } from "@/lib/queue";
 import { markNeverQueued } from "@/lib/queue-refusal";
+import { JOB_ACTIONS, actionParam } from "@/lib/action-word";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +43,8 @@ async function PATCH_impl(request: Request, { params }: { params: Promise<{ id: 
 async function POST_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
-
+  const asked = actionParam(searchParams, JOB_ACTIONS);
+  const action = asked.action;
   const job = await prisma.job.findUnique({ where: { id } });
   if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await assertOwns(request, job.workspaceId);
@@ -79,7 +80,11 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
     return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  // The word the caller sent is not one this door takes, or none was sent at all.
+  // `actionParam` refused it with the vocabulary named; the old opaque sentence stays
+  // reachable for a word that is in `JOB_ACTIONS` but has no branch above, which the
+  // census test in `tests/unit/action-word.test.ts` refuses to let happen.
+  return asked.error ?? NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 
 async function DELETE_impl(request: Request, { params }: { params: Promise<{ id: string }> }) {
