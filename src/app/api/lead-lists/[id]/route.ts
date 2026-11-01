@@ -17,6 +17,16 @@ async function GET_impl(request: Request, { params }: { params: Promise<{ id: st
   const { id } = await params;
   const { searchParams } = new URL(request.url);
 
+  // Whose row this is comes first, and the two cheap columns are enough to say so — the POST and
+  // PATCH below read them before they judge anything. On the base build this door answered
+  // `?fields=nonsense` with the whole 676-byte column vocabulary of `Lead` before it looked the
+  // list up at all: to an anonymous caller, to another tenant's list id, and to one that exists
+  // nowhere. A `?fields=` argument cannot be validated before the read that uses it, so the row is
+  // resolved twice and the second read is the one that carries the members.
+  const _owned = await prisma.leadList.findUnique({ where: { id }, select: { workspaceId: true } });
+  if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  await assertOwns(request, _owned.workspaceId);
+
   // ?fields= projection: ask which Lead columns to hand back per member.
   const asked = fieldsParam(searchParams);
   let picked: LeadExportField[] | undefined;
@@ -44,7 +54,6 @@ async function GET_impl(request: Request, { params }: { params: Promise<{ id: st
     prisma.leadListMember.count({ where: { listId: id } }),
   ]);
   if (!list) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  await assertOwns(request, list.workspaceId);
 
   const base = picked ? { ...list, memberFields: picked } : list;
   return NextResponse.json({ ...base, memberPage: memberPage(recorded, list.members.length, page, limit) });
