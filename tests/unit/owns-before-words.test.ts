@@ -121,15 +121,22 @@ describe("the census: who judges a caller's words, and after what check", () => 
   const handlers = collectHandlers();
 
   it("sees every exported handler, so a door it cannot see is a failure", () => {
-    assert.equal(handlers.length, 49, "the scanner found a different number of handlers than this round measured");
+    // Fifty on the trunk this round landed onto (`aa2e380`, whose forty-nine were measured in round
+    // #79), fifty-one here: `#59` adds `export-profiles/route.ts GET` and `export-profiles/[id]/route.ts
+    // GET`, two doors the scanner could not have counted before the files existed. The count is the
+    // scanner's visibility, so it moves with the app and is retargeted rather than relaxed.
+    assert.equal(handlers.length, 51, "the scanner found a different number of handlers than this round measured");
   });
 
-  it("finds twenty-four units that judge a caller's words", () => {
-    // Nineteen whole handlers and five action branches, counted with the widened `WORDS` above.
+  it("finds twenty-five units that judge a caller's words", () => {
+    // Twenty whole handlers and five action branches, counted with the widened `WORDS` above; the
+    // trunk measured nineteen plus five, and `#59` adds the twentieth whole one:
+    // `GET /api/export-profiles` judges `?page=` and `?limit=` through `pageParams`,
+    // after `authedWorkspaceId` and against a `where` that is already the caller's own workspace.
     // A new door that validates is a new unit, and it has to be looked at rather than absorbed:
-    // the count is the thing being asserted.
+    // the count is the thing being asserted, and the ordering assertion below is what it is for.
     const units = allUnits();
-    assert.equal(units.length, 24, "units: " + units.map((u) => u.label).join(" | "));
+    assert.equal(units.length, 25, "units: " + units.map((u) => u.label).join(" | "));
   });
 
   it("sees the query-string doors the first version of this scan did not", () => {
