@@ -4390,6 +4390,192 @@ What this does not claim:
   STEP 27) is still `CONFLICTING` (`mergeStateStatus: DIRTY`, re-checked at the time of this
   round's PR), so a step stacked on it would not be a direct child of that repo's `main`.
 
+
+## Whose row is this? — two doors that answered a caller's words before they knew the caller
+
+`POST /api/leads/{id}?action=add-to-list` and `GET /api/lead-lists/{id}` are the two doors in this
+app that judge what a caller sent before they know who sent it. Both files already contain the
+other order: `PATCH_impl` reads the lead, answers 404, asserts the workspace and only then validates
+the body; the list door's own POST and PATCH read `workspaceId` off the row first. The list read
+door did not, and the pair branch did not.
+
+Measured on the running app first (`ff38306`, built in a fresh worktree, **:3445** over this
+session's own `leadworks_r79`, private Redis 6428, two workspaces, keys read from `0600` files and
+printed nowhere; **thirty legs** in `/tmp/opencode/r79_press_base.log` — three leads, three lists
+and three membership rows seeded by the press itself, every leg resetting them and printing the sha
+of all three tables before and after):
+
+| the leg | `ff38306` answers | the words it hands over |
+| --- | --- | --- |
+| `POST /api/leads/ld_r79_b1?action=add-to-list` with another workspace's lead and `{"listId":42}` | `400` / 101 `listId must be text, got a number` | the body grammar of a row that is not the caller's |
+| `POST /api/leads/ld_r79_ghost?action=add-to-list`, same body, a lead that exists nowhere | `400` / 101, the same bytes | as above, for a made-up id |
+| `POST /api/leads/ld_r79_1?action=add-to-list`, same body, **no key at all** | `400` / 101, the same bytes | an unauthenticated caller is told what `listId` must be |
+| `GET /api/lead-lists/lst_r79_full?fields=nonsense`, **no key at all** | `400` / 676 `fields[0] must be one of id \| email \| phone \| … \| updatedAt` | the whole `Lead` column table, to anyone who types a question |
+| `GET /api/lead-lists/lst_r79_b?fields=nonsense`, another workspace's list | `400` / 676, the same bytes | and again, at a row the caller cannot read |
+| `GET /api/lead-lists/lst_r79_ghost?fields=nonsense`, a list that exists nowhere | `400` / 676, the same bytes | and a third time |
+
+The 676-byte reply is the vocabulary `Export.fields` takes — the shape of the workspace's data,
+which the same build keeps behind a key everywhere else. Note what the *well-formed* version of each
+of those six legs already answered on the base build: `404 / 22 {"error":"Not found."}` for another
+workspace's row, `404 / 21 {"error":"Not found"}` for a row that is not there, `401 / 64` for no key.
+**This round adds no behaviour. It makes the malformed question get the answer the well-formed
+question already got.**
+
+The fix is two reorderings — nineteen lines added and four removed across two files, no new call, no
+new dependency, no new status:
+
+- `src/app/api/leads/[id]/route.ts:127-145` — the branch now reads the JSON (`readJson`, so a body
+  that is not JSON still fails as a body), resolves the lead, answers `404`, asserts the workspace,
+  and *then* asks `validateBody(raw.body, LEAD_ADD_TO_LIST)`. The list is still looked up after the
+  body names it, because until the body is judged there is no list id to look up.
+- `src/app/api/lead-lists/[id]/route.ts:26-42` — the door now takes `select: { workspaceId: true }`
+  off its own row, answers `404`, asserts, and only then reads `?fields=` and judges it. A projection
+  cannot be validated before the read that uses it, so the row is resolved twice and the second read
+  is the one that carries the members — the same two-read shape the POST and PATCH in that file use.
+
+**A/B over the same rows** (fix build on **:3446** with its own Redis 6429, `/tmp/opencode/r79_press_fix.log`,
+diff in `/tmp/opencode/r79_press_ab.log`): exactly the **six legs above change**, and each one lands on bytes
+this press already contains —
+
+| leg | base | fix | that byte string already appears at |
+| --- | --- | --- | --- |
+| A1 foreign lead, `{"listId":42}` | `400 / 101` | `404 / 22` | A3, same door, well-formed body |
+| A2 no such lead, `{"listId":42}` | `400 / 101` | `404 / 21` | A4 |
+| A5 no key, `{"listId":42}` | `400 / 101` | `401 / 64` | A6, A12 |
+| B1 no key, `?fields=nonsense` | `400 / 676` | `401 / 64` | B8, B9 |
+| B2 another tenant's list, `?fields=nonsense` | `400 / 676` | `404 / 22` | B4 |
+| B3 no such list, `?fields=nonsense` | `400 / 676` | `404 / 21` | B5 |
+
+**Twenty-four of the thirty legs answer the same at both builds.** Twenty-two are byte-identical;
+the two that read the caller's own list back are `200 / 482` with `?fields=email` and `200 / 1068`
+with no `?fields=` at both ends and differ only in the `addedAt` stamp the press rewrote when it
+re-seeded the membership — with every timestamp blanked they are the same bytes (`norm=` in both
+logs). What that twenty-four contains is the point:
+
+- `B7` — the owner asking for a column nobody has: **`400 / 676` at both builds**. The vocabulary did
+  not become a secret from the person entitled to it; the door just stopped handing it out for free.
+- `A9` the pair already true (`409 / 130`), `A10` the pair not yet true (`200 / 11`, the one leg that
+  moves a row, on both builds), `A11` a missing `listId` (`400 / 71`), `A7` a list nobody has
+  (`404 / 26`), `A8` another tenant's list (`404 / 22`).
+- `A13` — `?action=nope` with no key: `400 / 26 "Unknown action"` at both builds, still named below.
+- The sibling doors: `C1` `PATCH /api/leads/{id}` anonymous with a malformed body (`401 / 64` — the
+  rule this round copied), `C2` `PATCH /api/lead-lists/{id}` on another tenant's list (`404 / 22`),
+  `C3` `remove-leads` (`200 / 11`), `C4` a dynamic refresh (`200 / 94`), `C5` a static one
+  (`400 / 143`), `C6` `add-leads` anonymous (`401 / 64`), `C7` `GET /api/leads?minScore=1e2`
+  anonymous (`401 / 64` — last round's door judges the query after the key, and that is the order
+  this round walks toward).
+
+The published contract does not move: **73,195 B, sha256 `319930bc8c49`** at `/openapi.json` and
+`/api/openapi`, byte-identical between the two builds by `cmp`, and `public/llms-full.txt`
+unchanged. That is measured, not assumed — both entries already read `auth: "key"`, and the
+documented `400` at `leadLists.get` ("A `fields` entry that is not a Lead column, or names nothing")
+stays true for every caller the door now lets that far. The code was behind the document; this
+round closes the gap without touching either.
+
+## Pins
+
+**Thirty-six new tests** in `tests/unit/owns-before-words.test.ts`, with the branch-aware census as the rule
+and the two doors as its first users:
+
+- **the census itself** — `collectHandlers()` sees 49 handlers, 19 units judge a caller's words, and
+  the count is asserted rather than trusted, because a scanner that silently sees less is the failure
+  mode this family has hit three times.
+- **it is branch-aware, and that is load-bearing** — the trunk order at the pair door is reconstructed
+  in the test and fed to both scans: the naive whole-handler scan clears it (the `enrich` branch above
+  it authenticates at `:97`, earlier in the file than `add-to-list`'s `validateBody`), the branch
+  slice names it. A pin that only proves the census is happy proves nothing.
+- **no door answers a caller's words before it knows who is asking** — offenders `0`, and the message
+  names the offender, so a fourth ordering at a new door fails by name.
+- a shared head that authenticates covers the branches below it (asserted as a real property of the
+  scan, not assumed).
+- **the pair door, in order** — `readJson` < the lead's `findUnique` < `assertOwns` < `validateBody`;
+  the 404 that ends the branch is the row's, not the body's; the list is still read after the body
+  names it, and the list's own ownership check still sits between that read and the write; the branch
+  still writes `leadListMember.create` and no fold arrived here.
+- **the list read door, in order** — `assertOwns` < `fieldsParam` < `LEAD_FIELD_PICK`'s `validateBody`
+  < the `include` read; the cheap first read selects `workspaceId` and nothing else; the second read's
+  `if (!list)` 404 survived; `memberPage` still gets its recorded count.
+- **the siblings that were already right stay right** — `PATCH_impl` in the leads file (read → row →
+  owns → body), the list file's POST and PATCH (row → owns → action), the `enrich` branch's auth
+  before it creates a job.
+- **the contract still promises a key at both doors** (`auth: "key"` on `leads.enrich` and
+  `leadLists.get`), and `listId` is still documented as the list to add to — the prose this round
+  made true is pinned so a later round cannot quietly document the leak back in.
+- **the README section's own claims** — its place in the file, the six legs with the byte counts
+  above, the twenty-four that held, the `400 / 676` the owner still gets, the unchanged contract sha,
+  and the `Unknown action` tail named rather than smoothed.
+
+One existing pin was **retargeted rather than relaxed**: `tests/unit/list-fields.test.ts:194` required
+`await assertOwns(request, list.workspaceId)` inside `GET_impl` — the read that carries the members.
+The door now asserts ownership against the cheap row read that precedes the projection, so the pin
+requires `assertOwns(request, _owned.workspaceId)`, still after a `findUnique` on the same table, and
+**gains** a line this round is about: ownership must be asserted before `fieldsParam`. Nothing was
+deleted and the projection's own pins (`:178`, `:188`) are untouched.
+
+**Non-vacuity, nine measurements over nine rules** (`/tmp/opencode/r79_perturb.py`): the pair door
+put back to the trunk order — 3 tests, the census naming it and both ordering pins; the list read
+door put back the same way — 3 tests, this one and the retargeted projection pin; head-coverage
+switched off — 2 (the two `lead-lists/[id] POST` branches become false leaks); branch slicing
+switched off — 4 (and the file stops registering its last 8 tests, 65 down to 57, which is what the
+whole-handler scan does to a suite); the second not-found deleted — 2; the duplicate-skipping fold
+arriving at the pair door — 1, which is #111's territory and fails here on purpose; the page
+arithmetic moved above the ownership check — 1; `auth: "key"` changed to `auth: "none"` at
+`leadLists.get` — 1; the README heading renamed — 8. All nine bit, and `sha256sum -c` over the five
+touched files reports every one of them back at its pre-run digest.
+
+Recorded because two earlier runs of this harness died mid-loop and left the worktree mutated — the
+pair door back in trunk order once, `pageParams` relocated above `assertOwns` once. Both were caught
+only by re-running the suite afterwards, which is not a control: a borrowed tree that comes back
+changed is worse than no measurement. The harness now holds the pristine bytes in memory, restores
+each mutation in a `finally`, treats a missing anchor as an error rather than a silent skip, and
+registers the same restore with `atexit`. The two counts above that differ from an earlier draft of
+this paragraph — page arithmetic 2 then, 1 now — differ because that earlier run was taken against
+the leftover mutation, not against this round's code.
+
+Gates: `npm test` **1372/1372** (trunk `ff38306` measures **1336/1336**; the 36 new pins are the whole
+difference) · `tsc --noEmit` exit 0 · `npm run lint` **0 errors / the same 13 pre-existing warnings** ·
+`npm run check:contract` **8/8** · `npm run check:llms-full` reporting `public/llms-full.txt`
+**unchanged** · `npm run build` exit 0 · no lockfile in the diff.
+
+## Said rather than smoothed
+
+- **`?action=nope` with no key is still a `400` (`400 / 26 "Unknown action"`) at both builds.** The
+  tail sits after the dispatch and names no vocabulary, so it is not this round's leak. Hoisting one
+  row read above the dispatch would make every unknown action a `404` for a lead that exists and a
+  `401` for an anonymous caller — a wider change than the measurement, so it is left, and left said.
+- **The list read door now reads its row twice.** The first read is two columns and no members; the
+  POST and PATCH in that file have done this since their own rounds. `B6`/`B10` measure the cost at
+  zero — same 482 B and 1068 B at both builds.
+- **A body that is not JSON still fails as a body.** `readJson` stays in front of the row read, which
+  is `PATCH_impl`'s order in the same file and is why this round's legs are `401`/`404` rather than a
+  `500` on an unparseable request.
+- **Nothing moved at the pair door's write.** Its `create` can still answer `409` for a pair the list
+  already holds (`A9`, `409 / 130`, identical at both builds) — that is `aw-leadworks#111`'s open work
+  on the same three lines, and this round did not half-do it twice. Whichever of the two lands second
+  carries the rebase.
+- **The census counts auth calls *inside* the handler, because `withAuth` does not authenticate —
+  `tests/unit/route-auth.test.ts:4` says so in its first line.** So `0 offenders` is the claim that
+  every unit judging a caller's words has an `assertOwns` above it in the same branch, and nothing
+  more: that the app is authenticated at all is `route-auth.test.ts`'s business, pinned there.
+- **`?fields=` at this door projects `Lead` columns, not the list's own.** The 676-byte refusal
+  printed at `B7` enumerates what it takes — `id | email | phone | … | updatedAt` — and the list's
+  `name` is not among them, which is why this press asks for `email` to reach the members (`B6`,
+  `200 / 482` at both builds). Recorded because the press's first draft pressed `?fields=name` as if
+  it were a valid projection, and a leg named "a real field" that answers `400` is a lie about the
+  door rather than a measurement of it.
+- **The census has one exemption it does not need today.** A handler that judges a caller's words and
+  never authenticates is reported as an offender rather than a leak. The app has no such unit: the
+  nineteen measured above all have a check above them, and the two whose check lives in the shared
+  head are covered by rule, not by luck — which is why `route-auth.test.ts` stays a separate pin
+  (it asks whether a handler authenticates at all; this one asks what it says first).
+- **No migration, no schema, no new status.** Two reorderings in two files.
+- **The published copies keep the old build** until they are rebuilt from this branch. Both
+  measurement instances are stopped at the close of the round (`:3445` and `:3446`), so the
+  `400 / 676` that an anonymous `?fields=nonsense` drew on the base build is a recorded measurement
+  here, not a live door I can point at — the press log is the evidence, and the next press after this
+  lands is what shows the `401 / 64` in its place.
+- **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)

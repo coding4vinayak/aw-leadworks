@@ -191,8 +191,16 @@ describe("the door applies the projection to the read, not to the answer", () =>
 
   it("keeps the not-found and the ownership check on the row it read", () => {
     assert.match(code, /if \(!list\) return NextResponse\.json\(\{ error: "Not found" \}, \{ status: 404 \}\)/);
-    assert.match(code, /await assertOwns\(request, list\.workspaceId\)/);
+    // Retargeted by round #79, and the reason is that round's whole argument. This pin required
+    // `assertOwns(request, list.workspaceId)` — the read that carries the members — because the
+    // door had to check ownership against a row it actually read. It still does; the row is now
+    // resolved by a cheap two-column read first, because `?fields=` cannot be judged before the
+    // read that uses it and must not be judged before the caller is known. So the pin names the
+    // other read of the same table, demands the check still sit after a `findUnique` on it, and
+    // gains the ordering this round is about: ownership before the first field name is read.
+    assert.match(code, /await assertOwns\(request, _owned\.workspaceId\)/);
     assert.ok(code.indexOf("assertOwns") > code.indexOf("findUnique"), "the read still answers 404 and 401 itself");
+    assert.ok(code.indexOf("assertOwns") < code.indexOf("fieldsParam"), "and it asks whose row this is before it explains a column");
   });
 
   it("does not let a projection widen the member cap", () => {

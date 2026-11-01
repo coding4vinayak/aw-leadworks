@@ -127,15 +127,21 @@ async function POST_impl(request: Request, { params }: { params: Promise<{ id: s
   if (action === "add-to-list") {
     const raw = await readJson(request);
     if (!raw.ok) return raw.error;
+    // The row first, the words second — `PATCH_impl` above and the list door below both resolve
+    // the id in the URL and assert it is the caller's before they judge a body. Pressed on the
+    // base build, this branch answered `{"listId": 42}` with `400 "listId must be text, got a
+    // number"` (101 B) for a lead belonging to another tenant and for a lead that exists nowhere,
+    // and gave the same 101-byte sentence to a request with no key at all: the body grammar of a
+    // private workspace, handed to whoever asks.
+    const _owned = await prisma.lead.findUnique({ where: { id }, select: { workspaceId: true } });
+    if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await assertOwns(request, _owned.workspaceId);
     // `!listId` alone lets 42 and {id: "..."} through to Prisma, which answers
     // with a validation error and the caller gets a 500 for sending the wrong
     // type.
     const input = validateBody(raw.body, LEAD_ADD_TO_LIST);
     if (!input.ok) return input.error;
     const listId = input.data.listId;
-    const _owned = await prisma.lead.findUnique({ where: { id }, select: { workspaceId: true } });
-    if (!_owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    await assertOwns(request, _owned.workspaceId);
     const list = await prisma.leadList.findUnique({ where: { id: listId }, select: { workspaceId: true } });
     if (!list) return NextResponse.json({ error: "List not found" }, { status: 404 });
     await assertOwns(request, list.workspaceId);
