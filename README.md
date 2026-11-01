@@ -4399,18 +4399,20 @@ other order: `PATCH_impl` reads the lead, answers 404, asserts the workspace and
 the body; the list door's own POST and PATCH read `workspaceId` off the row first. The list read
 door did not, and the pair branch did not.
 
-Measured on the running app first (the trunk this branch stands on, **:3445** over this session's own
-`leadworks_r79`, private Redis 6428, two workspaces, keys read from `0600` files and printed nowhere;
-**thirty legs** in `/tmp/opencode/r79b_press_base.log` — three leads, three lists and three membership
-rows seeded by the press itself, every leg resetting them and printing the sha of all three tables
-before and after). Pressed twice, because trunk moved underneath it: the first press ran on `ff38306`
-(`/tmp/opencode/r79_press_base.log`), `aw-leadworks#97` and the two dependabot bumps landed while this
-round was open, and the branch was rebased onto `e28c108` and the whole thirty legs re-run
-(`/tmp/opencode/r79b_press_base.log`). **The six base answers below are the same bytes at both
-trunk hashes** — `1adb29fd6478` at the pair door and `00c3cfb06f0f` at the list door — so the defect
-this round measured is not an artifact of the base it happened to be pressed on first:
+Measured on the running app (**:3445** over this session's own `leadworks_r79`, private Redis 6428, two
+workspaces, keys read from `0600` files and printed nowhere; **thirty legs** in
+`/tmp/opencode/r79d_press_base.log` — three leads, three lists and three membership rows seeded by the
+press itself, every leg resetting them and printing the sha of all three tables before and after).
+**Pressed three times, because trunk moved underneath it twice**: the first press ran on `ff38306`
+(`/tmp/opencode/r79_press_base.log`), `aw-leadworks#97` and two dependabot bumps landed, so the branch
+was rebased onto `e28c108` and re-run (`/tmp/opencode/r79b_press_base.log`); then this round's own
+landing wave merged `#108`, `#107` and `#115` into `main` and it was rebased onto `eb156ef` and run a
+third time (`/tmp/opencode/r79d_press_base.log`). **The six base answers below are the same bytes at
+all three trunk hashes** — `1adb29fd6478` at the pair door and `00c3cfb06f0f` at the list door, three
+builds apart, one of which rewrote `src/lib/ids.ts`, the file that produces the `listId` refusal — so
+the defect this round measured is not an artifact of whichever base it happened to be pressed on first:
 
-| the leg | `e28c108` answers | the words it hands over |
+| the leg | `eb156ef` answers | the words it hands over |
 | --- | --- | --- |
 | `POST /api/leads/ld_r79_b1?action=add-to-list` with another workspace's lead and `{"listId":42}` | `400` / 101 `listId must be text, got a number` | the body grammar of a row that is not the caller's |
 | `POST /api/leads/ld_r79_ghost?action=add-to-list`, same body, a lead that exists nowhere | `400` / 101, the same bytes | as above, for a made-up id |
@@ -4439,9 +4441,9 @@ new dependency, no new status:
   is the one that carries the members — the same two-read shape the POST and PATCH in that file use.
 
 **A/B over the same rows** (fix build on **:3446** with its own Redis 6429,
-`/tmp/opencode/r79b_press_fix.log`, diff in `/tmp/opencode/r79b_press_ab.log`; the pre-rebase pair
-`r79_press_fix.log` / `r79_press_ab.log` says the same six): exactly the **six legs above change**, and
-each one lands on bytes this press already contains —
+`/tmp/opencode/r79d_press_fix.log`, diff in `/tmp/opencode/r79d_press_ab.log`; the two pre-rebase pairs
+`r79_press_fix.log`/`r79_press_ab.log` and `r79b_press_fix.log`/`r79b_press_ab.log` say the same six):
+exactly the **six legs above change**, and each one lands on bytes this press already contains —
 
 | leg | base | fix | that byte string already appears at |
 | --- | --- | --- | --- |
@@ -4471,15 +4473,16 @@ logs). What that twenty-four contains is the point:
   anonymous (`401 / 64` — last round's door judges the query after the key, and that is the order
   this round walks toward).
 
-The published contract does not move: **74,401 B, sha256 `94d69f098245`** at `/openapi.json` and at
+The published contract does not move: **75,013 B, sha256 `d9fad003d779`** at `/openapi.json` and at
 `/api/openapi`, byte-identical between the two builds by `cmp`, and `public/llms-full.txt` unchanged.
-The number itself is not the one this round first wrote: `#97` landed a `sources` vocabulary on trunk
-while this branch was open and took the document from 73,195 B to 74,401 B, so the pair quoted here is
-the rebased measurement — same bytes at both ends of *this* A/B, which is the claim being made. That
-is measured, not assumed — both entries already read `auth: "key"`, and the documented `400` at
-`leadLists.get` ("A `fields` entry that is not a Lead column, or names nothing") stays true for every
-caller the door now lets that far. The code was behind the document; this round closes the gap without
-touching either, and `src/lib/openapi.ts` is not in the diff.
+The number itself has moved twice since this round was opened, and each move is someone else's: `#97`
+landed a `sources` vocabulary and took the document from 73,195 B (`319930bc8c49`) to 74,401 B
+(`94d69f098245`); `#107` and `#108` landed webhook and `explain-lead` prose and took it to the 75,013 B
+quoted above. What is claimed is only ever the pair — same bytes at both ends of *this* A/B, measured on
+the trunk this branch now stands on. That is measured, not assumed — both entries already read
+`auth: "key"`, and the documented `400` at `leadLists.get` ("A `fields` entry that is not a Lead column,
+or names nothing") stays true for every caller the door now lets that far. The code was behind the
+document; this round closes the gap without touching either, and `src/lib/openapi.ts` is not in the diff.
 
 ## Pins
 
@@ -4529,8 +4532,9 @@ requires `assertOwns(request, _owned.workspaceId)`, still after a `findUnique` o
 **gains** a line this round is about: ownership must be asserted before `fieldsParam`. Nothing was
 deleted and the projection's own pins (`:178`, `:188`) are untouched.
 
-**Non-vacuity, nine measurements over nine rules** (`/tmp/opencode/r79_perturb.py`, re-run on the
-rebased tree, 68 nodes in the two files it drives). The counts below are failing **nodes** as
+**Non-vacuity, nine measurements over nine rules** (`/tmp/opencode/r79_perturb.py`, re-run on each
+rebased tree — the third run is `/tmp/opencode/r79e_perturb.log`, on `eb156ef`, and every count below
+came back the same; 68 nodes in the two files it drives). The counts below are failing **nodes** as
 `node:test` prints them — a suite and the test inside it count twice — and each is followed by the test
 that bit. The pair door put back to the trunk order — 3 nodes: the census naming it, and the pair door's
 ordering pins. The list read door put back the same way — 3: the retargeted projection pin and this
@@ -4544,7 +4548,8 @@ census itself naming `src/app/api/lead-lists/[id]/route.ts GET: words judged at 
 (assertOwns) at 989` an offender, because `pageParams` is now one
 of the families it counts and the relocated call answers `?page=` before anyone has said whose list it
 is. `auth: "key"` changed to `auth: "none"` at `leadLists.get` — 1. The README heading renamed — 10
-nodes (two more than the pre-rebase run, the two pins added with the re-measurement above). All nine
+nodes (two more than the very first run, from the pins the first re-measurement added, and unchanged by
+the third). All nine
 bit, and `sha256sum -c` over the five touched files reports every one of them back at its pre-run
 digest.
 
@@ -4555,7 +4560,7 @@ changed is worse than no measurement. The harness now holds the pristine bytes i
 each mutation in a `finally`, treats a missing anchor as an error rather than a silent skip, and
 registers the same restore with `atexit`.
 
-Gates: `npm test` **1389/1389** (the trunk this branch rebases onto, `e28c108`, measures **1350/1350**;
+Gates: `npm test` **1422/1422** (the trunk this branch now stands on, `eb156ef`, measures **1383/1383**;
 the 39 new pins are the whole difference) · `tsc --noEmit` exit 0 · `npm run lint` **0 errors / the same
 13 pre-existing warnings** ·
 `npm run check:contract` **8/8** · `npm run check:llms-full` reporting `public/llms-full.txt`
@@ -4598,14 +4603,18 @@ the 39 new pins are the whole difference) · `tsc --noEmit` exit 0 · `npm run l
   `400 / 676` that an anonymous `?fields=nonsense` drew on the base build is a recorded measurement
   here, not a live door I can point at — the press log is the evidence, and the next press after this
   lands is what shows the `401 / 64` in its place.
-- **This branch was rebased once, mid-round, and every number in this section is the rebased one.**
-  `aw-leadworks#97` and the two dependabot bumps landed on `main` while the PR was open; the branch was
-  replayed onto `e28c108` and the thirty legs, the served contract, the census and the whole suite were
-  measured again rather than carried over. Two of those numbers moved because of the move alone — the
-  contract grew to 74,401 B because of `#97`, not because of this round, and the census went from 19
-  units to 24 because `#97` added a door that judges a caller's word through a helper this round's
-  pattern had not been looking for. The six base replies this section quotes are byte-for-byte the same
-  at both trunk hashes, which is the only reason the first press is still worth printing.
+- **This branch was rebased twice, mid-round, and every number in this section is the last rebased
+  one.** First `aw-leadworks#97` and two dependabot bumps landed on `main` while the PR was open, and
+  the branch was replayed onto `e28c108`; then `#108`, `#107` and `#115` were landed from this queue and
+  it was replayed onto `eb156ef`. Both times the thirty legs, the served contract, the census and the
+  whole suite were measured again rather than carried over. Two numbers moved because of the moves
+  alone — the contract grew to 74,401 B because of `#97` and to 75,013 B because of `#107`/`#108`, not
+  because of this round, and the census went from 19 units to 24 because `#97` added a door that judges
+  a caller's word through a helper this round's pattern had not been looking for. The trunk's own suite
+  went 1350 → 1383 for the same reason, so the difference this branch adds is still exactly its own 39
+  pins. The six base replies this section quotes are byte-for-byte the same at all three trunk hashes —
+  including across `#107`, which rewrote `src/lib/ids.ts`, the file that produces the `listId` refusal —
+  which is the only reason the first two presses are still worth printing.
 - **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
 
 ## Score: one arithmetic, and who may change it

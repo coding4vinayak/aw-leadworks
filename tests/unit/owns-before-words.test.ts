@@ -5,11 +5,13 @@
 //   Measured on `ff38306` (`/tmp/opencode/r79_press_base.log`, thirty legs, `:3445` over
 //   `leadworks_r79`): another workspace's lead with `{"listId": 42}` was a `400` about the body
 //   rather than the row's `404`, and an anonymous `?fields=nonsense` handed the whole 676-byte
-//   `Lead` column table to whoever typed it. Trunk then moved — `aw-leadworks#97` and two dependabot
-//   bumps landed — so the branch was rebased onto `e28c108` and all thirty legs were re-run
-//   (`/tmp/opencode/r79b_press_base.log`, `r79b_press_fix.log`, `r79b_press_ab.log`): the same six
-//   legs move, the same twenty-four hold, and that rebased rebasing is why the census pattern got
-//   wider (see `WORDS` below). The fix is ordering, and ordering is a shape, so it is pinned by
+//   `Lead` column table to whoever typed it. Trunk then moved twice — first `aw-leadworks#97` and two
+//   dependabot bumps (`e28c108`), then this round's own landing wave (`#108`, `#107`, `#115` →
+//   `eb156ef`) — and all thirty legs were re-run on each
+//   (`r79b_press_base.log`, then `r79d_press_base.log`, with `r79d_press_fix.log` / `r79d_press_ab.log`
+//   for the third A/B): the same six legs move, the same twenty-four hold, the same two base byte
+//   strings answer at all three builds, and those rebases are why the census pattern got wider (see
+//   `WORDS` below). The fix is ordering, and ordering is a shape, so it is pinned by
 //   reading the two handlers back and by a census over every handler that judges words.
 //
 // The census is branch-aware, and that is not a refinement: `POST_impl` in the leads file has an
@@ -368,20 +370,24 @@ describe("the README section says what was measured", () => {
   });
 
   it("quotes the base answer as a measurement", () => {
-    assert.match(section, /Measured on the running app first/);
+    assert.match(section, /Measured on the running app/);
     assert.match(section, /ff38306/);
     assert.match(section, /:3445/);
     assert.match(section, /leadworks_r79/);
   });
 
-  it("says the press was run twice because trunk moved, and what stayed the same", () => {
-    // The round's own honesty clause: the branch was rebased onto `e28c108` while it was open, so the
-    // README must show the re-measurement and not quietly keep the older bytes.
-    assert.match(section, /Pressed twice, because trunk moved/);
+  it("says the press was run three times because trunk moved twice, and what stayed the same", () => {
+    // The round's own honesty clause: trunk moved under this branch twice — once while it was open
+    // (`e28c108`), once because this session landed three of its siblings (`eb156ef`) — so the README
+    // must show each re-measurement rather than quietly keep the older bytes.
+    assert.match(section, /Pressed three times, because trunk moved/);
     assert.match(section, /e28c108/);
+    assert.match(section, /eb156ef/);
     assert.match(section, /r79b_press_base\.log/);
-    assert.match(section, /1adb29fd6478/, "the pair door's base reply, at both trunk hashes");
-    assert.match(section, /00c3cfb06f0f/, "the list door's base reply, at both trunk hashes");
+    assert.match(section, /r79d_press_base\.log/);
+    assert.match(section, /1adb29fd6478/, "the pair door's base reply, at all three trunk hashes");
+    assert.match(section, /00c3cfb06f0f/, "the list door's base reply, at all three trunk hashes");
+    assert.match(section, /src\/lib\/ids\.ts/, "and which landed round rewrote the bytes it pressed");
   });
 
   it("carries the six legs that moved, with their bytes", () => {
@@ -400,10 +406,11 @@ describe("the README section says what was measured", () => {
   });
 
   it("names the contract as unchanged, with the measured digest", () => {
-    assert.match(section, /74,401 B, sha256 `94d69f098245`/);
+    assert.match(section, /75,013 B, sha256 `d9fad003d779`/);
     assert.match(section, /byte-identical between the two builds by `cmp`/);
-    // The number changed because trunk changed, and the section has to say so rather than swap it.
-    assert.match(section, /73,195 B to 74,401 B/);
+    // The number changed twice because trunk changed twice, and the section has to say so rather
+    // than swap it silently: 73,195 → 74,401 (`#97`) → 75,013 (`#107`, `#108`).
+    assert.match(section, /73,195 B[\s\S]{0,140}?74,401 B[\s\S]{0,200}?75,013 B/);
   });
 
   it("reports the census pattern widening with its reason, not just its new count", () => {
