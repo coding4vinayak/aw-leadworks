@@ -5056,6 +5056,35 @@ What this does not claim:
   pairs from this session (#97, #88, #87) went `CONFLICTING` when #103 landed its README fix —
   a few hunks each, rebases rather than reworks — and Dependabot opened #104 and #105 in the same
   window.
+* **Pressed a third time on the trunk it landed onto — `86e537d`, which is #87's merge.** The two
+  writers and the export door were re-measured on that base, in this session's own runtime: two
+  databases seeded by one script with the same single lead (`leadworks_q106_base`,
+  `leadworks_q106_fix`), Redis 6431/6432, `:3473` for the base build and `:3474` for this branch
+  (`/tmp/opencode/q106_press_base.log`, `q106_press_fix.log`). The empty crowd is now expressed the
+  way the door accepts it — `{"status":"CONVERTED"}` over a workspace holding one `NEW` lead; an
+  invented `NEVER_MATCHED` is a `400` naming the six values, which is #76's vocabulary check
+  answering before any file is written and was found by trying it on the base build first.
+
+  | the leg | `86e537d` | this branch |
+  | --- | --- | --- |
+  | CSV, zero rows | `recordCount=0 fileSize=0`, download `200 / 0` sha `e3b0c44298fc`, no line at all | `fileSize=21`, download `200 / 21` sha `f0538b857191`, first line `email,status,company` |
+  | XLSX, zero rows | `15767` B, `dimension="A1"`, 0 cells | `15906` B, `dimension="A1:C1"`, 3 cells |
+  | JSON, zero rows | `2` B sha `4f53cda18c2b` | **the same bytes** |
+  | PDF, zero rows | `1639` B | `1638` B — a PDF carries its own creation stamp, so this leg is a size, not a byte comparison |
+  | CSV, the crowd of one | `47` B sha `cc01862f52ac` | **the same bytes** |
+  | XLSX, the crowd of one | `16033` B sha `d19af29870d5`, `A1:C2` | **the same bytes** |
+  | `fields: []` | `400 / 105` sha `b985f7289118` | **the same bytes** |
+  | a field no Lead column holds | `400 / 676` sha `00c3cfb06f0f` | **the same bytes** — the column table round #79 pressed, unchanged here |
+  | the served contract | `78543` B sha `a7bc5d0bfe7a`, `exports.download` 200 described as "The file." | `78693` B sha `fecbc15ef713`, the same 200 now promising the declared header line |
+
+  So the base's two empty-crowd answers reproduce exactly what this round measured at `ff38306`
+  — zero bytes for CSV, a 15 KB workbook whose only sheet is empty — while the two non-empty files
+  and the four refusals are byte-identical across the twenty-nine commits between the two bases, and
+  the fix moves only the empty ones. `npx tsx --test tests/unit/*.test.ts` on the rebased tree is
+  **1460 pass / 0 fail**, where `86e537d` measures **1443**; `tsc --noEmit` exit 0, lint 0 errors /
+  the same 13 warnings, `check:contract` 8/8, `check:llms-full` unchanged, build exit 0. No pin in
+  this branch's own file needed retargeting for the new base, and none was deleted.
+
 * **No demo step**, for the reason #51, #52, #53, #67 and #68 recorded — `aw-deploy`'s only open
   pair (#96, STEP 27) is still `CONFLICTING`, so a step stacked on it is not a direct child of
   that repo's `main`.
