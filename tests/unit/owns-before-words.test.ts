@@ -5,8 +5,12 @@
 //   Measured on `ff38306` (`/tmp/opencode/r79_press_base.log`, thirty legs, `:3445` over
 //   `leadworks_r79`): another workspace's lead with `{"listId": 42}` was a `400` about the body
 //   rather than the row's `404`, and an anonymous `?fields=nonsense` handed the whole 676-byte
-//   `Lead` column table to whoever typed it. The fix is ordering, and ordering is a shape, so it is
-//   pinned by reading the two handlers back and by a census over every handler that judges words.
+//   `Lead` column table to whoever typed it. Trunk then moved — `aw-leadworks#97` and two dependabot
+//   bumps landed — so the branch was rebased onto `e28c108` and all thirty legs were re-run
+//   (`/tmp/opencode/r79b_press_base.log`, `r79b_press_fix.log`, `r79b_press_ab.log`): the same six
+//   legs move, the same twenty-four hold, and that rebased rebasing is why the census pattern got
+//   wider (see `WORDS` below). The fix is ordering, and ordering is a shape, so it is pinned by
+//   reading the two handlers back and by a census over every handler that judges words.
 //
 // The census is branch-aware, and that is not a refinement: `POST_impl` in the leads file has an
 // `enrich` branch that authenticates at its own top, so a scan of the whole handler body finds an
@@ -23,8 +27,23 @@ const at = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 const LEADS = at("src/app/api/leads/[id]/route.ts");
 const LISTS = at("src/app/api/lead-lists/[id]/route.ts");
 
-/** A door judging what the caller sent: a body schema or a list/id helper built on one. */
-const WORDS = /(?:validateBody|stringList|asStrings)\(/;
+/**
+ * A door judging what the caller sent: a body schema, an id/list helper built on one, or a
+ * query-string word judged by name.
+ *
+ * The last family was added when this round was rebased onto the trunk that took `aw-leadworks#97`
+ * (`e28c108`). That round taught `GET /api/sources` to refuse an unknown `?type=` and
+ * `?lastRunStatus=`, and it judges them through `filterParam` — a door answering a caller's word by
+ * name that this pattern did not see, so `19 units` was a count of what the regex matched, not of
+ * what the app does. `boolParam` (`?isActive=`) and `pageParams` (`?page=`, `?limit=`) are the same
+ * family already present on trunk: `pageParams` clamps rather than refuses, but it still decides what
+ * a caller's words mean, and the rule here is about ordering, not about which answer is given. The
+ * widened scan measures 24 units, 2 of them covered by a shared head, 0 offenders; the five units the
+ * old pattern missed are `enrichment-rules` GET, `exports` GET, `jobs` GET, `lead-lists` GET and
+ * `sources` GET — all five authenticate above the judgement, which is why widening changed no verdict
+ * and bought coverage.
+ */
+const WORDS = /(?:validateBody|stringList|asStrings|filterParam|boolParam|pageParams)\(/;
 
 interface Unit {
   label: string;
@@ -103,11 +122,25 @@ describe("the census: who judges a caller's words, and after what check", () => 
     assert.equal(handlers.length, 49, "the scanner found a different number of handlers than this round measured");
   });
 
-  it("finds nineteen units that judge a caller's words", () => {
-    // Fourteen whole handlers and five action branches. A new door that validates is a new unit,
-    // and it has to be looked at rather than absorbed: the count is the thing being asserted.
+  it("finds twenty-four units that judge a caller's words", () => {
+    // Nineteen whole handlers and five action branches, counted with the widened `WORDS` above.
+    // A new door that validates is a new unit, and it has to be looked at rather than absorbed:
+    // the count is the thing being asserted.
     const units = allUnits();
-    assert.equal(units.length, 19, "units: " + units.map((u) => u.label).join(" | "));
+    assert.equal(units.length, 24, "units: " + units.map((u) => u.label).join(" | "));
+  });
+
+  it("sees the query-string doors the first version of this scan did not", () => {
+    // The five units `validateBody|stringList|asStrings` missed, named so that a sixth one arriving
+    // fails here rather than lowering the census's own visibility unnoticed.
+    const labels = allUnits().map((u) => u.label);
+    for (const door of [
+      "src/app/api/enrichment-rules/route.ts GET",
+      "src/app/api/exports/route.ts GET",
+      "src/app/api/jobs/route.ts GET",
+      "src/app/api/lead-lists/route.ts GET",
+      "src/app/api/sources/route.ts GET",
+    ]) assert.ok(labels.includes(door), door + " is not among " + labels.join(" | "));
   });
 
   it("names both doors this round moved among them", () => {
@@ -341,6 +374,16 @@ describe("the README section says what was measured", () => {
     assert.match(section, /leadworks_r79/);
   });
 
+  it("says the press was run twice because trunk moved, and what stayed the same", () => {
+    // The round's own honesty clause: the branch was rebased onto `e28c108` while it was open, so the
+    // README must show the re-measurement and not quietly keep the older bytes.
+    assert.match(section, /Pressed twice, because trunk moved/);
+    assert.match(section, /e28c108/);
+    assert.match(section, /r79b_press_base\.log/);
+    assert.match(section, /1adb29fd6478/, "the pair door's base reply, at both trunk hashes");
+    assert.match(section, /00c3cfb06f0f/, "the list door's base reply, at both trunk hashes");
+  });
+
   it("carries the six legs that moved, with their bytes", () => {
     const needles = ["400` / 101", "400` / 676", "`404 / 22`", "`404 / 21`", "`401 / 64`", "`400 / 101`", "`400 / 676`"];
     for (const needle of needles) {
@@ -357,8 +400,18 @@ describe("the README section says what was measured", () => {
   });
 
   it("names the contract as unchanged, with the measured digest", () => {
-    assert.match(section, /73,195 B, sha256 `319930bc8c49`/);
+    assert.match(section, /74,401 B, sha256 `94d69f098245`/);
     assert.match(section, /byte-identical between the two builds by `cmp`/);
+    // The number changed because trunk changed, and the section has to say so rather than swap it.
+    assert.match(section, /73,195 B to 74,401 B/);
+  });
+
+  it("reports the census pattern widening with its reason, not just its new count", () => {
+    assert.match(section, /24 units judge a caller's words/);
+    assert.match(section, /the count went 19 → 24, the offenders stayed `0`/);
+    assert.match(section, /filterParam/);
+    assert.match(section, /`enrichment-rules`, `exports`, `jobs`/,
+      "the five doors the first pattern missed are named");
   });
 
   it("reports the retarget rather than hiding it", () => {
