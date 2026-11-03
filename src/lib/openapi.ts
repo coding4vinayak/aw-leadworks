@@ -264,7 +264,12 @@ const PATHS: Record<string, PathItem> = {
           listId: { type: "string", description: "The list to add the lead to (action=add-to-list only)." },
         },
       },
-      responses: { "200": "What the action did.", "400": "The word `action` was given is not one this door takes, or more than one word was given, or none was named — each sentence names this door's two, and it is answered above the lookup, so a row another workspace holds hears it the same way. `add-to-list` with no `listId` in the body answers here too, and so does that same missing `listId` at a row another workspace holds, because this door judges the body before it reads the row.", "422": "The list does not exist.", "503": QUEUE_REFUSED },
+      responses: {
+        "200": "What the action did. `add-to-list` answers the pair as arithmetic — `requested`, `added`, `already` — so a lead the list already holds answers 200 with `added: 0` rather than refusing.",
+        "400": "The word `action` was given is not one this door takes, or more than one word was given, or none was named — each sentence names this door's two, and it is answered above the lookup, so a row another workspace holds hears it the same way. `add-to-list` with no `listId` in the body answers here too, and so does that same missing `listId` at a row another workspace holds, because this door judges the body before it reads the row.",
+        "422": "The list does not exist.",
+        "503": QUEUE_REFUSED,
+      },
     },
     delete: {
       id: "leads.delete",
@@ -338,7 +343,7 @@ const PATHS: Record<string, PathItem> = {
         },
       },
       responses: {
-        "200": "The list as it now reads.",
+        "200": "`add-leads` and `remove-leads` answer what they did, not the list: `add-leads` reports `requested`, `added`, `already`, so a crowd holding a lead the list already holds adds the rest and answers 200 — the same verdict this door already gives for removing a lead that is not on it. `remove-leads` answers `ok`. `refresh` answers the crowd it re-ran: `filter`, `matched`, `added`, `removed`, `kept`, `members`.",
         "400": "A static list has no filter to re-run, or the `leadIds` a move needs are missing, or `action` was given a word this door does not take or more than one word (after the row is looked up and the workspace checked).",
         "409": "`refresh` on a dynamic list whose stored filter cannot be read — the refusal quotes the row.",
         "422": "A leadId that does not exist, named.",

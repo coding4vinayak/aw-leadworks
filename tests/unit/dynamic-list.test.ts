@@ -264,8 +264,11 @@ describe("the doors call this module, in the order the answers need", () => {
   });
 
   it("answers with the arithmetic a caller can check against the crowd", () => {
+    // #76 widened the pattern below, not the field list: `added` is now the database's insert
+    // count rather than the plan's length, so it is written as the shorthand `added,` in the
+    // answer object. Six fields, each still required, none still allowed to go missing.
     for (const field of ["matched", "added", "removed", "kept", "members", "filter"]) {
-      assert.match(listIdRoute, new RegExp(`\\b${field}:`), `the refresh answer omitted ${field}`);
+      assert.match(listIdRoute, new RegExp(`\\b${field}[:,]`), `the refresh answer omitted ${field}`);
     }
     assert.match(listIdRoute, /describeConditions\(stored\.filter\)/);
   });

@@ -251,9 +251,16 @@ describe("the pair door: whose lead, then what body", () => {
     assert.ok(words < list && list < listOwns && listOwns < write, `words=${words} list=${list} owns=${listOwns} write=${write}`);
   });
 
-  it("writes the pair with create, and took on no fold this round", () => {
-    assert.match(branch, /prisma\.leadListMember\.create\(\{ data: \{ listId, leadId: id \} \}\)/);
-    assert.doesNotMatch(branch, /skipDuplicates/, "the duplicate answer at this door is #111's open work");
+  it("folds the pair with the index now, because #76 is the round that wrote the fold", () => {
+    // Retargeted, not deleted, and by the round whose arrival this pin announced. #79 pinned the bare
+    // `create` and pinned `skipDuplicates` *out*, with the message "the duplicate answer at this door
+    // is #111's open work" — it measured the 409 and disclosed it instead of fixing it. #111 landed
+    // that work: one `createMany` so the unique index settles whether the pair was written, and
+    // `membershipReport` so the reply says which way it went. The ordering this file is about is
+    // untouched and still pinned above — the caller's words, then the list read, then its ownership,
+    // then the write — and the pair still cannot be written by a request that never owned either row.
+    assert.match(branch, /prisma\.leadListMember\.createMany\(\{ data: \[\{ listId, leadId: id \}\], skipDuplicates: true \}\)/);
+    assert.match(branch, /membershipReport\(1, count\)/, "the one-pair ask answers the same arithmetic as the crowd");
   });
 
   it("leaves the enrich branch exactly as it was measured: authenticates, then makes a job", () => {
@@ -382,7 +389,17 @@ describe("the document already promised the key, and still does", () => {
 describe("the README section says what was measured", () => {
   const readme = at("README.md");
   const start = readme.indexOf("\n## Whose row is this?");
-  const end = readme.indexOf("\n## Score:", start);
+  // The slice is this section's own prose, not everything standing between its heading and `## Score`.
+  // Every round that lands after this one inserts its section in that same slot, so a word-level
+  // prohibition over the whole span reads *later* rounds rather than #79 — which is what retired it:
+  // #111 arrived with the word this file's last bullet forbids, in its own section, and the bullet
+  // still means only what it said. The next `###` heading after this section's title is the first of
+  // those insertions, so the scan stops there; `## Score` remains the bound if the file ever loses
+  // them. Every other assertion below is satisfied inside the slice's own lines, 4404-4628, measured
+  // rather than assumed.
+  const score = readme.indexOf("\n## Score:", start);
+  const inserted = readme.indexOf("\n### ", start);
+  const end = inserted === -1 ? score : Math.min(score, inserted);
   const section = readme.slice(start, end);
 
   it("sits where the round put it", () => {
@@ -455,7 +472,7 @@ describe("the README section says what was measured", () => {
 
   it("says what it did not do, and does not do it", () => {
     assert.match(section, /No migration, no schema, no new status/);
-    assert.doesNotMatch(section, /skipDuplicates/, "the duplicate answer at this door is #111's open work, not this round's");
+    assert.doesNotMatch(section, /skipDuplicates/, "this section must not claim the duplicate answer, which is #111's work — and #111's own section, which does claim it, is outside this slice");
     assert.doesNotMatch(section, /added a column|migrated the/i, "the section must not claim the change it refuses");
   });
 });
