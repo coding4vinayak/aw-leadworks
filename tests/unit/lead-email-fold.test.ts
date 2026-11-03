@@ -156,7 +156,11 @@ test("the README quotes the same measurement this file pins", () => {
   assert.match(readme, /\?email=%@x\.com\s+200 total=9/, "the first cut's wildcard leg, kept in the table");
   assert.match(readme, /every\s+spelling now finds the row/, "the fix's own reading");
   assert.match(readme, /`src\/lib\/scraper\.ts` still looks a scraped address up byte-exactly/, "the holdout, named");
-  assert.match(readme, /1347\/1347/, "and the suite count this tree measures");
+  // Retargeted by the landing pass, not relaxed. `1347/1347` was the count this round printed on
+  // `ff38306`; the branch was rebased onto `2437bf2` (#75, #76 and `be3a936` since) and the tree that
+  // was pushed measures 1527. The assertion is still "the README carries the number this tree
+  // prints", so it moved with the number rather than being dropped along with the question.
+  assert.match(readme, /1527\/1527/, "and the suite count this tree measures");
 });
 
 test("the four comparisons are scoped to the caller's workspace, fold or no fold", () => {
