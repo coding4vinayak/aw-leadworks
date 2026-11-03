@@ -127,12 +127,20 @@ describe("every membership add in the app folds, and the census says how many th
     }
   });
 
-  it("leaves the removal side exactly as measured, so the no-op baseline holds", () => {
+  it("leaves the removal side out of this round's fold, and reports its own numbers", () => {
+    // Retargeted by the removal round (#78's landing pass), not relaxed. This pin used to require the
+    // literal `{ ok: true }` because the bare verdict was the no-op baseline the add round compared
+    // against, and moving it would have moved a control it pressed as byte-identical. `#78` moved it
+    // on purpose — the same door, the same `deleteMany`, now answered with `requested`/`removed`/
+    // `absent` from `src/lib/membership-remove.ts` — so the question this pin still asks is the one
+    // it asked then: the removal branch did not borrow the *add* round's arithmetic. It still may
+    // not call `membershipReport`, still may not carry `skipDuplicates` (a delete has nothing to
+    // fold), and now answers only through its own module's helper.
     const crowd = at(CROWD);
     const remove = crowd.slice(crowd.indexOf('action === "remove-leads"'), crowd.indexOf('action === "refresh"'));
     assert.match(remove, /deleteMany/);
-    assert.match(remove, /NextResponse\.json\(\{ ok: true \}\)/);
-    assert.equal(remove.includes("membershipReport"), false, "the removal answer moved under this round's press");
+    assert.match(remove, /NextResponse\.json\(membershipRemoval\(parsed\.values\.length, count\)\)/);
+    assert.equal(remove.includes("membershipReport"), false, "the removal answer borrowed the add door's arithmetic");
     assert.equal(remove.includes("skipDuplicates"), false, "a delete has nothing to fold");
   });
 });
@@ -239,9 +247,15 @@ describe("the README carries this round's answer, and only this round's answer",
     // The hypothesis this round started from was a 500; what the instance served was a 409, and a
     // README that repeats the hypothesis would be a claim the press does not support.
     assert.doesNotMatch(section, /answers 500|a 500 for a duplicate|500 \| 130/);
-    // The removal side is disclosed as unchanged, and the pin is that no leg of it is quoted with
-    // this round's arithmetic — the one control this round must not move.
-    assert.match(section, /\*\*`remove-leads` keeps its `\{"ok":true\}`\*\*/);
+    // Retargeted by the removal round, not relaxed. The question was, and is, that the add round did
+    // not move the removal door and says so in its own disclosure. The removal round then moved it,
+    // so the present-tense "keeps" would be a claim this tree contradicts: the bullet is pinned in the
+    // past tense, bounded to the tree it was pressed on, and required to point at the round that
+    // answered it — while no leg of it is quoted with the *add* round's arithmetic, the one control
+    // this round must not move.
+    assert.match(section, /\*\*`remove-leads` kept its `\{"ok":true\}`\*\* — no `requested`, no `removed`, \*on this round's tree\*/);
+    assert.match(section, /answered whole, later/);
+    assert.doesNotMatch(section, /`remove-leads` keeps/);
     assert.doesNotMatch(section, /remove-leads[^\n]{0,60}200 \/ 47/);
     assert.doesNotMatch(section, /8,528|8,531/, "llms-full claimed to have grown");
   });

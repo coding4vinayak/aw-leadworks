@@ -162,8 +162,17 @@ describe("the README states the measurement, not a claim", () => {
     const code = blankComments(section);
     assert.match(code, /"removed":\s?1,\s?"absent":\s?0/);
     assert.match(code, /"removed":\s?0,\s?"absent":\s?1/);
-    assert.match(readme, /1336\/1336/);
-    assert.match(readme, /1352\/1352/);
+    // Retargeted by the landing pass, not relaxed — both pairs are pinned, which is strictly more
+    // than this file asked before. `1336/1336 → 1352/1352` is what the branch printed against
+    // `ff38306` and stays quoted as that round's history; the branch then carried the rebase onto
+    // `2c7b403`, whose own suite measures 1527, so the pair the landing block quotes and this tree's
+    // `npm test` prints is `1527/1527 → 1543/1543`. Each pair is pinned inside the sentence that
+    // makes the claim, not as a bare number the file could carry anywhere: the mutation test showed
+    // a number quoted twice is a number no edit can break.
+    assert.match(readme, /suite \*\*1352\/1352\*\* where `main` at `ff38306` measures \*\*1336\/1336\*\*/);
+    assert.match(readme, /its suite printed \*\*1527\/1527\*\*/);
+    assert.match(readme, /measures \*\*1527\/1527\*\* and the difference is exactly/);
+    assert.match(readme, /\*\*1543\/1543\*\* on this branch/);
   });
 
   it("keeps the no-demo disclosure beside the round that has none", () => {
