@@ -5932,11 +5932,14 @@ that already worked — `R6` `John@X.com`, `R7` `bob@x.com`, `R10` `Amy@X.com`, 
 against the first cut quoted above. Three are the refusals around the fold: `C3` `amy@x.com` with
 `status=NEW` is `total=0`, `C6` `john@x.com` with `minScore=71` is `total=0`, `C9` one tenant asking
 the other's address is `total=0`, and `C7` `?email=` empty is the **unfiltered** crowd on both —
-`total=9`, `200 / 6734`. Thirteen are the doors that write: `W1`–`W5` are five `409 / 253-257` naming
+`total=9`, `200 / 6734`. Eleven are the doors that write, and they are eleven of the fourteen the round
+touched: `W1`–`W5` are five `409 / 253-257` naming
 the same holder in the same words, `W9`/`W10` are the `PATCH` pair at `409 / 100`, `W11` resending a
 row its own spelling is `200 / 1376`, `W6`/`W7` are `201`s at a row nobody held followed by reads that
 already answered `total=1`, and `I2` importing `ABC@X.COM` beside a stored `abc@x.com` is
-`200 / 233` `duplicatesExisting=1` — the importer folds on both builds.
+`200 / 233` `duplicatesExisting=1` — the importer folds on both builds. The other three write legs
+(`W8`, `I1`, `I3`) hold in what they write and move in what the read door then says about it, which is
+the row above.
 
 **Said rather than smoothed, on this rebased tree:**
 
@@ -5956,7 +5959,7 @@ already answered `total=1`, and `I2` importing `ABC@X.COM` beside a stored `abc@
   `twin@x.com` and `Twin@X.COM`, and every spelling now returns both, `total=2`, with `limit=1`
   splitting them over two pages. Folding the read door did not merge them; `runDedupeJob` does, and
   the dedupe report is what tells a caller it happened.
-- **Three of the nine follow-up reads move; six hold.** The writes themselves did not: all thirteen
+- **Three of the nine follow-up reads move; six hold.** The writes themselves did not: all fourteen
   write replies are the same status and byte count on both builds, so the round's claim that it
   changed no door that writes an address is measured here, on trunk after #75 and #76, not inherited
   from `ff38306`.
