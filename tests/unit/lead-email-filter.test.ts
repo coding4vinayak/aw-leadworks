@@ -44,9 +44,14 @@
 // The rule the file pins is the one the write door already runs: the value is
 // judged by `LEAD_EMAIL`, the entry `LEAD_CREATE.email` itself, so this app has
 // one email rule rather than one for a body and one for a query string. The match
-// is byte-exact, and that is written down as a limit rather than smoothed over:
-// folding belongs to #99, and a `mode: "insensitive"` filter here would stop the
-// composite `@@unique([workspaceId, email])` from being used.
+// used to be byte-exact and was written down as a limit rather than smoothed over:
+// folding belonged to #99, and a `mode: "insensitive"` filter here would stop the
+// composite `@@unique([workspaceId, email])` from being used. #99 landed (`7ecf030`)
+// and took the premise with it — no door writes a second spelling beside the first
+// any more, so the byte-exact read answered `200 total=0` for bytes the write door
+// calls a duplicate. Round #77 folded the filter (see the pin below, which is this
+// paragraph's retarget); leg 2 above was measured while both spellings existed as
+// two rows and now describes a state no door can produce.
 //
 // Nothing here needs a browser, a database or a network.
 import { test } from "node:test";
@@ -102,15 +107,25 @@ test("every address the column can hold is a value the filter takes", () => {
   }
 });
 
-test("the value reaches the filter with its bytes, not a folded copy of them", () => {
-  // `?email=JOHN@X.COM` asks for those bytes. Folding is #99's decision to make at
-  // the write doors, and a read door that folded first would answer a question the
-  // caller did not ask while pretending to answer the one they did.
+test("the value reaches the filter with its bytes, and the database folds them", () => {
+  // Retargeted twice, with the reason. This pin used to read
+  // `assert.doesNotMatch(GET_body, /email\s*=\s*\{[^}]*insensitive[\s\S]*/)` and its comment said
+  // folding "is #99's decision to make at the write doors". #99 made it — merged as `7ecf030`, both
+  // write doors now refuse a case-changed collision with a 409 that names the row — and the byte-
+  // exact read door was left answering `200 total=0` for the same bytes the write door calls a
+  // duplicate. #77 then wrote the fold inline in this door; the second retarget is the refactor that
+  // moved it to `lead-email.ts`'s `emailFold()` so the four address comparisons ask one question.
+  // What the pin still holds is the half that was never about folding: the door hands
+  // `textFilterParam`'s bytes to the query untouched, and folds nothing in JavaScript of its own.
   assert.equal(asked([["email", "JOHN@X.COM"]]).value, "JOHN@X.COM");
   assert.equal(asked([["email", "bob@X.com"]]).value, "bob@X.com");
-  assert.doesNotMatch(GET_body, /email\.value\.(toLowerCase|toUpperCase)\(/, "the door does not fold it either");
-  assert.doesNotMatch(GET_body, /email\s*=\s*\{[^}]*insensitive[\s\S]*/, "nor does it ask Prisma to");
-  assert.match(schema, /@@unique\(\[workspaceId, email\]\)/, "and the index it matches is the byte-exact one");
+  assert.doesNotMatch(GET_body, /email\.value\.(toLowerCase|toUpperCase)\(/, "the door does not fold it itself");
+  assert.match(GET_body, /if \(email\.value\) where\.email = emailFold\(email\.value\)/,
+    "the fold is lead-email.ts's, the rule the write doors ask with");
+  assert.doesNotMatch(GET_body, /mode: "insensitive"/,
+    "and this door does not re-type the fold beside the helper — a second spelling of the rule is how the first one drifts");
+  assert.match(schema, /@@unique\(\[workspaceId, email\]\)/,
+    "and the index is still byte-exact, which is why the fold has to be asked for rather than assumed");
 });
 
 test("the padding is not part of the address", () => {
@@ -200,7 +215,9 @@ test("a text column that is not an address is judged by its own field", async ()
 test("GET /api/leads reads email through the shared judge and puts the result in the where", () => {
   assert.match(GET_body, /textFilterParam\(searchParams,\s*"email",\s*LEAD_EMAIL\)/);
   assert.match(GET_body, /if \(email\.error\) return email\.error/);
-  assert.match(GET_body, /if \(email\.value\) where\.email = email\.value/);
+  assert.match(GET_body, /if \(email\.value\) where\.email = emailFold\(email\.value\)/);
+  assert.match(leadsDoor, /import \{[^}]*\bemailFold\b[^}]*\} from "@\/lib\/lead-email"/,
+    "and the fold comes from the shared module rather than this door's imagination");
   assert.doesNotMatch(GET_body, /searchParams\.get\("email"\)/, "the raw parameter is not read any more");
   assert.match(
     leadsDoor,
@@ -223,7 +240,7 @@ test("the same where answers the page and the total", () => {
   assert.match(GET_body, /const pageWindow = \{ where,/);
   assert.match(GET_body, /prisma\.lead\.count\(\{ where \}\)/);
   assert.ok(
-    GET_body.indexOf("where.email = email.value") < GET_body.indexOf("const pageWindow"),
+    GET_body.indexOf("where.email = emailFold(email.value)") < GET_body.indexOf("const pageWindow"),
     "the filter is in the where before the where is used",
   );
 });
@@ -277,7 +294,10 @@ test("the contract advertises ?email=, names who judges it, and prices the wrong
   const described = (door.operation.query ?? []).find(([name]) => name === "email");
   assert.ok(described, "leads.list documents `email`");
   assert.ok(described[1].includes("POST /api/leads"), "and names the door whose rule it shares");
-  assert.ok(described[1].includes("exact"), "and says the match is byte-exact, not folded");
+  // Retargeted by #77, with the reason: the sentence used to promise a byte-exact match, which was
+  // the very defect this round measured. The contract now says folded, and has to keep saying it.
+  assert.ok(described[1].includes("folded, not exact"), "and says the match is folded, not byte-exact");
+  assert.ok(described[1].includes("not wildcards"), "and does not leave `%`/`_` to be guessed at");
   assert.ok((door.operation.responses ?? {})["400"].includes("`email`"), "and prices a wrong one");
   assert.deepEqual(
     (door.operation.query ?? []).map(([name]) => name),
