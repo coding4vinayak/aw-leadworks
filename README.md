@@ -5857,6 +5857,134 @@ other document text moved.
   not claimed.
 - **No demo step**: `aw-deploy#96` is still `CONFLICTING`.
 
+### Rebased onto `2437bf2` for the landing pass, and pressed against that trunk again
+
+The section above was written against `ff38306`. Trunk has taken three rounds since — #75
+(`754e3f0`), the nine lines of `AGENTS.md` that `be3a936` carries, and #76 (`2437bf2`) — and they met
+this branch in code as well as in text. `src/app/api/leads/[id]/route.ts` now holds both rounds'
+rules in one file: the `PATCH` holder lookup at `:63-79` goes through `emailFold`, and
+`actionParam(searchParams, LEAD_ACTIONS)` at `:94` still judges the caller's word above every branch,
+exactly as #75 left it. `src/lib/openapi.ts` took the same handling — this round's rewritten `email`
+sentence and #75's/#76's six `action` sentences are all in the served document. The README met `main`
+only at its anchor: both sections kept, `main`'s first, zero conflict markers left. `grep -rl AGENTS
+scripts src tests package.json` still finds nothing that reads `be3a936`'s file, so the measurement
+below describes the tree that was pushed.
+
+**One pin retargeted, and it is this round's own.** `lead-email-fold.test.ts` pins the README against
+the lines this file measured, and its last assertion is the suite count, in a test whose message
+reads "the suite count this tree measures":
+
+| pin | was holding | now holds |
+| --- | --- | --- |
+| `lead-email-fold` · "the README quotes the same measurement this file pins" | `/1347\/1347/` — the count `ff38306` plus this round printed | `/1527\/1527/` — the same arithmetic on `2437bf2` plus this round, quoted from the gates paragraph below. The four assertions above it (the section's heading, the first cut's `total=9`, the fold's reading, the scraper holdout) still quote the text they were written against and are untouched. |
+
+Not deleted and not loosened: it still asks whether the README carries the number the tree prints, and
+it bites — the count typed to `1527/1526` fails that test and no other
+(`/tmp/opencode/q112_perturb.log`, which kills the six other un-fixes the same way: the fold without
+its `mode` 2 tests, the escape removed 2, the read door back to bytes 6, the importer's page unfolded
+5, the holdout given a folded lookup 5, the contract sentence called exact again 2, and each leg
+restores the tree, ending on 59/59 across those four files with `git status` unchanged).
+
+**Everything was measured again on that tree, and both builds were live at once.** The base is a
+second worktree detached at `2437bf2`, its `node_modules` hard-linked from this one (`cp -al`), built
+and served on **:3479** while this branch serves **:3480**. `/tmp/opencode/q112_setup.sh` seeded
+`leadworks_q112_base` and `leadworks_q112_fix` with the same script and the same rows: two workspaces;
+eleven leads, nine of them the caller's — `John@X.com`, `bob@x.com`, `AMY@X.COM`,
+`john.smith+tag@x.com`, the pre-#99 pair `twin@x.com`/`Twin@X.COM`, and the three addresses that are
+also `ILIKE` syntax (`50%@x.com`, `50Z@x.com`, `abc@x.com`) — and two next door, one of them its own
+`John@X.com`; one static list holding the mixed-case row; 2 keys per side in `0600` files printed
+nowhere; Redis 6437/6438. Both presses open on the same six-table fingerprint, which is the claim "the
+same rows" rather than an assumption: `Lead=01f3f35c3c2b942b8e3bfeca971fa666`,
+`LeadList=4b44fbaee2efeeb2eb2650af30e6cee9`, `LeadListMember=dfbddd4a9a5d389224540046bc76d7b9`. The
+base instance also serves `/api/openapi` at **84,610 B `5eed6ddf1259`**, byte-for-byte the digest #76
+recorded for the build it landed, and the base tree measures the suite trunk measures (**1516/1516**,
+`/tmp/opencode/q112_suite_base.log`): two independent checks that the build under `:3479` is the trunk
+this branch merges into.
+
+49 legs (`q112_press_base.log`, `q112_press_fix.log`): **24 answers move, 25 hold**, the six legs that
+write a row are the same six on both builds, every leg puts its write back (`reset=True` on all 49 at
+both builds) and each press closes on the fingerprint it opened with (`True` on both). Replies are
+compared with generated ids and timestamps masked, because a fresh `create` returns a new cuid —
+status, byte count and the ids the page carries are what is being asked.
+
+| leg | the ask | base `2437bf2` | this branch |
+| --- | --- | --- | --- |
+| `R1`–`R5` | one stored `John@X.com`, asked as `john@x.com`, `JOHN@X.COM`, `JoHn@x.CoM`, `john@X.com`, `John@x.com` | `200 / 57` **`total=0`, five times** — the same body as an address nobody holds | `200 / 1084` **`total=1`** `ld_q112_mixed`, five times |
+| `R8`, `R9` | `BOB@X.COM`, `Bob@X.com` on the row the file door wrote | `200 total=0` | `200 / 761 total=1` `ld_q112_lower` |
+| `R11` | `AMY@X.COM` on a row stored `Amy@X.com` | `200 total=0` | `200 / 766 total=1` `ld_q112_upper` |
+| `R13` | `JOHN.SMITH+TAG@X.COM`, the local part with a `+` | `200 total=0` | `200 / 772 total=1` `ld_q112_local` |
+| `R14`–`R16` | the pre-#99 twins, `twin@x.com` / `Twin@X.COM` / `TWIN@x.com` | `total=1` (the byte-exact row), `total=1` (the other one), `total=0` (a spelling nobody holds) | **`total=2`** for all three — one address, the two rows that predate the fold, both named |
+| `R17`, `R18` | the twins through a window: `limit=1`, `page=1` then `page=2` | `total=1` twin1 / `total=0` — page two of an address the door could not see | `total=2` on both pages, `ld_q112_twin1` then `ld_q112_twin2` |
+| `R24` | `ABC@X.COM`, a row nobody wrote in that case | `200 total=0` | `200 / 759 total=1` `ld_q112_abc` |
+| `C1`, `C2` | the fold with a second filter: `john@x.com&status=NEW`, `amy@x.com&status=ENRICHED` | `total=0` both | `total=1` both — the fold selects the row, `status` still judges it |
+| `C4` | `john@x.com&listId=lst_q112_mixed` — the folded row is the member | `total=0` | `total=1` `ld_q112_mixed` |
+| `C5` | `TWIN@X.COM&minScore=71` — both twins match, one is scored 71 | `total=0` | `total=1` `ld_q112_twin1`, the score still cutting the other |
+| `C8` | `john@x.com&fields=email` | `200 / 80 total=0` — nothing to project | `200 / 102 total=1`, the row served as `{"email": …}` with **no `id`** in the page |
+| `C10` | the **other** workspace's key asking `john@x.com` | `total=0` | `total=1` `ld_q112_foreign` — its own next-door `John@X.com`, and not this workspace's row |
+| `W8`/`I1`/`I3` (read half) | the follow-up reads of three writes: `POST` `New.Person@X.com`, import `A_C@x.com`, import `ZOE@X.COM` | each new row answers its stored spelling and `total=0` for the other | each answers **both** spellings for the same row; the write replies themselves are byte-identical (`201 / 1129`, `201 / 233`, `201 / 233`) |
+
+The 25 that hold are the point of an A/B rather than a footnote. Four are the byte-exact spellings
+that already worked — `R6` `John@X.com`, `R7` `bob@x.com`, `R10` `Amy@X.com`, `R12`
+`john.smith+tag@x.com`, all `total=1` on both builds. Six are the escape: `R19` `%@x.com` and `R20`
+`a_c@x.com` and `R25` `back\slash@x.com` are `total=0` on **both** builds, while `R21` `50%@x.com` is
+`total=1` `ld_q112_pct` (not its neighbour), `R22` `50Z@x.com` is `total=1` `ld_q112_z` and `R23`
+`abc@x.com` is `total=1` `ld_q112_abc` — the shipped helper escapes, so the wildcards only moved
+against the first cut quoted above. Three are the refusals around the fold: `C3` `amy@x.com` with
+`status=NEW` is `total=0`, `C6` `john@x.com` with `minScore=71` is `total=0`, `C9` one tenant asking
+the other's address is `total=0`, and `C7` `?email=` empty is the **unfiltered** crowd on both —
+`total=9`, `200 / 6734`. Thirteen are the doors that write: `W1`–`W5` are five `409 / 253-257` naming
+the same holder in the same words, `W9`/`W10` are the `PATCH` pair at `409 / 100`, `W11` resending a
+row its own spelling is `200 / 1376`, `W6`/`W7` are `201`s at a row nobody held followed by reads that
+already answered `total=1`, and `I2` importing `ABC@X.COM` beside a stored `abc@x.com` is
+`200 / 233` `duplicatesExisting=1` — the importer folds on both builds.
+
+**Said rather than smoothed, on this rebased tree:**
+
+- **The press file died on the fix build before it finished, once, and the fix build is why.** The
+  first run of `C8` — `?email=john@x.com&fields=email` — raised `KeyError: 'id'` in the press helper,
+  because a folded read finds the row and `?fields=email` serves it with one column and no `id`; the
+  base build never got there, its page was empty. The helper now names a page by its ids where they
+  are served and by its field list where they are not, and **both** presses were re-run from the same
+  tables — `Lead=01f3f35c…` verified identical on both databases before the re-run, nothing reseeded.
+  The leg stays in the table because the fold meeting a projection is a combination this round is
+  responsible for, and its answer is "the row, one field, no id".
+- **`C10` moves and does not leak.** The other workspace's key asked `john@x.com` and got the row
+  *it* holds under that spelling — `ld_q112_foreign`, in `ws_q112_b` — while `C9`, this key asking
+  that address, stays `total=0` on both builds. The fold widens which spelling matches; `where` stays
+  `{ workspaceId, … }`, which is also what the offline pin asserts about all four comparisons.
+- **`R14`–`R18` are a two-row answer, not a merged one.** A workspace that predates #99 can hold
+  `twin@x.com` and `Twin@X.COM`, and every spelling now returns both, `total=2`, with `limit=1`
+  splitting them over two pages. Folding the read door did not merge them; `runDedupeJob` does, and
+  the dedupe report is what tells a caller it happened.
+- **Three of the nine follow-up reads move; six hold.** The writes themselves did not: all thirteen
+  write replies are the same status and byte count on both builds, so the round's claim that it
+  changed no door that writes an address is measured here, on trunk after #75 and #76, not inherited
+  from `ff38306`.
+- **The contract delta is one sentence and nothing else.** 84,610 → **84,836 B `394a6dafb418`**
+  (`+226`, the same 226 bytes this round measured on `ff38306`); a key-sorted diff of the two served
+  documents is **one differing key**, `paths./api/leads.get.parameters[3].description`, and nothing
+  else moved. `public/llms-full.txt` is byte-identical **between the two builds** at 8,864 B
+  `bade95c1ee19` — the deep file prints each operation's summary and auth, not its query prose.
+- **The scrape holdout is still a holdout and still not measured live.** `src/lib/scraper.ts` looks a
+  provider's address up byte-exactly; the census names it, and giving it a folded lookup fails the
+  census pin (`q112_perturb.log`). `?phone=` and `?company=` are still not filters.
+
+**Gates, all of them on the tree that was pushed:** `npm test` **1527/1527**
+(`/tmp/opencode/q112_suite_fix.log`), where the same trunk build measures **1516/1516** — the
+difference is exactly this round's 11 tests in `lead-email-fold.test.ts` plus the six retargets;
+`tsc --noEmit` exit 0; lint **0 errors / the same 13 warnings**; `check:contract` **8/8**;
+`check:llms-full` reporting the shipped file as the builder's own output; `npm run build` exit 0 on
+**both** the base worktree and this one; no lockfile in the diff (`git diff --name-only 2437bf2...HEAD`
+is ten files: `lead-email.ts`, `list-filter.ts`, `csv-import.ts`, both lead doors, `openapi.ts`, three
+test files and this README). **No demo step** — `aw-deploy#96` (STEP 27) was re-checked at the landing
+pass and is still `OPEN` / `CONFLICTING`.
+
+Nothing here touched `:3300`, `leadworks_sim` or the shared `leadworks` database, and no port,
+database or Redis instance belonging to another session was used: this pass's runtime was
+**:3479**/**:3480**, `leadworks_q112_base`/`leadworks_q112_fix`, Redis 6437/6438, created by
+`/tmp/opencode/q112_setup.sh`; both servers and both Redis processes were stopped by the exact PIDs
+`ss -ltnp` reported for those ports at the close of the round.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
