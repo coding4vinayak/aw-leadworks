@@ -5605,6 +5605,121 @@ seeded rows.
   is still `CONFLICTING`.
 
 Nothing touched `:3300`, `leadworks_sim` or the shared `leadworks` database.
+### Rebased onto `be3a936` for the landing pass, and pressed against that trunk again
+
+The section above was written against `ff38306`, and trunk has taken #75 (`754e3f0`) since — the
+round this section's own last bullet named as the one that "touches all three files this round
+touches" and predicted the collision in. It collided exactly as predicted, in code as well as in
+text: `lead-lists/[id]/route.ts`, `leads/[id]/route.ts` and `src/lib/openapi.ts`, plus the `## Score`
+anchor. The resolution keeps both rounds whole rather than picking one — at each door `actionParam`
+still judges the word **above** every branch and `membershipReport` still answers the fold **below**
+the write, and the two rounds' `200` sentences for `leads.enrich` / `leadLists.members` became one
+description per door that carries #75's refusal sentence and this round's arithmetic sentence. The
+README met `main` only at its anchor: both sections are kept, `main`'s first, zero conflict markers
+left. Then `be3a936` arrived, nine lines of `AGENTS.md` that `next` writes for itself; `grep -rl
+AGENTS scripts src tests package.json` finds nothing that reads it, so it is carried and the
+measurement below still describes the pushed tree.
+
+**Two pins retired, and they are #79's own pre-announcements.** `owns-before-words.test.ts` pinned
+this door's bare `create` *and* pinned `skipDuplicates` out with the message "the duplicate answer at
+this door is #111's open work"; the README scan in the same file ended at `## Score`, so every round
+landing after #79 inserts its section inside #79's slice.
+
+| pin | was holding | now holds |
+| --- | --- | --- |
+| `owns-before-words` · "writes the pair with create, and took on no fold this round" | `leadListMember.create({ data: { listId, leadId: id } })` and no `skipDuplicates` anywhere in the branch | the `createMany(… skipDuplicates: true)` this round wrote, plus `membershipReport(1, count)` — "the one-pair ask answers the same arithmetic as the crowd". The ordering it was really about (caller's words → list read → ownership → write) is untouched and still pinned three tests above |
+| `owns-before-words` · "says what it did not do, and does not do it" | no `skipDuplicates` between `## Whose row is this?` and `## Score`, which by then was a 978-line span holding five later sections | the same prohibition over that section's own prose only (the next `###` bound, measured at 4404-4628); every other assertion in that block still passes inside it |
+
+Neither was deleted and neither was loosened — the first got *stricter* about this door's bytes. All
+four retargets bite, and were proved to: the pair door's write put back to trunk's bare `create`
+fails 4 tests, `skipDuplicates` taken out of the fold 2, the reply re-typed as `{ ok: count === 1 }`
+2, and the README scan widened back to `## Score` 1 — each one leaving the tests that name it
+failing and each restored to `# fail 0` (`/tmp/opencode/q111_perturb.log`).
+
+**Everything was measured again on that tree, and this time both builds were live at once.** The base
+is a second worktree detached at `754e3f0`, its `node_modules` hard-linked from this one (`cp -al`),
+built and served on **:3477** while this branch serves **:3478** — so the section's own
+"sequential, not simultaneous" disclosure is superseded for this pass. `/tmp/opencode/q111_setup.sh`
+seeded `leadworks_q111_base` and `leadworks_q111_fix` with the same script and the same rows — two
+workspaces, 4 leads, 5 lists, 2 membership pairs, 2 keys per side, Redis 6435/6436, keys in `0600`
+files printed nowhere — and both presses open on the same six-table fingerprint, which is the claim
+"the same rows" rather than an assumption: `Lead=60acba3a163518a9f541441532d0942b`,
+`LeadList=47476b528848e3fc8aa9a810df8c32b5`, `LeadListMember=b2a18b360d1e6e8954786475240a8e2c`. The
+base instance also serves `/api/openapi` at **84,057 B `3f4108b3615c`**, byte-for-byte the digest #75
+recorded for its own fix build, and the base tree measures the suite trunk measures
+(**1493/1493**, `/tmp/opencode/q111_suite_base.log`): two independent checks that the build under
+`:3477` is the trunk this branch merges into.
+
+28 legs (`/tmp/opencode/q111_press_base.log`, `q111_press_fix.log`): **9 answers move, 19 hold
+byte-identical**, every leg's write put back (`reset=True` on all 28 at both builds) and each press
+closing on the fingerprint it opened with (`True` on both).
+
+| leg | the ask | base `754e3f0` | this branch |
+| --- | --- | --- | --- |
+| `M1` | `add-leads ["ld_q111_1"]` — the pair the list already holds | `409 / 130` names the **columns**, never the id | `200 / 47 {"ok":true,"requested":1,"added":0,"already":1}` |
+| `M2` | `add-leads ["ld_q111_1","ld_q111_2"]` — that pair plus one that is not | `409 / 130`; read back, the list still holds **only** `ld_q111_1` | `200 / 47 {"requested":2,"added":1,"already":1}`; read back, it holds **both** |
+| `M3` | `add-leads ["ld_q111_2","ld_q111_2","ld_q111_1"]` | `409 / 130` | `200 / 47 requested 2, added 1, already 1` — the repeat folded by `asStrings` before the index saw it |
+| `M4` | `add-leads ["ld_q111_2","ld_q111_3"]` at a list that holds nothing | `200 / 11 {"ok":true}` | `200 / 47 {"requested":2,"added":2,"already":0}` — same write, new answer |
+| `P1` | `POST /api/leads/{ld_q111_1}?action=add-to-list`, already on it | `409 / 130` | `200 / 47 requested 1, added 0, already 1` |
+| `P2` | `POST /api/leads/{ld_q111_2}?action=add-to-list` | `200 / 11 {"ok":true}` | `200 / 47 {"requested":1,"added":1,"already":0}` |
+| `P3` | the same lead, the same list, asked again from the seeded table | `200 / 11 {"ok":true}` | `200 / 47 {"requested":1,"added":1,"already":0}` — the leg is `P2` repeated, and the answer is too |
+| `W2` | `?action=%20add-leads`, the pair already held | `409 / 130` | `200 / 47 requested 1, added 0, already 1` |
+| `W4` | `?action=%20add-to-list`, the pair already held | `409 / 130` | `200 / 47`, the same |
+
+The nineteen that hold, and they are the point of an A/B rather than a footnote: `M5` `400 / 58` a
+non-string in the crowd, `M6` `422 / 105` an id that exists nowhere, `M8` the same `422` when the
+bad id travels *with* a pair that is already true (the fold does not quietly absorb a row the caller
+mistyped), `M7` `403 / 49` another tenant's lead id, `M9` `400 / 28` an empty crowd, `M10`/`P9`
+`401 / 64` with no key, `M11`/`P7`/`P8` `404 / 22` and `P6` `404 / 21` for a row the caller does not
+hold or does not exist, `M12` `200 / 11` — `remove-leads` of a pair that is not there, the no-op this
+round argues from and gave no arithmetic, `P4` `400 / 101` / `P5` `400 / 71` for a numeric `listId`
+and none, `W1` `400 / 101` / `W3` `400 / 97` the doubled words #75 refuses, and the three `refresh`
+legs (`F1`/`F3` `200 / 88`, `F2` `400 / 143`).
+
+**Said rather than smoothed, on this rebased tree:**
+
+- **`W2` and `W4` move for this round's reason, not the word's.** #75 decided *padding is not part of
+  the word* — `?action=%20add-leads` is `add-leads` — so both builds run the branch and both are
+  answered by the fold. They are in the table because the press took them and they moved; reading
+  them as word-behaviour would be wrong. The doubled-word legs `W1`/`W3` are the word legs, and they
+  hold.
+- **This section's last-but-one disclosure is now false, and the press says so.** "The pair door
+  still judges the body before it asks whose lead this is (`:134` …)" described `ff38306`; #75 put the
+  row and its ownership above the body at that door, so here `P6`/`P7` answer `404 / 21` and
+  `404 / 22` and `P9` `401 / 64` before any body is read, and `P4`'s `400 / 101` only arrives for a
+  caller who owns the lead. Closed by #75, not by this round; the text above is left standing as what
+  was measured there.
+- **The refresh race is still not pressed.** Nothing reachable from a client puts a membership between
+  `planListRefresh`'s read and its transaction, so the flag on that third call site is pinned offline
+  (the census counts it) and **not measured live**. What the press does measure is that the writer's
+  answer did not move where it could be measured: `F1` and `F3` are `200 / 88` byte-identical on both
+  builds, and `F3`'s list already holds a pair its filter re-matches — on a quiet table the plan's
+  count and the transaction's insert count are the same number, which is exactly why the two agree
+  here and why the fold matters only under a race.
+- **The contract delta is two sentences and nothing else.** 84,057 → **84,610 B `5eed6ddf1259`**
+  (`+553`); a key-sorted diff of the two served documents is **four lines**, both of them a `200`
+  description — `leads.enrich`'s and `leadLists.members`' — on one of these two doors. `/api/openapi`
+  and `/openapi.json` are byte-identical on each build. `public/llms-full.txt` is byte-identical
+  **between the two builds** at 8,864 B `bade95c1ee19`; the 8,447 quoted above was that file as of
+  `ff38306`, and this round changed nothing in it.
+- **`remove-leads` keeps `{"ok":true}`** — `M12` holds at `200 / 11` on both builds. It is the
+  baseline this round argues from; moving it would have moved a control.
+
+**Gates, all of them on the tree that was pushed:** `npm test` **1516/1516**
+(`/tmp/opencode/q111_suite_landing.log`), where the same trunk build measures **1493/1493** — the difference is exactly this round's `membership-idempotent.test.ts`,
+23 tests; `tsc --noEmit` exit 0; lint **0 errors / the same 13 warnings**; `check:contract` **8/8**;
+`check:llms-full` reporting the shipped file as the builder's own output; `npm run build` exit 0 on
+**both** the base worktree and this one; no lockfile in the diff (`git diff --name-only be3a936...HEAD`
+is nine files: the two doors, the new module, `openapi.ts`, four test files and this README). **No
+demo step** — `aw-deploy#96` (STEP 27) was re-checked at the landing pass and is still `OPEN` /
+`CONFLICTING` / `DIRTY`.
+
+Nothing here touched `:3300`, `leadworks_sim` or the shared `leadworks` database, and no port,
+database or Redis instance belonging to another session was used: this pass's runtime was
+**:3477**/**:3478**, `leadworks_q111_base`/`leadworks_q111_fix`, Redis 6435/6436, created by
+`/tmp/opencode/q111_setup.sh`; both servers and both Redis processes were stopped by the exact PIDs
+`ss -ltnp` reported for those ports at the close of the round.
+
 ## Score: one arithmetic, and who may change it
 
 `Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
