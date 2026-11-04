@@ -6394,7 +6394,7 @@ same crowd (`16/15/9/9/9/9/10/7/2` — leads all/own, sources, jobs, exports, pr
 keys), and **every crowd ties**: `count(DISTINCT createdAt)` is `1` inside each of the six doors'
 workspace, because one `INSERT` is one transaction timestamp. The order-relevant digests match across
 the two databases (`Lead` by id/score/status `5980116cefa1…`, `Source` `027b17aa1054…`, `Job`
-`50825c45d073…`, `Export` `9f37eab4e256…`, `ExportProfile` `168036c26bac…`, `LeadList`
+`50825c45d073…`, `Export` `9f37eab4e0a4…`, `ExportProfile` `168036c26bac…`, `LeadList`
 `0f0909f3e02c…`, `LeadListMember` `d7e6b89169a3…`).
 
 Forty-three legs, both builds, **every one of them a `GET`** — nothing writes, so the two runs read the
@@ -6423,17 +6423,23 @@ free to break a tie the same way within one plan and differently across two. The
 walk is always wrong" — it was "the walk is not guaranteed", and a leg that happens to pass on the base
 is the proof of that sentence, not of the other one.
 
-The thirteen other moved legs are the pages that contain the whole crowd: `C2`, `N4`, `N5`, `N6` and
-`R1`–`R5` are `200 / 12,625` on **both** builds — same rows, same byte count, different *sequence*,
-because the sequence was undecided and now it is (`ld_q109_hi, ld_q109_00, ld_q109_01, …` instead of
-`ld_q109_hi, ld_q109_03, ld_q109_12, …`). `N1` and `N2` are the same page number cut differently
-(`200 / 2506` → `200 / 2817` and `200 / 2817` → `200 / 2202`), and `C3` is a two-row projection at
-`200 / 176` → `200 / 175`. None of them is a new answer to a question nobody asked; they are the rows
-the round was always going to reorder, and the claim "one page, one answer" is only checkable because
-they moved.
+The thirteen other moved legs are the pages that contain the whole crowd, and they split two ways.
+**Ten answer the identical byte count on both builds** — `C2` `/api/leads?limit=20`, `N4` `/api/leads`
+and the five clamped-or-refused shapes `R1`–`R5` at `200 / 12,625` (`R2`, whose body echoes the
+asked-for `101`, at `200 / 12,626`), `N5` `/api/sources` at `200 / 2,794`, `N6` `/api/export-profiles`
+at `200 / 3,668` and **`C4`, the same claim on the eighth door**, `/api/export-profiles?limit=9` at
+`200 / 3,667`. Same rows, same size, different *sequence*, because the sequence was undecided and now
+it is (`ld_q109_hi, ld_q109_00, ld_q109_01, …` instead of `ld_q109_hi, ld_q109_03, ld_q109_12, …`).
+**Three changed size**: `N1` and `N2` are the same page numbers cut differently (`200 / 2,506` →
+`200 / 2,817` and `200 / 2,817` → `200 / 2,202`, a tied page having had no reason to hold a stable
+count before), and `C3` is a two-row projection at `200 / 176` → `200 / 175`. `P11` belongs to the
+first kind too: its walk summary is the same on both builds and its pages are not (`hi, enr, _12` on
+p1 there, `hi, _00, _01` here, the same fifteen rows in a different order). None of these is a new
+answer to a question nobody asked; they are the rows the round was always going to reorder, and the
+claim "one page, one answer" is only checkable because they moved.
 
 **What the nineteen holds are:** `C1` — `?limit=1` over a crowd whose top row is the *untied* `score=90`
-lead — is byte-identical, which is the proof that the ranking itself was not touched; `C4`, `T1`, `T2`,
+lead — is byte-identical, which is the proof that the ranking itself was not touched; `T1`, `T2`,
 `T3` (the members door's own three-page walk over six rows, and the rules door, which this runtime
 holds no rows of — `200 / 56 total=0` on both builds, pinned in code as `RULE_PRIORITY_ORDER` rather
 than walked over an empty crowd); `N3` — `?page=99` past the end, `200 / 58` on both; the refusals and
