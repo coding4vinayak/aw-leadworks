@@ -596,7 +596,7 @@ const PATHS: Record<string, PathItem> = {
       auth: "key",
       query: [
         ["workspaceId", "The workspace to read. Defaults to the key's own."],
-        ["page", "1-based page number."],
+        ["page", "1-based page number, cut out of a total order — `createdAt desc`, then `id asc` — so one profile never lands on two pages and a walk of `?page=1..totalPages` reaches each of them once."],
         ["limit", "Page size; it caps at 100."],
       ],
       responses: {

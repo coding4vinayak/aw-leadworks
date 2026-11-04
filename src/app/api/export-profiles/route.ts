@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
 import { profileSweep } from "@/lib/export-profile";
-import { pageParams } from "@/lib/pagination";
+import { PAGED_TIEBREAK, pageParams } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +31,7 @@ async function GET_impl(request: Request) {
   const { page, limit } = pageParams(searchParams, 20);
 
   const where = { workspaceId };
-  const window = { where, orderBy: { createdAt: "desc" as const }, skip: (page - 1) * limit, take: limit };
+  const window = { where, orderBy: [{ createdAt: "desc" as const }, PAGED_TIEBREAK], skip: (page - 1) * limit, take: limit };
   const [rows, total] = await Promise.all([
     prisma.exportProfile.findMany({ ...window, include: { _count: { select: { exports: true } } } }),
     prisma.exportProfile.count({ where }),

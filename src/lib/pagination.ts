@@ -38,8 +38,10 @@ export function pageParams(
  * A page is a slice — `skip: (page - 1) * limit, take: limit` — and a slice is only
  * reproducible if the order it cuts is total. `#48` recorded this as a limit it would not
  * pretend away ("The order has no tiebreaker"), and `#45` had already fixed it at one door by
- * ordering members on `leadId`, which is unique within a list. This is that rule, taken to the
- * five doors that page over a column many rows share.
+ * ordering members on `leadId`, which is unique within a list. This is that rule, taken to every
+ * door that pages over a column many rows share: five doors when this was written, six on the tree
+ * that landed it — `#87`'s `GET /api/export-profiles` arrived in between and this round's own census
+ * over the route files is what found it, not a memory of which doors existed.
  *
  * Measured on the running app before this was written (`ff38306`, `:3435` over this session's
  * own `leadworks_r74`, `/tmp/opencode/r74_press_ab.log`) over crowds an importer would have
