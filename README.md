@@ -2814,15 +2814,18 @@ What this does not claim:
 * `?select=`, `?include=` and `?fields[]=` still return the whole page. Same decision as #46,
   repeated because it is the same decision: one parameter, one vocabulary, and a door that learns a
   second synonym for it is a door that can answer them differently.
-* The order has no tiebreaker. `orderBy: { score: "desc" }` says nothing about rows that tie, and an
-  imported crowd ties everywhere: three reads of one URL inside one run answered the identical
-  105,536 bytes, and this round's matched pair happens to agree on that number on both sides, but
-  earlier independent runs of the same measurement over the same import shape answered 93,129 and
-  93,517 for the same page — which of the tied rows land on a page, and therefore how many nested
-  `listMemberships` it carries, moves. The ratios above are this pair's, not a property of every
-  page. #45 found this at the list door and gave that door `orderBy: { leadId: "asc" }`; picking a
-  secondary key for the lead door changes which rows a caller who asked for nothing sees, so it is a
-  separate round's decision and this round only measured it.
+* The order had no tiebreaker — *this is the limit #74 took*. `orderBy: { score: "desc" }` said
+  nothing about rows that tied, and an imported crowd tied everywhere: three reads of one URL inside
+  one run answered the identical 105,536 bytes, and #48's matched pair happened to agree on that
+  number on both sides, but earlier independent runs of the same measurement over the same import
+  shape answered 93,129 and 93,517 for the same page — which of the tied rows landed on a page, and
+  therefore how many nested `listMemberships` it carried, moved. The ratios above are that pair's,
+  not a property of every page. #45 found this at the list door and gave that door
+  `orderBy: { leadId: "asc" }`; picking a secondary key for the lead door changes which rows a caller
+  who asked for nothing sees, so #48 only measured it and named the decision for a later round. #74
+  made that decision, at all six paged doors on the tree that landed it — the five it found, plus
+  `#87`'s `GET /api/export-profiles`, which arrived between the branch and the trunk and was caught by
+  the census this round wrote — and one more that had never been sliced fairly.
 * The unprojected page still embeds the whole `list` record inside every membership, `filterJson`
   included. Dropping that changes the shape of a documented response — the changelog's 30-days'-notice
   class of change — and this round only stops handing it to callers who named columns instead.
@@ -6240,11 +6243,300 @@ database or Redis instance belonging to another session was used: this pass's ru
 `/tmp/opencode/q113_setup.sh`; both servers and both Redis processes were stopped by the exact PIDs
 `ss -ltnp` reported for those ports at the close of the round, and only this round's two databases
 were dropped.
+### A page is a slice, and five doors were slicing a tie: `?page=1..totalPages` handed some rows twice and others not at all
+
+`GET /api/leads`, `/api/sources`, `/api/jobs`, `/api/exports` and `/api/lead-lists` all answer
+`{ rows, total, page, limit, totalPages }`, and all five cut their page with
+`skip: (page - 1) * limit, take: limit`. All five ordered by a column many rows share — the leads by
+`score desc`, the other four by `createdAt desc` — and `createdAt desc` ties more often than it
+sounds like it should: `now()` is the *transaction* timestamp, so an importer that writes a crowd in
+one transaction gives every row in that crowd exactly the same `createdAt`. Measured on
+`origin/main` (`ff38306`) on the running app first, in this session's own runtime (`:3435`, database
+`leadworks_r74`, Redis 6418, throwaway worktree) over crowds written one transaction each — 13 leads
+all at `score=50`, and nine sources, nine jobs, nine exports and nine lists all sharing one
+`createdAt` (`/tmp/opencode/r74_press.py` → `/tmp/opencode/r74_press_ab.log`):
+
+```
+GET /api/leads?limit=3, walked p1..p5  (total=13, totalPages=5)
+  p1 ld_r74_06 ld_r74_09 ld_r74_00 | p2 ld_r74_03 ld_r74_08 ld_r74_00 | p3 … 
+  -> 13 rows returned, 12 distinct: `ld_r74_00` on two pages, `ld_r74_02` on none
+GET /api/leads?limit=2                 -> 11 distinct of 13
+GET /api/leads?limit=4 / ?limit=5 / ?limit=7 -> all 13: the page size decides which tie lands where
+GET /api/{sources,jobs,exports,lead-lists}?limit=2 -> 8 distinct of 9, one row repeated
+GET /api/leads?limit=3&page=1                      -> tied06, tied09, tied00
+GET /api/leads?limit=3&page=1&fields=email,score   -> tied12, tied11, tied10
+  one door, one page, two answers, and it disagreed on all five pages
+```
+
+Nothing in the answer says so. `total=13` and `totalPages=5` are correct on every one of those
+requests, and the walk that obeys them returns 13 rows — which is why this is the worst shape a read
+door can have: a caller who pages through the crowd to export it gets some leads twice and others
+not at all, and every number beside the rows vouches for the answer. The projected/unprojected pair
+is the same fact one level nearer: `#47` and `#48` made both branches share one `pageWindow` so they
+could not disagree about the filter, and they did share it — they simply each got a different slice
+out of a tie, because nothing in `{ score: "desc" }` says which of thirteen equal rows is third.
+
+The fix is the rule this app already runs twice. `#45` ordered the membership window by `leadId`,
+which is unique inside a list, and `RULE_PRIORITY_ORDER` (`src/lib/rule-priority.ts`) ranks rules by
+`priority desc`, then `createdAt asc`, then `id asc` — its header says the tiebreak is there so "the
+same two rules produce the same plan every minute". `src/lib/pagination.ts` now carries that third
+key as `PAGED_TIEBREAK`, and the four doors that ordered a bare `{ createdAt: "desc" }` and the leads
+door's `pageWindow` each end their order with it: `[{ createdAt: "desc" }, PAGED_TIEBREAK]`,
+`[{ score: "desc" }, PAGED_TIEBREAK]`. Ascending, as the two precedents do, and on `id`, because
+every table here has one and the schema makes it unique — so the order is total, the slice is
+reproducible, and a page walk reaches each row once. No new parameter, no re-ranked default, no
+migration: the *primary* key is the one each door already used, which decides which crowd sorts
+first; only the order inside a band of ties is now decided rather than left to the sort.
+
+Two doors' silence in the map went with it, because a caller cannot walk a page they are not told
+about. `GET /api/lead-lists` pages — `skip`, `take`, `totalPages`, a default of 20 — and its
+contract entry documented `workspaceId` alone, and `GET /api/lead-lists/{id}` returns `memberPage`
+with `page`, `limit` and `totalPages` and documented neither `?page=` nor `?limit=`. Both now carry
+them, and the six collection operations' `page` line names the order the page is cut from, so the
+map says what the door guarantees. `public/llms-full.txt` was rebuilt from the contract rather than
+edited (8,447 → 8,531 bytes; the one line it gained is the list door's summary, because that file
+carries summaries and auth, not query descriptions — the same fact `#73` recorded).
+
+Live A/B over the same rows, nothing reseeded, fix build on `:3436` with its own Redis 6419: the
+leads walk at `limit=3` is **13 rows, 13 distinct, 0 repeated** and at `limit=2` **13 of 13** (was
+12 and 11), each of the four `createdAt` doors walks **9 of 9 at every page size tried** (was 8 at
+`limit=2`), and the two branches of the leads door now answer the *same* rows on all five pages —
+`tied00`–`tied02` on p1, `tied03`–`tied05` on p2, one row on p5 — where `main` disagreed on every one
+of them. What did not move is what the round promised would not: `total=13`, `totalPages=5` and the
+four `createdAt` doors' `total=9` on both builds, the table counts the same before and after each leg
+(`leads=14, sources=9, jobs=9, exports=9, lead-lists=9`), and the four legs that must answer
+identically on every build matched byte for byte (`/api/sources?limit=1` 358 bytes,
+`/api/jobs?limit=1` 391, tenant B's `/api/leads?limit=1` 776, and the keyless request's 64-byte
+refusal). The measurement also forced one disclosure the shape of this defect hides: **re-issuing the
+same URLs on `main` was stable** — walk 2 of `?page=1..5` was identical to walk 1, and the walk after
+an ordinary `PATCH` of one tied row was identical to the walk before it. The rows are lost *between*
+shapes of the same question (page size, and the projected/whole pair of one door), which is why the
+fix is a source-wide rule with a census over it rather than a second request to one URL. Disclosed
+rather than smoothed: **the two instances were sequential, not simultaneous** (one worktree holds one
+`.next`, so the trunk server was stopped by its exact PID before the branch was built); the crowd was
+seeded with hand-written ids (`ld_r74_00`…`_12`) rather than cuids, which makes the new tiebreak
+readable in the logs, and a cuid sorts just as totally; and **this makes the order reproducible, not
+static** — a caller who writes between page reads still sees rows move across a boundary, because a
+page over a changing crowd is a different problem and `#49`'s sweep cursor is this app's answer to
+that one.
+
+Pinned offline in `tests/unit/paged-list-order.test.ts` (15 tests as this was first written, **17 on
+the tree that landed**; no network, no database): the shared key's value and the two rounds it comes
+from; **a census over every route file that slices** (`skip:` in its blanked source) requiring each
+Prisma call that skips to end its order on a column that is unique in that window, which named the
+seven paging doors on `ff38306` and found no offender — **eight on the landing tree, and the eighth
+one's own offender, said below**; the five collection doors each importing `PAGED_TIEBREAK` rather
+than re-typing `{ id: "asc" }` (six there); the rules door already total through `RULE_PRIORITY_ORDER`
+and the membership window still unique through `leadId`; the same census turned the other way — every
+door that slices declares `page` in the contract, which is the claim that was false for two of them
+before this round; the `page` sentences each naming the key their door sorts on (six here, seven
+there); and the README's measured numbers, with negative pins on the four repeat/drop sentences.
+Non-vacuity measured on the first-cut tree, one perturbation at a time
+and each restored: dropping `PAGED_TIEBREAK` from the leads door fails **2 of 15** (the census test
+and the import test), replacing it with a re-typed `{ id: "asc" }` in all five doors fails **1 of 15**
+(the import test, which is the point — the rule is written once), and putting `leadLists.list`'s
+paging back out of the contract fails **2 of 15** (the `page`-sentences test and the reverse census
+that no slicing door is silent). Restored: 15/15.
+
+**One existing test was retargeted, and it is named here**: `tests/unit/leads-fields.test.ts:71`
+"shares the filter, the order and the window between the two branches" pinned
+`orderBy:\s*\{\s*score:\s*"desc"` and this round makes that order an array. The pin now requires
+`orderBy: [{ score: "desc" … }, PAGED_TIEBREAK]` — the same shared window, and additionally that the
+order it shares is total, so it is stricter than the one it replaces, and every clause it already
+demanded is still demanded. `README.md` likewise stops describing a `GET /api/leads?orderBy=` that no
+door has ever read (a stale sentence in the same neighbourhood as the ordering this round changed),
+and `#48`'s disclosed limit "The order has no tiebreaker" is now attributed to the build it was
+measured on, with the decision it deferred named as this round's.
+
+Gates, every one of them measured on the pushed tree: suite **1351/1351** where `main` measures
+**1336/1336** at `ff38306` — the 15 this round adds are the whole difference — `tsc` exit 0, lint
+**0 errors / the same 13 warnings**, `check:contract` **8/8**, `check:llms-full` reporting the shipped
+file as the builder's own output, `next build` exit 0, **no test deleted and none relaxed**; and the
+fix leg above was re-run against the build this tree makes, where every line — the five walks, the
+five page sizes, the branch pair, the four legs that must not move — matched what is quoted here.
+What this does not claim: no door takes a caller-chosen sort column (`?orderBy=` is
+still read by nobody, and this round did not add it); the dashboard's own queries are untouched, since
+they render a page of the UI rather than answer a caller who can ask for page 2; `total` still counts
+the whole filtered crowd, not the page; and **no demo step** — `aw-deploy`'s #96 (STEP 27) is still
+`CONFLICTING`.
+
+### Rebased onto `ff34c3f` for the landing pass, and pressed against that trunk again
+
+`main` moved **fifty-three commits** under this branch while it sat open. It took #106, #107, #108,
+#87, #114, a Dependabot pair (#115, and the lockfile bump under it) and then #110, #111, #112 and #113.
+The rebase stopped in three files, and the census this round wrote stopped it on a fourth thing the
+branch had never seen:
+
+- `src/app/api/sources/route.ts`: #110 gave that door `?type=` and
+  `?lastRunStatus=`, and this round changed the same import line it changed. Both stay — trunk's two
+  filters and this round's `PAGED_TIEBREAK` — and the door's `page` sentence is this round's.
+- `src/lib/openapi.ts`: #110 documented the two new source filters in the same `query` list this round
+  rewrote `page` inside. The landing tree carries trunk's `type` and `lastRunStatus` entries and this
+  round's `page` sentence, in that order; #113's `leadLists.members` arithmetic sentence is untouched,
+  because this round never edited that door's `200`.
+- `README.md` at the `## Score` anchor: both sections kept, main's first.
+- **and then the census found a door this round had never heard of.** `tests/unit/paged-list-order.test.ts`
+  walks every route file that contains `skip:`, names the doors that slice a page, and requires each
+  order to end on a key unique in its window. On `ff38306` that was seven doors and no offender. On
+  `ff34c3f` it is **eight**: #87 (`86e537d`, `71e613d`) added `GET /api/export-profiles`, and it cuts
+  its page out of `createdAt desc` — a column every row in a one-statement import shares, which is
+  exactly how that table is filled (`prisma/seed.ts` and a direct write; no door posts it). The round
+  that says *no page is ever cut out of a tie again* cannot land with a tieable page in the tree, so
+  this tree tie-breaks six doors, not five.
+
+The landing runtime was this pass's own: base = a detached worktree at `ff34c3f` on **:3483**, this
+branch on **:3484**, `leadworks_q109_base`/`leadworks_q109_fix` and Redis 6441/6442 created by
+`/tmp/opencode/q109_setup.sh`, keys read from `0600` files and printed nowhere. Identity was checked
+before a leg ran: `ss -ltnp` gave the PID for each port and `/proc/<pid>/cwd` gave the worktree it was
+started from, the base served trunk's contract at **85,063 B `dbc8daffdcdf`** — the exact bytes #113
+merged — and its suite printed **1543/1543**. Both databases were seeded by one script and print the
+same crowd (`16/15/9/9/9/9/10/7/2` — leads all/own, sources, jobs, exports, profiles, lists, members,
+keys), and **every crowd ties**: `count(DISTINCT createdAt)` is `1` inside each of the six doors'
+workspace, because one `INSERT` is one transaction timestamp. The order-relevant digests match across
+the two databases (`Lead` by id/score/status `5980116cefa1…`, `Source` `027b17aa1054…`, `Job`
+`50825c45d073…`, `Export` `9f37eab4e0a4…`, `ExportProfile` `168036c26bac…`, `LeadList`
+`0f0909f3e02c…`, `LeadListMember` `d7e6b89169a3…`).
+
+Forty-three legs, both builds, **every one of them a `GET`** — nothing writes, so the two runs read the
+same rows by construction and the fingerprint printed at the open and the close of each press says so:
+`base open == base close`, `fix open == fix close`, and all four are the same string. Compared by
+`/tmp/opencode/q109_diff.py` over `/tmp/opencode/q109_press_base.log` and `/tmp/opencode/q109_press_fix.log`:
+**twenty-four legs moved and nineteen held.**
+
+The eleven walks are the round. `P1`/`P2`/`P3` walk the fifteen leads (thirteen at `score=50`, one at
+90, one `ENRICHED`) at `limit=3`, `4` and `7`; `P4`–`P8` walk the nine sources, jobs, exports, lists and
+**export-profiles** at `limit=2`; `P9` walks the leads with a filter on it and `P10` the sources with
+#110's `?type=` on it; `P11` walks the leads through `?fields=email,score`:
+
+| the walk at | base `ff34c3f` | this branch |
+| --- | --- | --- |
+| leads `limit=3` | returned 15, **distinct 14**, `ld_q109_01` on two pages | returned 15, distinct 15, nothing repeated |
+| leads `limit=4` | returned 15, distinct 14, same repeat | 15 of 15 |
+| leads `limit=7` | returned 15, distinct 14, same repeat | 15 of 15 |
+| sources / jobs / exports / lists / **profiles** `limit=2` | returned 9, **distinct 8** on all five doors | returned 9, distinct 9 on all five |
+| leads `status=NEW&limit=3` | returned 14, distinct 13 | 14 of 14 |
+| sources `type=WEB_SCRAPER&limit=2` | returned 9, distinct 8 | 9 of 9 |
+| leads `fields=email,score&limit=3` | returned 15, **distinct 15** — clean, by luck | 15 of 15, and the pages are now the same pages every time |
+
+`P11` is said rather than smoothed: the base build answered *that* walk correctly, because Postgres is
+free to break a tie the same way within one plan and differently across two. The defect was never "the
+walk is always wrong" — it was "the walk is not guaranteed", and a leg that happens to pass on the base
+is the proof of that sentence, not of the other one.
+
+The thirteen other moved legs are the pages that contain the whole crowd, and they split two ways.
+**Ten answer the identical byte count on both builds** — `C2` `/api/leads?limit=20`, `N4` `/api/leads`
+and the five clamped-or-refused shapes `R1`–`R5` at `200 / 12,625` (`R2`, whose body echoes the
+asked-for `101`, at `200 / 12,626`), `N5` `/api/sources` at `200 / 2,794`, `N6` `/api/export-profiles`
+at `200 / 3,668` and **`C4`, the same claim on the eighth door**, `/api/export-profiles?limit=9` at
+`200 / 3,667`. Same rows, same size, different *sequence*, because the sequence was undecided and now
+it is (`ld_q109_hi, ld_q109_00, ld_q109_01, …` instead of `ld_q109_hi, ld_q109_03, ld_q109_12, …`).
+**Three changed size**: `N1` and `N2` are the same page numbers cut differently (`200 / 2,506` →
+`200 / 2,817` and `200 / 2,817` → `200 / 2,202`, a tied page having had no reason to hold a stable
+count before), and `C3` is a two-row projection at `200 / 176` → `200 / 175`. `P11` belongs to the
+first kind too: its walk summary is the same on both builds and its pages are not (`hi, enr, _12` on
+p1 there, `hi, _00, _01` here, the same fifteen rows in a different order). None of these is a new
+answer to a question nobody asked; they are the rows the round was always going to reorder, and the
+claim "one page, one answer" is only checkable because they moved.
+
+**What the nineteen holds are:** `C1` — `?limit=1` over a crowd whose top row is the *untied* `score=90`
+lead — is byte-identical, which is the proof that the ranking itself was not touched; `T1`, `T2`,
+`T3` (the members door's own three-page walk over six rows, and the rules door, which this runtime
+holds no rows of — `200 / 56 total=0` on both builds, pinned in code as `RULE_PRIORITY_ORDER` rather
+than walked over an empty crowd); `N3` — `?page=99` past the end, `200 / 58` on both; the refusals and
+the tenant doors `R6`–`R16` — #110's `400 / 95` for `?type=api`, its `400 / 59` for `?isActive=1`,
+`401 / 64` with no key, `403 / 56` asking for another workspace's page **with the same path the other
+tenant is answered `200` on**, that tenant's own `200` pages, and `404 / 22` for a list the caller does
+not hold; and the neighbours `E1`–`E3`. `R9`/`R10` are one path read with two different keys, and both
+hold: a tiebreak that only worked for the default workspace would show up in that pair.
+
+The contract moved by nineteen keys and **removed none**: **85,063 B `dbc8daffdcdf` → 87,644 B
+`a10092bf3b3b`**, `+2,581`, `/api/openapi` byte-identical to `/openapi.json` on both builds, and a
+flattened key-by-key diff of the two served documents (`/tmp/opencode/q109_contract_3483_/api_openapi.json`,
+`q109_contract_3484_api_openapi.json`) reports **9 changed descriptions** — the six paging doors' `page`
+sentences, #110's sources door among them, plus `leadLists.list`'s summary and `200` and
+`leadLists.get`'s `200` — and **20 keys added**: `page` and `limit` declared at `leadLists.list` and
+`leadLists.get`, five fields each. The two doors were slicing pages the contract never said a caller
+could ask for. `public/llms-full.txt` is **8,864 B `bade95c1ee19` on trunk → 8,948 B `24924b1a3347`
+here**, `+84`, one line — the list door's summary — and `npm run check:llms-full` prints the shipped
+file as the builder's own output; the query sentences above do not appear in it, which is what
+`paged-list-order.test.ts:238` pins.
+
+**Four pins moved with this pass and two were added; none was relaxed or deleted**, each with its
+reason beside it:
+
+| where | it asked | it asks now |
+| --- | --- | --- |
+| `paged-list-order.test.ts:148` | the census names exactly seven slicing doors | eight, and the eighth is `export-profiles` — #87's door arrived after the branch was cut, so the census did its job on the rebase |
+| `:121` and `:195` | the tiebreak is imported by five doors / six doors document `page` | six and seven, the new one carrying the same two assertions |
+| `:245`–`:266`'s sibling at `:255` | the README says "#74 made that decision, at all **five** paged doors" | at all **six**, in the same sentence — the pin moved because the sentence became false, not because it was in the way |
+| `membership-idempotent.test.ts:270` | no `8,528`/`8,531` anywhere from #111's heading to `## Score:` | not anywhere in **#111's section**, bounded by #112's heading |
+| `:269` and `:276`, new | — | the landing block's own figures: six doors, `24 moved / 19 held`, `85,063 → 87,644 B`, the `count(DISTINCT createdAt)` identity, and the clause that says which walk the base answered correctly |
+
+The last one needs its own sentence: that guard exists because #111 must not claim it grew
+`llms-full.txt`, and its slice was the tail of the README — which has since grown three more rounds'
+sections, one of which (#74, this one) *legitimately* grew that file. Read across all of them the pin
+was forbidding another round's true statement, so it is bounded to #111's own bytes and still forbids
+#111 from claiming the growth; the statement that #74 grew the file is pinned in
+`paged-list-order.test.ts`, not there. Strictly narrower scope, same strength on its own round.
+
+Two sentences elsewhere in this file became false in the present tense when the door count went from
+five to six, and were amended where they stand: #48's disclosure, which now reads "at all six paged
+doors on the tree that landed it" and names the census as the thing that caught the sixth, and this
+round's own census line, which now says seven doors was what `ff38306` had and puts the eighth — and
+the offender the eighth carried — beside it. The first-cut press's numbers — `ld_r74_00`…`_12`, 12
+distinct of 13, 8 of 9 — stay quoted exactly as that press wrote them, and `:246`–`:249` keep
+requiring them; that section's non-vacuity paragraph is now labelled as the first cut's measurement,
+because the same perturbations re-run here moved with the door count.
+
+Non-vacuity, re-measured on this landing tree by `/tmp/opencode/q109_perturb.py`: each mutation rewrites
+one anchor (the harness refuses to guess when an anchor matches more or less than once), runs the two
+files that answer for this rule — `paged-list-order.test.ts` and `leads-fields.test.ts`, **61 tests**
+between them — and writes the saved bytes back. **21 of 21 mutations were caught by at least one pin**;
+the restored run is 61/61 and `git status --porcelain` was the same six lines at open and at close.
+
+| the mutation | what failed |
+| --- | --- |
+| the leads door goes back to a tie — key out of its window, import out too | **3 of 61**: the census's no-offender test, the six-door import test, and `leads-fields.test.ts`'s retargeted "shares the filter, the order and the window" pin |
+| the same at each of the other five doors, one at a time — the four `createdAt` doors and **`export-profiles`** | **2 of 61** each: no-offender and the import test. That `export-profiles` fails at all is the point of this pass; the eighth door is pinned, not merely counted |
+| all six doors re-type `{ id: "asc" }` instead of importing it | **2 of 61**: the import test and that same leads-fields pin. The census does *not* fail, because `UNIQUE_TAIL` accepts a literal `{ id: "asc" }` on purpose — so "the rule is written once" is enforced by the import test, not by the census, and that is said here rather than quietly claimed by the pin |
+| `PAGED_TIEBREAK` itself becomes `{ createdAt: "asc" }`, or `{ id: "desc" }` | **1 of 61** each, the value test. The same limitation in the other direction: the census reads the *name* at each door, so a shared rule whose value is wrong is caught once, at its definition, not at all eight doors |
+| a ninth door starts slicing a page out of a tie (`webhooks`, which has never paged) | **3 of 61**: no-offender, the eight-door census, and the reverse census. With that same door slicing *fairly* it is **2 of 61** — the census discovers doors, it does not remember them |
+| `leadLists.list`'s or `export-profiles`' `page` sentence goes back out of the contract | **2 of 61** each: the `page`-sentences test and the reverse census |
+| the profiles sentence names `score desc`, a key its door does not sort on / the leads sentence drops the words "total order" | **1 of 61** each: the `page`-sentences test |
+| #48's disclosure written back as the five-door claim; this round's census line written back as its old present tense | **1 of 61** each — one positive README pin and one negative one |
+| the landing block's own figures: door count wrong, the press split one leg off, the contract size one byte high, the clause about the walk the base got right deleted | **1 of 61** each, in the two README tests this pass adds |
+
+Disclosed rather than smoothed, because it bears on which measurements are trustworthy: a *follow-up*
+probe that was only collecting the names of the tests each mutation failed had a bug — `open(p, "w")`
+is evaluated before the read that feeds it, so six route files were truncated to zero bytes. All six
+came back from `HEAD`; five of them carried no uncommitted work at all, and the sixth's was two lines,
+re-applied by hand. Nothing in the press logs above was taken during or after that (the presses, the
+contract captures and the perturbation run itself were all finished before it), and every gate quoted
+below was re-run on the restored tree.
+
+Gates on the landing tree, each one run after the restore: `npm test` **1560/1560** where the base build
+on `ff34c3f` measures **1543/1543** — the 17 in `paged-list-order.test.ts` are this round's, 15 as first
+written and 2 added by the landing pass — `tsc --noEmit` exit 0, `npm run lint` **0 errors / the same 13
+warnings** trunk carries, `npm run check:contract` **8 passed, 0 failed**, `npm run check:llms-full`
+printing `unchanged: public/llms-full.txt`, `npm run build` exit 0, and **no test deleted and none
+relaxed** — the four that moved are in the table above with both their wordings.
+
+The landing runtime was this pass's own and came back the same way it arrived: `kill` by the PID
+`ss -ltnp` named for **:3483** and **:3484** (`677948`, `677985`), Redis 6441/6442 likewise
+(`677649`, `677656`), each cwd-checked against the worktree it had been started from before it was
+stopped; `DROP DATABASE` for `leadworks_q109_base` and `leadworks_q109_fix` and nothing else — the
+count of `leadworks_q109%` databases afterwards is `0`, while `leadworks`, `leadworks_sim` and every
+other round's database are still listed; the six `0600` key and env files shredded; the two Redis
+directories removed; the detached base worktree removed. Before the servers stopped, one re-check on
+the tree as it is now committed: both instances still answered the contract they were measured on —
+**85,063 B `dbc8daffdcdf`** on the base and **87,644 B `a10092bf3b3b`** on this branch, `/api/openapi`
+byte-identical to `/openapi.json` on each — so the bytes quoted above are the bytes this tree serves.
 
 ## Score: one arithmetic, and who may change it
 
-`Lead.score` has had a column, a sort order (`GET /api/leads?orderBy=score desc`)
-and a sentence in this README since the first migration, and no producer. Intake
+`Lead.score` has had a column, a sort order (the list door answers `score desc`, and no
+`?orderBy=` asks it for another — no door has ever read that name), and a sentence in this README
+since the first migration, and no producer. Intake
 left it at the column default of 0; the CSV importer left it at 0; the only
 automatic write was the validator subtracting 10 per failed check from whatever
 number happened to be there, which for every lead meant from 0 — so the same three

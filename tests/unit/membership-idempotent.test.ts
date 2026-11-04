@@ -196,6 +196,12 @@ describe("the README carries this round's answer, and only this round's answer",
   const from = lines.findIndex((l) => l.startsWith("### A pair the list already holds is nothing to do"));
   const to = lines.findIndex((l) => l.startsWith("## Score: one arithmetic"));
   const section = lines.slice(from, to).join("\n");
+  // #111's section alone: from its heading to the next round's title (`## One address, one answer`,
+  // which is #112). The slice above grew to hold #112, #113 and #74 as well, and a claim about *this*
+  // round's llms-full bytes cannot be pinned across three rounds that each legitimately changed that
+  // file — #74 rebuilt it again, and its section now sits inside `section`.
+  const ownEnd = lines.findIndex((l, i) => i > from && l.startsWith("## One address, one answer"));
+  const ownSection = lines.slice(from, ownEnd).join("\n");
 
   it("lands its section before the Score anchor, as every round's has", () => {
     assert.ok(0 < from && from < to, `section not found between the headings (${from}, ${to})`);
@@ -257,7 +263,11 @@ describe("the README carries this round's answer, and only this round's answer",
     assert.match(section, /answered whole, later/);
     assert.doesNotMatch(section, /`remove-leads` keeps/);
     assert.doesNotMatch(section, /remove-leads[^\n]{0,60}200 \/ 47/);
-    assert.doesNotMatch(section, /8,528|8,531/, "llms-full claimed to have grown");
+    // Retargeted by #74's landing pass, not relaxed: the byte figures this guard forbids are #111's
+    // own first-cut numbers, so the guard now reads #111's section rather than every section written
+    // after it. #111 still may not claim the file grew; #74 does claim it, in its own section, and
+    // that claim is pinned by `paged-list-order.test.ts`, not by this file.
+    assert.doesNotMatch(ownSection, /8,528|8,531/, "llms-full claimed to have grown");
   });
 });
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { withAuth, authedWorkspaceId } from "@/lib/apikeys";
 import { prisma } from "@/lib/db";
-import { pageParams } from "@/lib/pagination";
+import { PAGED_TIEBREAK, pageParams } from "@/lib/pagination";
 import { readJson, validateBody } from "@/lib/validate";
 import { JOB_CREATE } from "@/lib/fields";
 import { idFilterParam, unknownIdError } from "@/lib/ids";
@@ -40,7 +40,7 @@ async function GET_impl(request: Request) {
     prisma.job.findMany({
       where,
       include: { source: { select: { id: true, name: true } }, _count: { select: { results: true } } },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, PAGED_TIEBREAK],
       skip: (page - 1) * limit,
       take: limit,
     }),
