@@ -5529,8 +5529,10 @@ pair door) and requires each to carry `skipDuplicates: true`, and a fourth site 
 flag fails by name; that `POST /api/leads`' nested `listMemberships: { create: … }` is *not* one of
 them, because its lead id is created in the same statement and cannot collide; that both doors
 **import** `membershipReport` rather than re-typing the fields (neither may contain `already:`); that
-`remove-leads` still answers `{ ok: true }` and gained no arithmetic, so the leg this round compares
-against did not move under it; that the workspace check, the 422 and the empty-crowd refusal all sit
+`remove-leads` answered `{ ok: true }` and gained no arithmetic *here*, so the leg this round compares
+against did not move under it — the removal round gave that door its own numbers later and
+retargeted this pin onto `membershipRemoval(parsed.values.length, count)`, reason written beside it in
+`tests/unit/membership-idempotent.test.ts`; that the workspace check, the 422 and the empty-crowd refusal all sit
 **before** the fold, and the pair door's `List not found` and `assertOwns` too — `skipDuplicates`
 must not be allowed to quietly fold a stranger into `already`; that `conflictFor` still stands for
 the models that really collide, and is gone from these two doors; that the refresh answer still
@@ -5583,10 +5585,11 @@ seeded rows.
   `["ld_r76_1","ld_r76_1"]` is refused by the index; here `asStrings` has already folded it, so the
   door asks for one pair and the index has nothing to settle. Same answer as the single-id leg, by
   a different route, and both say `requested: 1`.
-- **`remove-leads` keeps its `{"ok":true}`** — no `requested`, no `removed`. It is the baseline this
-  round argues from, and moving it would have moved a byte-identical control. Giving it the same
-  arithmetic is a real question (a crowd of twelve where two were present is a fact a caller may
-  want) and it is not this round's to answer half-way.
+- **`remove-leads` kept its `{"ok":true}`** — no `requested`, no `removed`, *on this round's tree*. It
+  is the baseline this round argues from, and moving it would have moved a byte-identical control.
+  Giving it the same arithmetic is a real question (a crowd of twelve where two were present is a
+  fact a caller may want) and it is not this round's to answer half-way. It was answered whole, later,
+  in the round below this one — that door now reports `requested`, `removed` and `absent`.
 - **`already` is `requested - added`, so it says nothing about *why* a pair was not written** — the
   row was there before this call, or it arrived in the same statement. The pair is unique in the
   schema, and the answer does not pretend to know more than the index does.
@@ -5702,8 +5705,9 @@ legs (`F1`/`F3` `200 / 88`, `F2` `400 / 143`).
   and `/openapi.json` are byte-identical on each build. `public/llms-full.txt` is byte-identical
   **between the two builds** at 8,864 B `bade95c1ee19`; the 8,447 quoted above was that file as of
   `ff38306`, and this round changed nothing in it.
-- **`remove-leads` keeps `{"ok":true}`** — `M12` holds at `200 / 11` on both builds. It is the
-  baseline this round argues from; moving it would have moved a control.
+- **`remove-leads` kept `{"ok":true}`** — `M12` holds at `200 / 11` on both builds *of that press*. It
+  is the baseline this round argues from; moving it would have moved a control. The round that
+  followed it moved it on purpose, and `M12`'s byte count is that round's to re-measure.
 
 **Gates, all of them on the tree that was pushed:** `npm test` **1516/1516**
 (`/tmp/opencode/q111_suite_landing.log`), where the same trunk build measures **1493/1493** — the difference is exactly this round's `membership-idempotent.test.ts`,
@@ -5987,6 +5991,255 @@ database or Redis instance belonging to another session was used: this pass's ru
 **:3479**/**:3480**, `leadworks_q112_base`/`leadworks_q112_fix`, Redis 6437/6438, created by
 `/tmp/opencode/q112_setup.sh`; both servers and both Redis processes were stopped by the exact PIDs
 `ss -ltnp` reported for those ports at the close of the round.
+
+## One removal, three answers: the door that took leads off now says how many
+
+`POST /api/lead-lists/{id}?action=remove-leads` was the last membership door that answered a verdict
+without its numbers. Measured on the running base build first (`ff38306` built in this worktree, **:3443**
+over this session's own `leadworks_r78`, private Redis 6426, two workspaces, keys read from `0600`
+files and printed nowhere; presses in `/tmp/opencode/r78_press_base.log`). One static list holding
+`ld_r78_1`, `ld_r78_2`, `ld_r78_3`; one workspace lead that was not on it (`ld_r78_4`), one id nobody
+has, one belonging to the other tenant:
+
+| request body at `lst_r78_full` | rows that came off | base reply |
+| --- | --- | --- |
+| `{"leadIds":["ld_r78_1"]}` | 1 | `200 / 11 {"ok":true}` |
+| `{"leadIds":["ld_r78_4"]}` | 0 | `200 / 11 {"ok":true}` |
+| `{"leadIds":["ld_r78_1","ld_r78_4"]}` | 1 of 2 | `200 / 11 {"ok":true}` |
+| `{"leadIds":["ld_r78_1","ld_r78_2","ld_r78_3"]}` | 3 | `200 / 11 {"ok":true}` |
+| `{"leadIds":["ld_nope_r78"]}` | 0 | `200 / 11 {"ok":true}` |
+| `{"leadIds":["ld_r78_b1"]}` (the other tenant's lead) | 0 | `200 / 11 {"ok":true}` |
+
+Six truths, one byte-identical answer. A typo, a retry of a removal that already happened, a crowd
+half of which was never on the list, and a full sweep were indistinguishable — and the retry case is
+not hypothetical: removal is the one write where "already off" *is* success, so at-least-once
+delivery is normal. The branch **two lines below it in the same handler** had always reported its
+own removals (`?action=refresh` answers `removed: plan.remove.length`, `kept`, `matched`), and
+`csv-import.ts` counts what the index settled "so the report always adds up". This door was the
+exception, and #76's entry named the omission rather than answering it half-way.
+
+`src/lib/membership-remove.ts` is that arithmetic written once:
+
+```ts
+membershipRemoval(requested, removed) -> { ok: true, requested, removed, absent: requested - removed }
+```
+
+`requested` is the crowd as this app reads one — `asStrings` trims, refuses a non-string entry and
+folds a lead named twice, so a repeated id is asked for once. `removed` is the count `deleteMany`
+already returned from the statement that did the work; nothing queries twice and nothing guesses.
+`absent` is the rest. The no-op stays a **200** and does not become a 4xx: the caller's goal (these
+leads are not on this list) is true either way, and refusing it would invent a failure for a request
+that succeeded. What changed is only that the answer says which way it went.
+
+**A/B over the same rows, nothing reseeded** (fix build on **:3444** with its own Redis 6427,
+identical membership fingerprint `913084227ac0` at both ends of both runs; each leg resets the seed
+set before and after and prints `restored=True`): the nine removal legs now answer the arithmetic —
+
+| request | fix reply |
+| --- | --- |
+| `["ld_r78_1"]` | `200 / 48 {"ok":true,"requested":1,"removed":1,"absent":0}` |
+| `["ld_r78_4"]` | `200 / 48 {"ok":true,"requested":1,"removed":0,"absent":1}` |
+| `["ld_r78_1","ld_r78_4"]` | `200 / 48 {"ok":true,"requested":2,"removed":1,"absent":1}` |
+| `["ld_r78_1","ld_r78_1"]` | `200 / 48 {"ok":true,"requested":1,"removed":1,"absent":0}` |
+| `["ld_r78_1","ld_r78_2","ld_r78_3"]` | `200 / 48 {"ok":true,"requested":3,"removed":3,"absent":0}` |
+| `["ld_nope_r78"]` / `["ld_r78_b1"]` | `200 / 48 {"ok":true,"requested":1,"removed":0,"absent":1}` |
+| `[" ld_r78_2 "]` | `200 / 48 {"ok":true,"requested":1,"removed":1,"absent":0}` (padding is not the id) |
+
+— while **the rows that actually moved are identical on both builds for every one of the twenty
+legs**, and **eleven legs are byte-identical across the two builds**: the four body refusals
+(`400` at 28 / 28 / 58 / 47 bytes), the two list refusals (`404 / 22` for another tenant's list,
+`404 / 21` for a list nobody has), `400 / 26` for an unknown action, the add control (`200 / 11`),
+the duplicate-add control (`409 / 130`), the static-list refresh (`400 / 143`) and the dynamic-list
+refresh (`200 / 94`). The removal door's surface moved; nothing around it did.
+
+The served contract moved by exactly one sentence: **73,195 B `319930bc8c49` on `ff38306` → 73,580 B
+`a3009cbfe35e`** on the fix tree, byte-identical at `/api/openapi` and `/openapi.json`, and the
+semantic diff is the `leadLists.members` `200` description alone — which no longer says *"The list as
+it now reads"* (it never returned a list) and says what each action answers. `public/llms-full.txt`
+is unchanged at 8,447 bytes: the builder carries summaries and auth, not response prose.
+
+## Pins
+
+Sixteen new tests in `tests/unit/membership-removal.test.ts`:
+
+- the arithmetic over every `requested`/`removed` pair the door can produce — `removed + absent ===
+  requested`, `absent` never negative, `ok` always **true** because already-absent is success;
+- `requested` is the folded crowd, pinned through `asStrings` itself: a lead named twice is **one**;
+- the wiring, scanned from the source with comments blanked: the count is destructured from the
+  `leadListMember.deleteMany` in the same branch and the answer is `membershipRemoval(parsed.values.length,
+  count)`; the helper is **imported**, not re-typed; the branch counts `parsed.values.length` and
+  never `leadIds.length` or `body.leadIds`;
+- the refusals still come first (parse < empty < delete < answer);
+- the no-op stayed a 200: the branch has no `prisma.lead.findMany`, `missingIds(`, `unknownIdsError(`
+  or `assertOwns(`, and no `status: 4xx` at all — the add door's 403/422 checks did not grow here;
+- the refresh branch still reports `removed: plan.remove.length`, and the handler still has exactly
+  its two `deleteMany` sites;
+- the contract's `200` sentence names `requested`, `removed`, `absent` and `removed: 0`, and the old
+  claim is refused by name;
+- the README's own base table, fixed answer and both suite measurements.
+
+**Non-vacuity, seven measurements** (`/tmp/opencode/r78_perturb.log`, each file restored verbatim and
+the sha checked): returning a bare `{ok:true}` from the helper, from the door, or with
+`removed = requested`; passing `leadIds.length` instead of the folded crowd; pulling a `missingIds(`
+refusal into the branch; putting the report before the delete; and restoring the contract's old `200`
+sentence — each fails the pin that names it, 1–3 of the 16 tests depending on how much of the rule
+the edit removes.
+
+Gates on the pushed tree: suite **1352/1352** where `main` at `ff38306` measures **1336/1336** — the 16
+new pins are the whole difference; `tsc --noEmit` exit 0; lint **0 errors / the same 13 warnings**;
+`check:contract` **8/8**; `check:llms-full` reporting the shipped file as the builder's own output;
+build exit 0; no lockfile in the diff.
+
+**Said rather than smoothed.** The two instances were **sequential, not simultaneous** (one worktree
+holds one `.next`); the rows are what the A/B holds fixed, and every leg prints the membership
+fingerprint to prove it. `absent` is a **count**, not the ids: `ld_nope_r78` and the other tenant's
+lead both read `absent: 1` because the list scope already answers the question, and naming ids would
+be a second rule the add door does not have. The removal door still does not distinguish a foreign
+lead from a typo — measured, both are `200` with `absent: 1`; making that a 403/422 is the add door's
+rule, and this round deliberately did not grow it here. **The `ff38306` tree this section was first
+pressed on still answered `add-leads` with the bare `{"ok":true}` and still answered `409 / 130` for a
+lead the list already holds** — that was #111's open change, not this one; both PRs edited
+`lead-lists/[id]/route.ts`, `src/lib/openapi.ts` and this README at the `## Score` anchor, so
+**whichever lands second carries the rebase** and keeps #111's add sentence beside this round's remove
+sentence. The rebase was carried, and the block below is what the pair looks like on that trunk.
+**No demo step**: `aw-deploy#96` is still `CONFLICTING`.
+
+### Rebased onto `2c7b403` for the landing pass, and pressed against that trunk again
+
+`main` moved twice under this branch while #111 was open. It took #111 (`2437bf2`), which folded the
+add side and gave `add-leads` its own arithmetic, and #112 (`2c7b403`), which made the read door fold
+an address's case. The rebase stopped in three files, and each stop was settled by keeping both
+rounds' rules rather than by choosing one:
+
+- `src/app/api/lead-lists/[id]/route.ts` — the imports came over three ways (`action-word`,
+  `membership-add`, `membership-remove`) and all three stay. #111's `add-leads` branch is untouched;
+  this round's change is the `remove-leads` branch below it.
+- `src/lib/openapi.ts` — both rounds rewrote the *same* `leadLists.members` `200` string. The
+  landing tree carries one sentence with both arithmetics in it: `add-leads` reports
+  `requested`/`added`/`already`, `remove-leads` reports `requested`/`removed`/`absent` and says the
+  no-op is success, `refresh` reports the crowd it re-ran. Trunk's now-false `remove-leads` answers
+  `ok`. is gone, and #110's `400` sentence about a word this door does not take is kept verbatim.
+- `README.md` at the `## Score` anchor — both sections kept, main's first.
+
+The landing runtime was this pass's own: base = a detached worktree at `2c7b403` on **:3481**, this
+branch on **:3482**, databases `leadworks_q113_base`/`leadworks_q113_fix` and Redis 6439/6440 created
+by `/tmp/opencode/q113_setup.sh`, keys read from `0600` files and printed nowhere. Identity was
+checked before a request was made: the seed script printed the same `7/6/5/5/2` (leads / this
+workspace's leads / lists / members / keys) for both databases, the row digests matched
+(`24458aea4b01` for `Lead`, `4821bbcce2b8` for `LeadListMember`), the base build served trunk's
+contract at **84,836 B `394a6dafb418`** and its suite printed **1527/1527**, and one probe removal on
+each instance answered `200 / 11 {"ok":true}` on the base and
+`200 / 48 {"ok":true,"requested":1,"removed":1,"absent":0}` on this branch. The probe's row was put
+back by the same script that seeds, so the presses started from the state above.
+
+Thirty-six legs, both builds, nothing reseeded between the two runs
+(`/tmp/opencode/q113_press_base.log`, `/tmp/opencode/q113_press_fix.log`, compared by
+`/tmp/opencode/q113_diff.py`). The list `lst_q113_full` holds `ld_q113_1`, `ld_q113_2`, `ld_q113_3`;
+`ld_q113_4` is a lead of the same workspace sitting on `lst_q113_other`; `ld_q113_b1` is another
+tenant's; `ld_nope_q113` exists nowhere:
+
+| asked at `?action=remove-leads` | base `2c7b403` | this branch |
+| --- | --- | --- |
+| `["ld_q113_1"]` | `200 / 11 {"ok":true}` | `200 / 48` `requested 1, removed 1, absent 0` |
+| `["ld_q113_4"]` — on the *other* list | `200 / 11` | `requested 1, removed 0, absent 1` |
+| `["ld_q113_1","ld_q113_4"]` | `200 / 11` | `requested 2, removed 1, absent 1` |
+| `["ld_q113_1","ld_q113_1"]` — named twice | `200 / 11` | `requested 1, removed 1, absent 0` |
+| the three of them at once | `200 / 11` | `requested 3, removed 3, absent 0` |
+| `["ld_nope_q113"]` | `200 / 11` | `requested 1, removed 0, absent 1` |
+| `["ld_q113_b1"]` — another tenant's | `200 / 11` | `requested 1, removed 0, absent 1` |
+| `[" ld_q113_2 "]` — padded | `200 / 11` | `requested 1, removed 1, absent 0` |
+| the same call twice, one after the other | both `200 / 11` | first `removed 1`, then `removed 0, absent 1` |
+| 100 ids, one of them held | `200 / 11` | `requested 100, removed 1, absent 99` |
+
+**Sixteen legs moved and twenty held.** The twenty are the refusals and the neighbours: `400 / 28`
+twice (empty crowd, no `leadIds`), `400 / 58` (a non-string), `400 / 47` twice (a bare string, an
+object, where `asStrings` reads the same sentence), `400 / 50` (101 ids, past the cap), `400 / 86`
+(an unknown word), `400 / 101` (two words at once), `401 / 64` (no key), `404 / 22` twice (another
+tenant's list, twice over), `404 / 21` (a list nobody has), the add door's two `200 / 47` answers and
+its `403 / 49` and `422 / 103`, both `refresh` legs (`400 / 143` static, `200 / 88` dynamic), the
+pair door's `200 / 47`, and the members read at `200 / 2573`. The add door's fresh-row answer and the
+pair door's are the *same normalised digest* (`f6d1b8faaf90`) — one arithmetic, in the same words, at
+two doors.
+
+**The rows are the other half of the claim, and they did not move differently.** For all thirty-six
+legs the fingerprint's own moved/not-moved flag agrees across the two builds — a leg that took a row
+off took the same row off on both — and **all twenty-six follow-up membership reads returned the same
+normalised digest on both builds**: `M13`'s retry leaves `recorded=2 members=ld_q113_2,ld_q113_3` on
+each, `M14`'s row that `refresh` wrote comes off and reads back `recorded=4` on each, and `M2`, `M6`,
+`M7`, `M9` and `M11` — the five the base build cannot tell from a real removal — read back exactly as
+this branch does. Only the *words about the rows* moved. Every leg printed `reset=True`, and both
+presses closed on their opening fingerprint.
+
+One of the sixteen moving legs is not this workspace's: `K21` is tenant B removing their own lead from
+their own list with their own key, and it moved too (`200 / 11` → `200 / 48`). The arithmetic is in
+the branch, not in the seed data. That leg's follow-up read is taken with tenant B's key — the press
+reads the owner's key by default, which for that row would have shown the read door's rule rather
+than the removal's.
+
+The contract moved by exactly one key. **84,836 B `394a6dafb418` on `2c7b403` → 85,063 B
+`dbc8daffdcdf` here**, `+227` bytes, `/api/openapi` byte-identical to `/openapi.json` on this build,
+and a flattened key-by-key diff of the two served documents (`/tmp/opencode/q113_contract_3481.json`,
+`q113_contract_3482.json`) reports **one** changed key —
+`paths./api/lead-lists/{id}/post/responses.200.description` — and no key added or removed.
+`public/llms-full.txt` is unchanged: `npm run check:llms-full` prints it as the builder's own output.
+The two figures the section above quotes — `73,195 B → 73,580 B` — are that pre-rebase tree's own
+press, and they stay as the bytes it wrote; the pair this tree produces is the one in this paragraph.
+
+**Two press bugs, found and fixed here rather than argued away.** The first run's follow-up lines all
+printed `recorded=None`: the door answers the page inside `memberPage`, not at the top level, so
+`page_of` was reading a key that is not there. And the follow-up reads were all taken with the
+owner's key, which made `K21` read back a `404` that belonged to the read door and not to the
+removal being measured. Both were fixed in `/tmp/opencode/q113_press.py`, the two databases were
+re-checked as identical (`7/6/5/5/2`, the same two row digests) and **both** presses were re-run from
+that state; every number in this block comes from the re-run.
+
+**Three pins retargeted, none relaxed or deleted**, each with its reason written beside it:
+
+| where | it asked | it asks now |
+| --- | --- | --- |
+| `tests/unit/membership-idempotent.test.ts:130` | the removal branch contained the literal `NextResponse.json({ ok: true })`, because that no-op was #111's byte-identical control | the same branch contains `NextResponse.json(membershipRemoval(parsed.values.length, count))`, and still must not contain `membershipReport` or `skipDuplicates` — the question "the add round did not sweep the removal door into its fold" is still the question |
+| `tests/unit/membership-idempotent.test.ts:246` | the README's disclosure bullet, in the present tense, saying the removal door still answers the bare verdict | that bullet in the past tense, bounded to the tree it was pressed on, pointing at the round that answered it — and the pin forbids that present-tense wording anywhere in the slice, so the claim cannot come back |
+| `tests/unit/membership-removal.test.ts:161` | the README quotes `1336/1336 → 1352/1352` | the README quotes those *and* `1527/1527 → 1543/1543` — strictly more than before |
+
+Three earlier sentences in this file became false in the present tense when this landed and were
+amended where they stand, not deleted: #110's Pins paragraph ("`remove-leads` still answers
+`{ ok: true }` and gained no arithmetic") now says what it answered *there* and names the retargeted
+pin; #110's disclosure bullet and #111's landing bullet, both of which said the removal door *keeps*
+the bare verdict, now say it *kept* it on the tree each of them pressed, and point here. #110's `M12`
+line and the base-measurement prose in #111's section are left as they were: they describe presses
+this file is obliged to quote in the bytes those presses wrote.
+
+**Eighteen mutations, eighteen caught** (`/tmp/opencode/q113_perturb.py`, its log at
+`/tmp/opencode/q113_perturb.log`; every file restored from the bytes held in memory, and the script
+prints `git status --porcelain` before and after — the tree came back identical, never a
+`git checkout`, because this worktree carries the landing work itself). `absent` frozen to `0`, the
+helper answering the bare verdict, `absent` computed the wrong way round, the door answering
+`{ ok: true }`, the door claiming the whole crowd came off, the door counting `leadIds.length` instead
+of the folded crowd, the removal branch borrowing `membershipReport`, a `missingIds(` refusal grown in
+front of the delete, the answer assembled before the delete runs, the refresh branch stopping to report
+its own removals, the contract back to `remove-leads` answers `ok`, the contract claiming a list it
+never returned, this section's heading renamed, either suite pair softened, the no-demo clause
+dropped, and each of the two amended disclosures put back into the present tense: every one fails the
+pin that names it, one to four of the thirty-nine tests in the two files. **The first run of this
+harness missed one and the pin was changed for it**: softening the *first-cut* pair
+`1352/1352 / 1336/1336` in the sentence above left that number still present in the retarget table
+below it, and the pin matched the README anywhere, so nothing failed. Each count is now matched inside
+the sentence that claims it, which is strictly more than the pin asked before, and the re-run caught
+all eighteen.
+
+Gates, all on the tree described above: `npm test` **1543/1543** on this branch, where the base
+worktree at `2c7b403` measures **1527/1527** and the difference is exactly this round's
+`membership-removal.test.ts`, 16 tests (`/tmp/opencode/q113_suite_fix.log`,
+`/tmp/opencode/q113_suite_base.log`); `tsc --noEmit` exit 0; `npm run lint` **0 errors / the same 13
+warnings**; `npm run check:contract` **8/8**; `npm run check:llms-full` printing the shipped file as
+the builder's own output; `next build` exit 0 on **both** trees; no lockfile in the diff.
+
+Nothing here touched `:3300`, `leadworks_sim` or the shared `leadworks` database, and no port,
+database or Redis instance belonging to another session was used: this pass's runtime was
+**:3481**/**:3482**, `leadworks_q113_base`/`leadworks_q113_fix`, Redis 6439/6440, created by
+`/tmp/opencode/q113_setup.sh`; both servers and both Redis processes were stopped by the exact PIDs
+`ss -ltnp` reported for those ports at the close of the round, and only this round's two databases
+were dropped.
 
 ## Score: one arithmetic, and who may change it
 

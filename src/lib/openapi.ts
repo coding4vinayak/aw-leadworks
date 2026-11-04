@@ -343,7 +343,7 @@ const PATHS: Record<string, PathItem> = {
         },
       },
       responses: {
-        "200": "`add-leads` and `remove-leads` answer what they did, not the list: `add-leads` reports `requested`, `added`, `already`, so a crowd holding a lead the list already holds adds the rest and answers 200 — the same verdict this door already gives for removing a lead that is not on it. `remove-leads` answers `ok`. `refresh` answers the crowd it re-ran: `filter`, `matched`, `added`, `removed`, `kept`, `members`.",
+        "200": "`add-leads` and `remove-leads` answer what they did, not the list: `add-leads` reports `requested`, `added`, `already`, so a crowd holding a lead the list already holds adds the rest and answers 200 — the no-op is a fact, not a failure; `remove-leads` reports `requested` (the distinct ids asked for), `removed` (the rows the database actually deleted) and `absent`, so taking a lead off a list that never held it answers 200 with `removed: 0` instead of the bare `ok` a removal of three used to get — already absent is success, said. `refresh` answers the crowd it re-ran: `filter`, `matched`, `added`, `removed`, `kept`, `members`.",
         "400": "A static list has no filter to re-run, or the `leadIds` a move needs are missing, or `action` was given a word this door does not take or more than one word (after the row is looked up and the workspace checked).",
         "409": "`refresh` on a dynamic list whose stored filter cannot be read — the refusal quotes the row.",
         "422": "A leadId that does not exist, named.",
