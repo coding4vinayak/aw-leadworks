@@ -118,12 +118,13 @@ describe("#74 the tiebreak is one rule, written where its readers can find it", 
     assert.match(lib, /transaction timestamp/, "why `createdAt desc` ties in the real shape, not only in a test");
   });
 
-  it("is imported by the five collection doors rather than re-typed into them", () => {
+  it("is imported by the six collection doors rather than re-typed into them", () => {
     for (const file of [
       "src/app/api/leads/route.ts",
       "src/app/api/sources/route.ts",
       "src/app/api/jobs/route.ts",
       "src/app/api/exports/route.ts",
+      "src/app/api/export-profiles/route.ts",
       "src/app/api/lead-lists/route.ts",
     ]) {
       const clean = blankComments(at(`../../${file}`));
@@ -144,11 +145,12 @@ function lastOrderKey(order: string): string {
 }
 
 describe("#74 the census: no page is ever cut out of a tie again", () => {
-  it("names exactly the seven doors that slice a page", () => {
+  it("names exactly the eight doors that slice a page", () => {
     assert.deepEqual(
       [...new Set(SLICING_ORDERS.map((site) => site.where))].sort(),
       [
         "src/app/api/enrichment-rules/route.ts",
+        "src/app/api/export-profiles/route.ts",
         "src/app/api/exports/route.ts",
         "src/app/api/jobs/route.ts",
         "src/app/api/lead-lists/[id]/route.ts",
@@ -190,12 +192,13 @@ describe("#74 the census: no page is ever cut out of a tie again", () => {
 describe("#74 the map says which order each page is cut from", () => {
   const op = (id: string) => openapiOperations.find((entry) => entry.operation.id === id)!.operation;
 
-  it("six list doors document `page`, and each names its own primary key", () => {
+  it("seven list doors document `page`, and each names its own primary key", () => {
     const primary = {
       "leads.list": "score desc",
       "sources.list": "createdAt desc",
       "jobs.list": "createdAt desc",
       "exports.list": "createdAt desc",
+      "exportProfiles.list": "createdAt desc",
       "leadLists.list": "createdAt desc",
       "rules.list": "priority desc",
     } as const;
@@ -249,7 +252,7 @@ describe("#74 the README records what the press measured", () => {
   it("attributes #48's disclosed limit to the build it was measured on and names this round as the decision", () => {
     assert.match(readme, /The order had no tiebreaker — \*this is the limit #74 took\*/);
     assert.match(readme, /93,129 and 93,517/, "#48's own numbers stay on the page");
-    assert.match(readme, /#74 made that decision, at all five paged doors/);
+    assert.match(readme, /#74 made that decision, at all six paged doors on the tree that landed it/);
   });
 
   it("no longer promises a `?orderBy=` parameter that no door has ever read", () => {
@@ -261,5 +264,19 @@ describe("#74 the README records what the press measured", () => {
     assert.match(readme, /reproducible, not static/);
     assert.match(readme, /sequential, not simultaneous/);
     assert.match(readme, /hand-written ids \(`ld_r74_00`…`_12`\)/, "the seeded ids are named as hand-written, not cuids");
+  });
+
+  it("records the landing pass in the numbers the pass pressed", () => {
+    assert.match(readme, /this tree tie-breaks six doors, not five/);
+    assert.match(readme, /twenty-four legs moved and nineteen held/, "the press is quoted with its own counts");
+    assert.match(readme, /85,063 B `dbc8daffdcdf` → 87,644 B `a10092bf3b3b`/, "the contract moved by the bytes said here");
+    assert.match(readme, /`count\(DISTINCT createdAt\)` is `1`/, "every crowd ties, which is what makes a walk a claim");
+    assert.equal(readme.includes("names exactly the seven paging doors"), false, "the census sentence was amended where it stands");
+  });
+
+  it("says which walk the base build answered correctly, instead of dropping that leg", () => {
+    assert.match(readme, /clean, by luck/);
+    assert.match(readme, /`P11` is said rather than smoothed/);
+    assert.match(readme, /the walk is not guaranteed/);
   });
 });
