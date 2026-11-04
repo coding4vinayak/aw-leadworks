@@ -15,6 +15,14 @@ export default function Page() {
         <p className="mt-2 text-gray-600">Newest first. Breaking changes are marked <strong>BREAKING</strong> and get 30 days&apos; notice here before they ship.</p>
         <div className="mt-8 space-y-8 border-l-2 border-blue-600 pl-6">
           <div>
+            <p className="text-sm text-muted">November 2026</p>
+            <h2 className="text-lg font-bold">v1.4.1 — Deliveries a receiver can age out and dedupe</h2>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">
+              <li>Outbound deliveries now carry <code>X-Webhook-Timestamp</code> and <code>X-Webhook-Delivery</code> beside the signature headers. A receiver on the nuCRM side — whose plugin endpoint enforces a 5-minute freshness window only when the timestamp header is present, and skips the check when it is not — now refuses a stale re-send instead of accepting it a second time.</li>
+              <li><code>X-Webhook-Delivery</code> is the payload <code>id</code>, which lives inside the signed body: a receiver that remembers delivery ids rejects a duplicate arrival, and a replayer cannot hand it a new one without breaking the signature. The bytes signed and the headers already verified are unchanged.</li>
+            </ul>
+          </div>
+          <div>
             <p className="text-sm text-muted">October 2026</p>
             <h2 className="text-lg font-bold">v1.4.0 — The deep-content file</h2>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-muted">

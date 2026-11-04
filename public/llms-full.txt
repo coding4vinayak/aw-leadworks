@@ -1,6 +1,6 @@
 # LeadWorks — the deep-content companion
 
-> The full-content file for AI assistants that want the whole substance in one fetch. Built for build v1.4.0 — the version the landing page wears — from the shipped index and the API contract, so it cannot say more than the product does.
+> The full-content file for AI assistants that want the whole substance in one fetch. Built for build v1.4.1 — the version the landing page wears — from the shipped index and the API contract, so it cannot say more than the product does.
 
 ## The index, verbatim
 
