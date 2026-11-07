@@ -105,6 +105,17 @@ describe("#17 sender module", () => {
     );
   });
 
+  it("carries the freshness and delivery-id headers a nuCRM receiver reads", () => {
+    // Two separate header lines, so two that one edit can drop while everything
+    // else still typechecks. The freshness value sits outside the signed bytes —
+    // it is what makes nuCRM refuse a stale re-send, not what makes a captured
+    // delivery unreplayable. The delivery id is: it is the payload `id`, inside
+    // the body the digest covers, so a receiver that remembers ids rejects the
+    // second arrival and cannot be talked into forgetting it.
+    assert.match(sender, /"X-Webhook-Timestamp"\s*:\s*String\(Date\.now\(\)\)/);
+    assert.match(sender, /"X-Webhook-Delivery"\s*:\s*payload\.id/);
+  });
+
   it("stamps each logical event with a stable id so a receiver can dedupe", () => {
     assert.match(
       sender,

@@ -6666,6 +6666,15 @@ generic spelling a nuCRM plugin webhook verifies out of the box — point one at
 call with no adapter in between. `id` names the logical event; a receiver that
 deduplicates on it is already correct on the day delivery grows retries.
 
+Every delivery also carries `X-Webhook-Timestamp` (send-time milliseconds) and
+`X-Webhook-Delivery` (the same `id`). nuCRM's plugin receiver enforces a 5-minute
+freshness window when the timestamp header is present and skips the check when it
+is absent, so a stale re-send is refused rather than accepted twice. The timestamp
+sits outside the signed bytes, so what a receiver can truly rely on is the delivery
+id: it is inside the body the digest covers, which means a receiver that remembers
+ids rejects the duplicate arrival and a replayer cannot hand it a new one without
+breaking the signature.
+
 Delivery is one attempt per (row, subscription), best-effort and never throwing:
 a receiver that is down is counted and skipped, and never fails the lead create
 or the job whose work already committed. The attempts a batch owes are made
